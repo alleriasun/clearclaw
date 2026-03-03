@@ -2,6 +2,7 @@ import {
   query,
   type SDKAssistantMessage,
   type SDKResultMessage,
+  type SDKLocalCommandOutputMessage,
   type PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -87,6 +88,14 @@ export class ClaudeCodeEngine implements Engine {
             if (block.type === "text" && block.text) {
               yield { type: "text", text: block.text };
             }
+          }
+        }
+
+        // Relay local command output (e.g. /compact, /cost, /model)
+        if (msg.type === "system" && (msg as SDKLocalCommandOutputMessage).subtype === "local_command_output") {
+          const cmdOut = msg as SDKLocalCommandOutputMessage;
+          if (cmdOut.content) {
+            yield { type: "text", text: cmdOut.content };
           }
         }
 
