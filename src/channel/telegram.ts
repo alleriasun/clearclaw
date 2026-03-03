@@ -7,7 +7,7 @@ import type {
 } from "../types.js";
 
 interface TelegramChannelOpts {
-  onMessage: (msg: InboundMessage) => void;
+  onMessage: (msg: InboundMessage) => Promise<void>;
 }
 
 export class TelegramChannel implements Channel {
@@ -39,9 +39,13 @@ export class TelegramChannel implements Channel {
     this.bot.on("message:text", (ctx) => {
       if (ctx.chat.id !== this.allowedChatId) return;
       const channelId = `tg:${ctx.chat.id}`;
+      // Fire-and-forget: must not await, otherwise grammY's sequential
+      // update processing blocks callback_query and deadlocks permissions.
       this.opts.onMessage({
         channelId,
         text: ctx.message.text,
+      }).catch((err) => {
+        console.error("[channel] unhandled onMessage error:", err);
       });
     });
 
