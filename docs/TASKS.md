@@ -1,9 +1,5 @@
 # ClearClaw — Task Backlog
 
-## Known Bugs
-
-- [ ] Response not delivered after permission grant — typing indicator stops, no message arrives until user sends a new message. Likely grammY long-polling or SDK async generator resume issue. Needs console logging to narrow down.
-
 ## Phase 1 Improvements
 
 - [ ] Message queue (queue messages during active turn, drain after)
@@ -12,6 +8,7 @@
 - [ ] Session-scoped permission allowlists ("Allow X for session")
 - [ ] Message splitting for 4096 char limit
 - [ ] Tool use status messages (show which tools are being called)
+- [ ] Relay tool outputs (SDK `user` messages with tool results are currently skipped — bash output, file contents, etc. not visible to user)
 - [ ] Text accumulation/batching (send intermediate chunks)
 - [ ] `/cancel` command (abort current turn)
 - [ ] `/status` command (show current session info)

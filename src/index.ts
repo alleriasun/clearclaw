@@ -36,81 +36,96 @@ async function main() {
     config.allowedChatId,
     {
       onMessage: async (msg) => {
-        console.log(`[msg] ${msg.text.slice(0, 80)}`);
+        try {
+          console.log(`[msg] ${msg.text.slice(0, 80)}`);
 
-        // /new — reset session
-        if (msg.text === "/new") {
-          clearSession(DEFAULT_WORKSPACE);
-          console.log("[cmd] session cleared");
-          await telegram.sendMessage(msg.channelId, "Session cleared.");
-          return;
-        }
+          // /new — reset session
+          if (msg.text === "/new") {
+            clearSession(DEFAULT_WORKSPACE);
+            console.log("[cmd] session cleared");
+            await telegram.sendMessage(msg.channelId, "Session cleared.");
+            return;
+          }
 
-        // Reject during active turn
-        if (busy) {
-          console.log("[msg] rejected (busy)");
+          // Reject during active turn
+          if (busy) {
+            console.log("[msg] rejected (busy)");
+            await telegram.sendMessage(
+              msg.channelId,
+              "Still working on the previous message...",
+            );
+            return;
+          }
+
+          busy = true;
+          const ws = getWorkspaceByChannel(msg.channelId);
+          if (!ws) {
+            console.log("[msg] no workspace for channel", msg.channelId);
+            busy = false;
+            return;
+          }
+
+          console.log(`[turn] start session=${ws.current_session_id ?? "new"} cwd=${ws.cwd}`);
+          await telegram.setTyping(msg.channelId, true);
+
+          try {
+            let fullText = "";
+            for await (const event of engine.runTurn({
+              sessionId: ws.current_session_id,
+              cwd: ws.cwd,
+              prompt: msg.text,
+              permissionMode: config.permissionMode,
+              onPermissionRequest: async (req) => {
+                // Flush accumulated text before showing permission prompt
+                if (fullText) {
+                  await telegram.sendMessage(msg.channelId, fullText);
+                  fullText = "";
+                }
+                console.log(`[perm] ${req.description}`);
+                const buttons = [
+                  { label: "Allow", value: "allow" },
+                  { label: "Deny", value: "deny" },
+                ];
+                const resp = await telegram.sendInteractive(
+                  msg.channelId,
+                  req.description,
+                  buttons,
+                );
+                console.log(`[perm] ${req.toolName} → ${resp.value || "timeout"}`);
+                return {
+                  decision: resp.value === "allow" ? "allow" : "deny",
+                };
+              },
+            })) {
+              if (event.type === "text") fullText += event.text;
+              if (event.type === "done") {
+                console.log(`[turn] done session=${event.sessionId}`);
+                updateSessionId(DEFAULT_WORKSPACE, event.sessionId);
+              }
+              if (event.type === "error") {
+                console.log(`[turn] error: ${event.message}`);
+                await telegram.sendMessage(
+                  msg.channelId,
+                  `Error: ${event.message}`,
+                );
+              }
+            }
+            if (fullText) {
+              console.log(`[turn] sending ${fullText.length} chars`);
+              await telegram.sendMessage(msg.channelId, fullText);
+            } else {
+              console.log("[turn] no text to send");
+            }
+          } finally {
+            busy = false;
+            await telegram.setTyping(msg.channelId, false);
+          }
+        } catch (err) {
+          console.error("[fatal]", err);
           await telegram.sendMessage(
             msg.channelId,
-            "Still working on the previous message...",
-          );
-          return;
-        }
-
-        busy = true;
-        const ws = getWorkspaceByChannel(msg.channelId);
-        if (!ws) {
-          console.log("[msg] no workspace for channel", msg.channelId);
-          busy = false;
-          return;
-        }
-
-        console.log(`[turn] start session=${ws.current_session_id ?? "new"} cwd=${ws.cwd}`);
-        await telegram.setTyping(msg.channelId, true);
-
-        try {
-          let fullText = "";
-          for await (const event of engine.runTurn({
-            sessionId: ws.current_session_id,
-            cwd: ws.cwd,
-            prompt: msg.text,
-            permissionMode: config.permissionMode,
-            onPermissionRequest: async (req) => {
-              console.log(`[perm] ${req.description}`);
-              const buttons = [
-                { label: "Allow", value: "allow" },
-                { label: "Deny", value: "deny" },
-              ];
-              const resp = await telegram.sendInteractive(
-                msg.channelId,
-                req.description,
-                buttons,
-              );
-              console.log(`[perm] ${req.toolName} → ${resp.value || "timeout"}`);
-              return {
-                decision: resp.value === "allow" ? "allow" : "deny",
-              };
-            },
-          })) {
-            if (event.type === "text") fullText += event.text;
-            if (event.type === "done") {
-              console.log(`[turn] done session=${event.sessionId}`);
-              updateSessionId(DEFAULT_WORKSPACE, event.sessionId);
-            }
-            if (event.type === "error") {
-              console.log(`[turn] error: ${event.message}`);
-              await telegram.sendMessage(
-                msg.channelId,
-                `Error: ${event.message}`,
-              );
-            }
-          }
-          if (fullText) {
-            console.log(`[turn] sending ${fullText.length} chars`);
-            await telegram.sendMessage(msg.channelId, fullText);
-          }
-        } finally {
-          busy = false;
-          await telegram.setTyping(msg.channelId, false);
+            `Internal error: ${err instanceof Error ? err.message : String(err)}`,
+          ).catch(() => {});
         }
       },
     },
