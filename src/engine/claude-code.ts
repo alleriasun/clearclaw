@@ -88,6 +88,13 @@ export class ClaudeCodeEngine implements Engine {
             if (block.type === "text" && block.text) {
               yield { type: "text", text: block.text };
             }
+            if (block.type === "tool_use") {
+              yield {
+                type: "tool_use",
+                toolName: block.name,
+                input: block.input as Record<string, unknown>,
+              };
+            }
           }
         }
 

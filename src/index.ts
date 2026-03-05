@@ -8,6 +8,7 @@ import {
 } from "./db.js";
 import { ClaudeCodeEngine } from "./engine/claude-code.js";
 import { TelegramChannel } from "./channel/telegram.js";
+import { formatToolUse } from "./format.js";
 
 const DEFAULT_WORKSPACE = "main";
 
@@ -98,6 +99,19 @@ async function main() {
               },
             })) {
               if (event.type === "text") fullText += event.text;
+              if (event.type === "tool_use") {
+                const formatted = formatToolUse(event.toolName, event.input);
+                if (formatted) {
+                  // Flush accumulated text before showing diff
+                  if (fullText) {
+                    await telegram.sendMessage(msg.channelId, fullText);
+                    fullText = "";
+                  }
+                  await telegram.sendMessage(msg.channelId, formatted, {
+                    parseMode: "MarkdownV2",
+                  });
+                }
+              }
               if (event.type === "done") {
                 console.log(`[turn] done session=${event.sessionId}`);
                 updateSessionId(DEFAULT_WORKSPACE, event.sessionId);
