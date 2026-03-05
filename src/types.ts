@@ -7,7 +7,11 @@ export interface Channel {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   ownsId(channelId: string): boolean;
-  sendMessage(channelId: string, text: string): Promise<void>;
+  sendMessage(
+    channelId: string,
+    text: string,
+    opts?: SendMessageOpts,
+  ): Promise<void>;
   sendInteractive(
     channelId: string,
     text: string,
@@ -23,6 +27,10 @@ export interface Button {
 
 export interface ButtonResponse {
   value: string; // button value or '' on timeout
+}
+
+export interface SendMessageOpts {
+  parseMode?: "MarkdownV2" | "HTML";
 }
 
 // --- Engine ---
@@ -56,6 +64,7 @@ export interface PermissionResponse {
 
 export type EngineEvent =
   | { type: "text"; text: string }
+  | { type: "tool_use"; toolName: string; input: Record<string, unknown> }
   | { type: "done"; sessionId: string }
   | { type: "error"; message: string };
 

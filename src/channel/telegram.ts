@@ -4,6 +4,7 @@ import type {
   Button,
   ButtonResponse,
   InboundMessage,
+  SendMessageOpts,
 } from "../types.js";
 
 interface TelegramChannelOpts {
@@ -86,12 +87,18 @@ export class TelegramChannel implements Channel {
     return channelId.startsWith("tg:");
   }
 
-  async sendMessage(channelId: string, text: string): Promise<void> {
+  async sendMessage(
+    channelId: string,
+    text: string,
+    opts?: SendMessageOpts,
+  ): Promise<void> {
     const chatId = this.numericId(channelId);
     // Truncate at 4096 for now (splitting is backlog)
     const truncated =
       text.length > 4096 ? text.slice(0, 4093) + "..." : text;
-    await this.bot.api.sendMessage(chatId, truncated);
+    await this.bot.api.sendMessage(chatId, truncated, {
+      parse_mode: opts?.parseMode,
+    });
   }
 
   async sendInteractive(
