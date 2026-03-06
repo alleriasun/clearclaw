@@ -3,6 +3,7 @@ import {
   type SDKAssistantMessage,
   type SDKResultMessage,
   type SDKLocalCommandOutputMessage,
+  type SDKUserMessage,
   type PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
 import log from "../logger.js";
@@ -74,6 +75,7 @@ export class ClaudeCodeEngine implements Engine {
     });
 
     let resultSessionId: string | undefined;
+    const toolUseIdToName = new Map<string, string>();
 
     try {
       for await (const msg of q) {
@@ -82,7 +84,7 @@ export class ClaudeCodeEngine implements Engine {
           log.info(`[sdk] ${msg.type}${sub}`);
         }
 
-        // Extract text from assistant messages
+        // Extract text and tool_use from assistant messages
         if (msg.type === "assistant") {
           const { content } = (msg as SDKAssistantMessage).message;
           for (const block of content) {
@@ -90,11 +92,37 @@ export class ClaudeCodeEngine implements Engine {
               yield { type: "text", text: block.text };
             }
             if (block.type === "tool_use") {
+              toolUseIdToName.set(
+                (block as unknown as { id: string }).id,
+                block.name,
+              );
               yield {
                 type: "tool_use",
                 toolName: block.name,
                 input: block.input as Record<string, unknown>,
               };
+            }
+          }
+        }
+
+        // Extract tool results from user messages
+        if (msg.type === "user") {
+          const content = (msg as SDKUserMessage).message.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              const b = block as Record<string, unknown>;
+              if (
+                b.type === "tool_result" &&
+                typeof b.tool_use_id === "string"
+              ) {
+                const toolName =
+                  toolUseIdToName.get(b.tool_use_id) ?? "unknown";
+                const output = extractToolResultText(b.content);
+                if (output) {
+                  yield { type: "tool_result" as const, toolName, output };
+                }
+                toolUseIdToName.delete(b.tool_use_id);
+              }
             }
           }
         }
@@ -128,6 +156,21 @@ export class ClaudeCodeEngine implements Engine {
       yield { type: "done", sessionId: resultSessionId };
     }
   }
+}
+
+/** Pull plain text out of a tool_result content block. */
+function extractToolResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(
+        (b: Record<string, unknown>) =>
+          b.type === "text" && typeof b.text === "string",
+      )
+      .map((b: Record<string, unknown>) => b.text as string)
+      .join("\n");
+  }
+  return "";
 }
 
 function formatToolDescription(

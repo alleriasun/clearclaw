@@ -65,6 +65,7 @@ export interface PermissionResponse {
 export type EngineEvent =
   | { type: "text"; text: string }
   | { type: "tool_use"; toolName: string; input: Record<string, unknown> }
+  | { type: "tool_result"; toolName: string; output: string }
   | { type: "done"; sessionId: string }
   | { type: "error"; message: string };
 

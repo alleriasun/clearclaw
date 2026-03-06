@@ -73,6 +73,20 @@ function truncateLines(lines: string[], max: number): string {
 }
 
 /**
+ * Format a tool_result event for display. Returns a MarkdownV2 string,
+ * or null if the output is empty.
+ */
+export function formatToolResult(
+  toolName: string,
+  output: string,
+): string | null {
+  if (!output.trim()) return null;
+  const body = truncateLines(output.split("\n"), MAX_LINES);
+  const header = escapeMarkdownV2(`📎 ${toolName} output:`);
+  return `${header}\n\`\`\`\n${body}\n\`\`\``;
+}
+
+/**
  * Escape special characters for MarkdownV2 (outside code blocks).
  * Inside ``` blocks, no escaping is needed.
  */
