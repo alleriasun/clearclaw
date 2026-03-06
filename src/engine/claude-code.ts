@@ -5,6 +5,7 @@ import {
   type SDKLocalCommandOutputMessage,
   type PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
+import log from "../logger.js";
 import type {
   Engine,
   EngineEvent,
@@ -78,7 +79,7 @@ export class ClaudeCodeEngine implements Engine {
       for await (const msg of q) {
         if (msg.type !== "assistant") {
           const sub = msg.type === "result" ? ` (${(msg as SDKResultMessage).subtype})` : "";
-          console.log(`[sdk] ${msg.type}${sub}`);
+          log.info(`[sdk] ${msg.type}${sub}`);
         }
 
         // Extract text from assistant messages

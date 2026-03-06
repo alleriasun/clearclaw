@@ -1,4 +1,5 @@
 import { Bot, InlineKeyboard } from "grammy";
+import log from "../logger.js";
 import type {
   Channel,
   Button,
@@ -46,7 +47,7 @@ export class TelegramChannel implements Channel {
         channelId,
         text: ctx.message.text,
       }).catch((err) => {
-        console.error("[channel] unhandled onMessage error:", err);
+        log.error({ err }, "[channel] unhandled onMessage error");
       });
     });
 
@@ -62,13 +63,13 @@ export class TelegramChannel implements Channel {
     });
 
     this.bot.catch((err) => {
-      console.error("Telegram bot error:", err.message);
+      log.error("[channel] Telegram bot error: %s", err.message);
     });
 
     await new Promise<void>((resolve) => {
       this.bot.start({
         onStart: (botInfo) => {
-          console.log(`Telegram bot: @${botInfo.username}`);
+          log.info(`[channel] Telegram bot: @${botInfo.username}`);
           resolve();
         },
       });
