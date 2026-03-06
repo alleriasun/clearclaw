@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "start": "tsx src/index.ts",
-    "dev": "tsx --watch src/index.ts",
+    "dev": "nodemon --delay 5 --ext ts --watch src --exec 'tsc --noEmit && tsx src/index.ts'",
     "build": "tsc",
     "check": "tsc --noEmit"
   },
@@ -20,6 +20,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
+    "nodemon": "^3.1.14",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
