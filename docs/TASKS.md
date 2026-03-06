@@ -20,6 +20,8 @@
 - [ ] Extract orchestrator from index.ts into `src/orchestrator.ts`
 - [ ] Move `formatToolDescription` from `claude-code.ts` into `format.ts` (cross-engine formatting concern)
 - [x] File logger to `~/.clearclaw/clearclaw.log` (dual output: console + file)
+- [x] Resilient dev server (nodemon + `tsc --noEmit` gate, 5s debounce)
+- [ ] Restart heartbeat (on startup, auto-send resume prompt into existing session or greeting for new sessions, so the bot continues without a manual poke)
 
 ## Phase 2: Multi-workspace
 
