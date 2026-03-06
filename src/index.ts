@@ -9,7 +9,7 @@ import {
 } from "./db.js";
 import { ClaudeCodeEngine } from "./engine/claude-code.js";
 import { TelegramChannel } from "./channel/telegram.js";
-import { formatToolUse } from "./format.js";
+import { formatToolUse, formatToolResult } from "./format.js";
 
 const DEFAULT_WORKSPACE = "main";
 
@@ -103,6 +103,18 @@ async function main() {
                 const formatted = formatToolUse(event.toolName, event.input);
                 if (formatted) {
                   // Flush accumulated text before showing diff
+                  if (fullText) {
+                    await telegram.sendMessage(msg.channelId, fullText);
+                    fullText = "";
+                  }
+                  await telegram.sendMessage(msg.channelId, formatted, {
+                    parseMode: "MarkdownV2",
+                  });
+                }
+              }
+              if (event.type === "tool_result") {
+                const formatted = formatToolResult(event.toolName, event.output);
+                if (formatted) {
                   if (fullText) {
                     await telegram.sendMessage(msg.channelId, fullText);
                     fullText = "";
