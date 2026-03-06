@@ -46,6 +46,10 @@ export function dbPath(): string {
   return path.join(DATA_DIR, "clearclaw.db");
 }
 
+export function logPath(): string {
+  return path.join(DATA_DIR, "clearclaw.log");
+}
+
 function requireEnv(name: string): string {
   const val = process.env[name];
   if (!val) throw new Error(`Missing required env var: ${name}`);

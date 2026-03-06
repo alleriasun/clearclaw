@@ -19,7 +19,7 @@
 - [ ] Refactor Channel to EventEmitter pattern (remove constructor callback injection, channel emits events, orchestrator subscribes)
 - [ ] Extract orchestrator from index.ts into `src/orchestrator.ts`
 - [ ] Move `formatToolDescription` from `claude-code.ts` into `format.ts` (cross-engine formatting concern)
-- [ ] File logger to `~/.clearclaw/clearclaw.log` (dual output: console + file)
+- [x] File logger to `~/.clearclaw/clearclaw.log` (dual output: console + file)
 
 ## Phase 2: Multi-workspace
 
