@@ -132,12 +132,12 @@ export class TelegramChannel implements Channel {
       }
     };
 
-    // Wait for button press or timeout (5 minutes)
+    // Wait for button press or timeout (30 minutes)
     return new Promise<ButtonResponse>((resolve) => {
       const timeout = setTimeout(() => {
         cleanupAll();
         resolve({ value: "" });
-      }, 5 * 60 * 1000);
+      }, 30 * 60 * 1000);
 
       for (const { btn, cbData } of cbEntries) {
         this.pendingCallbacks.set(cbData, () => {
