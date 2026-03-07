@@ -94,19 +94,19 @@ export class TelegramChannel implements Channel {
     opts?: SendMessageOpts,
   ): Promise<void> {
     const chatId = this.numericId(channelId);
-    // Truncate at 4096 for now (splitting is backlog)
-    const truncated =
-      text.length > 4096 ? text.slice(0, 4093) + "..." : text;
-    try {
-      await this.bot.api.sendMessage(chatId, truncated, {
-        parse_mode: opts?.parseMode,
-      });
-    } catch (err) {
-      if (opts?.parseMode) {
-        log.warn("[channel] sendMessage failed with %s, retrying as plain text", opts.parseMode);
-        await this.bot.api.sendMessage(chatId, truncated);
-      } else {
-        throw err;
+    const chunks = splitMessage(text);
+    for (const chunk of chunks) {
+      try {
+        await this.bot.api.sendMessage(chatId, chunk, {
+          parse_mode: opts?.parseMode,
+        });
+      } catch (err) {
+        if (opts?.parseMode) {
+          log.warn("[channel] sendMessage failed with %s, retrying as plain text", opts.parseMode);
+          await this.bot.api.sendMessage(chatId, chunk);
+        } else {
+          throw err;
+        }
       }
     }
   }
@@ -185,4 +185,30 @@ export class TelegramChannel implements Channel {
   private numericId(channelId: string): number {
     return Number(channelId.replace(/^tg:/, ""));
   }
+}
+
+const MAX_MSG_LEN = 4096;
+
+/** Split text into ≤4096-char chunks, preferring newline boundaries. */
+function splitMessage(text: string): string[] {
+  if (text.length <= MAX_MSG_LEN) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > MAX_MSG_LEN) {
+    // Find last newline within the limit
+    const newlineAt = remaining.lastIndexOf("\n", MAX_MSG_LEN);
+    if (newlineAt > 0) {
+      chunks.push(remaining.slice(0, newlineAt));
+      remaining = remaining.slice(newlineAt + 1); // skip the newline
+    } else {
+      // No newline found — hard split, no char skipped
+      chunks.push(remaining.slice(0, MAX_MSG_LEN));
+      remaining = remaining.slice(MAX_MSG_LEN);
+    }
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks;
 }
