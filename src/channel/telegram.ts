@@ -1,23 +1,18 @@
+import { EventEmitter } from "node:events";
 import { Bot, InlineKeyboard } from "grammy";
 import log from "../logger.js";
 import type {
   Channel,
   Button,
   ButtonResponse,
-  InboundMessage,
   SendMessageOpts,
 } from "../types.js";
 
-interface TelegramChannelOpts {
-  onMessage: (msg: InboundMessage) => Promise<void>;
-}
-
-export class TelegramChannel implements Channel {
+export class TelegramChannel extends EventEmitter implements Channel {
   name = "telegram";
 
   private bot: Bot;
   private allowedChatId: number;
-  private opts: TelegramChannelOpts;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
 
   // Pending interactive responses: callbackId → resolve function
@@ -26,13 +21,9 @@ export class TelegramChannel implements Channel {
     (value: string) => void
   >();
 
-  constructor(
-    botToken: string,
-    allowedChatId: number,
-    opts: TelegramChannelOpts,
-  ) {
+  constructor(botToken: string, allowedChatId: number) {
+    super();
     this.allowedChatId = allowedChatId;
-    this.opts = opts;
     this.bot = new Bot(botToken);
   }
 
@@ -41,14 +32,7 @@ export class TelegramChannel implements Channel {
     this.bot.on("message:text", (ctx) => {
       if (ctx.chat.id !== this.allowedChatId) return;
       const channelId = `tg:${ctx.chat.id}`;
-      // Fire-and-forget: must not await, otherwise grammY's sequential
-      // update processing blocks callback_query and deadlocks permissions.
-      this.opts.onMessage({
-        channelId,
-        text: ctx.message.text,
-      }).catch((err) => {
-        log.error({ err }, "[channel] unhandled onMessage error");
-      });
+      this.emit("message", { channelId, text: ctx.message.text });
     });
 
     // Handle inline keyboard button presses

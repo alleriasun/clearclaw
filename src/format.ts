@@ -129,3 +129,22 @@ export function formatToolResult(
 function escapeMarkdownV2(text: string): string {
   return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 }
+
+/**
+ * Human-readable one-liner for a tool invocation (used in permission prompts).
+ */
+export function formatToolDescription(
+  toolName: string,
+  input: Record<string, unknown>,
+): string {
+  switch (toolName) {
+    case "Bash":
+      return `Bash: ${input.command ?? "(unknown command)"}`;
+    case "Edit":
+    case "Write":
+    case "Read":
+      return `${toolName}: ${input.file_path ?? "(unknown file)"}`;
+    default:
+      return `Allow ${toolName}?`;
+  }
+}
