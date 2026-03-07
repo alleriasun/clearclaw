@@ -2,6 +2,10 @@ import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 
 // --- Channel ---
 
+export interface ChannelEvents {
+  message: [msg: InboundMessage];
+}
+
 export interface Channel {
   name: string;
   connect(): Promise<void>;
@@ -18,6 +22,9 @@ export interface Channel {
     buttons: Button[],
   ): Promise<ButtonResponse>;
   setTyping(channelId: string, isTyping: boolean): Promise<void>;
+  on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
+  off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
+  emit<K extends keyof ChannelEvents>(event: K, ...args: ChannelEvents[K]): boolean;
 }
 
 export interface Button {

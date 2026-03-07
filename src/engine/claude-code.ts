@@ -8,6 +8,7 @@ import {
   type PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
 import log from "../logger.js";
+import { formatToolDescription } from "../format.js";
 import type {
   Engine,
   EngineEvent,
@@ -184,20 +185,4 @@ function extractToolResultText(content: unknown): string {
       .join("\n");
   }
   return "";
-}
-
-function formatToolDescription(
-  toolName: string,
-  input: Record<string, unknown>,
-): string {
-  switch (toolName) {
-    case "Bash":
-      return `Bash: ${input.command ?? "(unknown command)"}`;
-    case "Edit":
-    case "Write":
-    case "Read":
-      return `${toolName}: ${input.file_path ?? "(unknown file)"}`;
-    default:
-      return `Allow ${toolName}?`;
-  }
 }
