@@ -97,9 +97,18 @@ export class TelegramChannel implements Channel {
     // Truncate at 4096 for now (splitting is backlog)
     const truncated =
       text.length > 4096 ? text.slice(0, 4093) + "..." : text;
-    await this.bot.api.sendMessage(chatId, truncated, {
-      parse_mode: opts?.parseMode,
-    });
+    try {
+      await this.bot.api.sendMessage(chatId, truncated, {
+        parse_mode: opts?.parseMode,
+      });
+    } catch (err) {
+      if (opts?.parseMode) {
+        log.warn("[channel] sendMessage failed with %s, retrying as plain text", opts.parseMode);
+        await this.bot.api.sendMessage(chatId, truncated);
+      } else {
+        throw err;
+      }
+    }
   }
 
   async sendInteractive(

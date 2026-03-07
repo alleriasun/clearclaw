@@ -66,6 +66,7 @@ export type EngineEvent =
   | { type: "text"; text: string }
   | { type: "tool_use"; toolName: string; input: Record<string, unknown> }
   | { type: "tool_result"; toolName: string; output: string }
+  | { type: "rate_limit"; status: string; resetsAt?: number }
   | { type: "done"; sessionId: string }
   | { type: "error"; message: string };
 
