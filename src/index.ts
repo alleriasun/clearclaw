@@ -70,17 +70,12 @@ async function main() {
           await telegram.setTyping(msg.channelId, true);
 
           try {
-            let fullText = "";
             for await (const event of engine.runTurn({
               sessionId: ws.current_session_id,
               cwd: ws.cwd,
               prompt: msg.text,
               permissionMode: config.permissionMode,
               onPermissionRequest: async (req) => {
-                if (fullText) {
-                  await telegram.sendMessage(msg.channelId, fullText);
-                  fullText = "";
-                }
                 log.info(`[perm] ${req.toolName}`);
                 const resp = await telegram.sendInteractive(
                   msg.channelId,
@@ -96,7 +91,9 @@ async function main() {
                 };
               },
             })) {
-              if (event.type === "text") fullText += event.text;
+              if (event.type === "text") {
+                await telegram.sendMessage(msg.channelId, event.text);
+              }
               if (event.type === "tool_use") {
                 const formatted = formatToolUse(event.toolName, event.input);
                 await telegram.sendMessage(msg.channelId, formatted, {
@@ -106,14 +103,20 @@ async function main() {
               if (event.type === "tool_result") {
                 const formatted = formatToolResult(event.toolName, event.output);
                 if (formatted) {
-                  if (fullText) {
-                    await telegram.sendMessage(msg.channelId, fullText);
-                    fullText = "";
-                  }
                   await telegram.sendMessage(msg.channelId, formatted, {
                     parseMode: "MarkdownV2",
                   });
                 }
+              }
+              if (event.type === "rate_limit") {
+                const resetMsg = event.resetsAt
+                  ? ` Resets at ${new Date(event.resetsAt).toLocaleTimeString()}.`
+                  : "";
+                log.warn(`[turn] rate limit: ${event.status}${resetMsg}`);
+                await telegram.sendMessage(
+                  msg.channelId,
+                  `⚠️ Rate limited (${event.status}).${resetMsg}`,
+                );
               }
               if (event.type === "done") {
                 log.info(`[turn] done session=${event.sessionId}`);
@@ -126,12 +129,6 @@ async function main() {
                   `Error: ${event.message}`,
                 );
               }
-            }
-            if (fullText) {
-              log.info(`[turn] sending ${fullText.length} chars`);
-              await telegram.sendMessage(msg.channelId, fullText);
-            } else {
-              log.info("[turn] no text to send");
             }
           } finally {
             busy = false;

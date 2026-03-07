@@ -1,6 +1,7 @@
 import {
   query,
   type SDKAssistantMessage,
+  type SDKRateLimitEvent,
   type SDKResultMessage,
   type SDKLocalCommandOutputMessage,
   type SDKUserMessage,
@@ -124,6 +125,18 @@ export class ClaudeCodeEngine implements Engine {
                 toolUseIdToName.delete(b.tool_use_id);
               }
             }
+          }
+        }
+
+        // Relay rate limit events
+        if (msg.type === "rate_limit_event") {
+          const { rate_limit_info } = msg as SDKRateLimitEvent;
+          if (rate_limit_info.status !== "allowed") {
+            yield {
+              type: "rate_limit",
+              status: rate_limit_info.status,
+              resetsAt: rate_limit_info.resetsAt,
+            };
           }
         }
 
