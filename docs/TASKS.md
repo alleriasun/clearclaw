@@ -7,7 +7,7 @@
 - [ ] Turn locking (proper mutex, not just busy flag)
 - [ ] Session-scoped permission allowlists ("Allow X for session")
 - [ ] Message splitting for 4096 char limit
-- [ ] Tool use status messages (show which tools are being called)
+- [x] Tool use status messages (show which tools are being called)
 - [x] Relay tool outputs (SDK `user` messages with tool results are currently skipped — bash output, file contents, etc. not visible to user)
 - [ ] Text accumulation/batching (send intermediate chunks)
 - [ ] `/cancel` command (abort current turn)
@@ -22,6 +22,7 @@
 - [x] File logger to `~/.clearclaw/clearclaw.log` (dual output: console + file)
 - [x] Resilient dev server (nodemon + `tsc --noEmit` gate, 5s debounce)
 - [ ] Restart heartbeat (on startup, auto-send resume prompt into existing session or greeting for new sessions, so the bot continues without a manual poke)
+- [ ] Voice input via Telegram (receive voice messages, use STT to transcribe, feed as text prompt — Claude Code SDK may support STT natively)
 
 ## Phase 2: Multi-workspace
 
