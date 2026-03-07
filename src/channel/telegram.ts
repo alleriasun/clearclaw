@@ -12,7 +12,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
   name = "telegram";
 
   private bot: Bot;
-  private allowedChatId: number;
+  private allowedUserId: number;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
 
   // Pending interactive responses: callbackId → resolve function
@@ -21,18 +21,18 @@ export class TelegramChannel extends EventEmitter implements Channel {
     (value: string) => void
   >();
 
-  constructor(botToken: string, allowedChatId: number) {
+  constructor(botToken: string, allowedUserId: number) {
     super();
-    this.allowedChatId = allowedChatId;
+    this.allowedUserId = allowedUserId;
     this.bot = new Bot(botToken);
   }
 
   async connect(): Promise<void> {
-    // Auth check: only respond to allowed chat
+    // Auth check: only respond to allowed user
     this.bot.on("message:text", (ctx) => {
-      if (ctx.chat.id !== this.allowedChatId) return;
-      const channelId = `tg:${ctx.chat.id}`;
-      this.emit("message", { channelId, text: ctx.message.text });
+      if (ctx.from?.id !== this.allowedUserId) return;
+      const chatId = `tg:${ctx.chat.id}`;
+      this.emit("message", { chatId, text: ctx.message.text });
     });
 
     // Handle inline keyboard button presses
@@ -68,26 +68,26 @@ export class TelegramChannel extends EventEmitter implements Channel {
     await this.bot.stop();
   }
 
-  ownsId(channelId: string): boolean {
-    return channelId.startsWith("tg:");
+  ownsId(chatId: string): boolean {
+    return chatId.startsWith("tg:");
   }
 
   async sendMessage(
-    channelId: string,
+    chatId: string,
     text: string,
     opts?: SendMessageOpts,
   ): Promise<void> {
-    const chatId = this.numericId(channelId);
+    const numId = this.numericId(chatId);
     const chunks = splitMessage(text);
     for (const chunk of chunks) {
       try {
-        await this.bot.api.sendMessage(chatId, chunk, {
+        await this.bot.api.sendMessage(numId, chunk, {
           parse_mode: opts?.parseMode,
         });
       } catch (err) {
         if (opts?.parseMode) {
           log.warn("[channel] sendMessage failed with %s, retrying as plain text", opts.parseMode);
-          await this.bot.api.sendMessage(chatId, chunk);
+          await this.bot.api.sendMessage(numId, chunk);
         } else {
           throw err;
         }
@@ -96,11 +96,11 @@ export class TelegramChannel extends EventEmitter implements Channel {
   }
 
   async sendInteractive(
-    channelId: string,
+    chatId: string,
     text: string,
     buttons: Button[],
   ): Promise<ButtonResponse> {
-    const chatId = this.numericId(channelId);
+    const numId = this.numericId(chatId);
     const callbackId = crypto.randomUUID().slice(0, 8);
 
     // Pre-compute callback data keys
@@ -115,7 +115,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
       keyboard.text(btn.label, cbData);
     }
 
-    await this.bot.api.sendMessage(chatId, text, {
+    await this.bot.api.sendMessage(numId, text, {
       reply_markup: keyboard,
     });
 
@@ -143,31 +143,31 @@ export class TelegramChannel extends EventEmitter implements Channel {
   }
 
   async setTyping(
-    channelId: string,
+    chatId: string,
     isTyping: boolean,
   ): Promise<void> {
     if (isTyping) {
-      if (this.typingIntervals.has(channelId)) return;
-      const chatId = this.numericId(channelId);
+      if (this.typingIntervals.has(chatId)) return;
+      const numId = this.numericId(chatId);
       // Send immediately, then repeat every 4s
       await this.bot.api
-        .sendChatAction(chatId, "typing")
+        .sendChatAction(numId, "typing")
         .catch(() => {});
       const interval = setInterval(() => {
-        this.bot.api.sendChatAction(chatId, "typing").catch(() => {});
+        this.bot.api.sendChatAction(numId, "typing").catch(() => {});
       }, 4000);
-      this.typingIntervals.set(channelId, interval);
+      this.typingIntervals.set(chatId, interval);
     } else {
-      const interval = this.typingIntervals.get(channelId);
+      const interval = this.typingIntervals.get(chatId);
       if (interval) {
         clearInterval(interval);
-        this.typingIntervals.delete(channelId);
+        this.typingIntervals.delete(chatId);
       }
     }
   }
 
-  private numericId(channelId: string): number {
-    return Number(channelId.replace(/^tg:/, ""));
+  private numericId(chatId: string): number {
+    return Number(chatId.replace(/^tg:/, ""));
   }
 }
 

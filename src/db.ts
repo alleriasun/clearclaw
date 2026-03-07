@@ -5,7 +5,7 @@ import type { Workspace } from "./types.js";
 let db: Database.Database;
 
 // Cached prepared statements (initialized in initDb)
-let stmtGetByChannel: Database.Statement;
+let stmtGetByChat: Database.Statement;
 let stmtUpsert: Database.Statement;
 let stmtUpdateSession: Database.Statement;
 let stmtClearSession: Database.Statement;
@@ -17,20 +17,20 @@ export function initDb(): void {
     CREATE TABLE IF NOT EXISTS workspaces (
       name TEXT PRIMARY KEY,
       cwd TEXT NOT NULL,
-      channel_id TEXT UNIQUE,
+      chat_id TEXT UNIQUE,
       current_session_id TEXT
     );
   `);
 
-  stmtGetByChannel = db.prepare(
-    "SELECT name, cwd, channel_id, current_session_id FROM workspaces WHERE channel_id = ?",
+  stmtGetByChat = db.prepare(
+    "SELECT name, cwd, chat_id, current_session_id FROM workspaces WHERE chat_id = ?",
   );
   stmtUpsert = db.prepare(
-    `INSERT INTO workspaces (name, cwd, channel_id, current_session_id)
-     VALUES (@name, @cwd, @channel_id, @current_session_id)
+    `INSERT INTO workspaces (name, cwd, chat_id, current_session_id)
+     VALUES (@name, @cwd, @chat_id, @current_session_id)
      ON CONFLICT(name) DO UPDATE SET
        cwd = excluded.cwd,
-       channel_id = excluded.channel_id,
+       chat_id = excluded.chat_id,
        current_session_id = excluded.current_session_id`,
   );
   stmtUpdateSession = db.prepare(
@@ -41,10 +41,10 @@ export function initDb(): void {
   );
 }
 
-export function getWorkspaceByChannel(
-  channelId: string,
+export function getWorkspaceByChat(
+  chatId: string,
 ): Workspace | undefined {
-  return stmtGetByChannel.get(channelId) as Workspace | undefined;
+  return stmtGetByChat.get(chatId) as Workspace | undefined;
 }
 
 export function upsertWorkspace(ws: Workspace): void {

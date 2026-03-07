@@ -5,21 +5,18 @@ import type { PermissionMode } from "./types.js";
 
 export interface Config {
   botToken: string;
-  allowedChatId: number;
-  defaultCwd: string;
+  allowedUserId: number;
   permissionMode: PermissionMode;
 }
 
-const DATA_DIR = path.join(os.homedir(), ".clearclaw");
+const DATA_DIR = process.env.CLEARCLAW_HOME ?? path.join(os.homedir(), ".clearclaw");
 
 export function loadConfig(): Config {
   const botToken = requireEnv("TELEGRAM_BOT_TOKEN");
-  const allowedChatId = Number(requireEnv("ALLOWED_CHAT_ID"));
-  if (Number.isNaN(allowedChatId)) {
-    throw new Error("ALLOWED_CHAT_ID must be a number");
+  const allowedUserId = Number(requireEnv("ALLOWED_USER_ID"));
+  if (Number.isNaN(allowedUserId)) {
+    throw new Error("ALLOWED_USER_ID must be a number");
   }
-
-  const defaultCwd = process.env.DEFAULT_CWD ?? os.homedir();
 
   const permissionMode = (process.env.PERMISSION_MODE ?? "default") as PermissionMode;
   const valid = [
@@ -35,7 +32,7 @@ export function loadConfig(): Config {
     );
   }
 
-  return { botToken, allowedChatId, defaultCwd, permissionMode };
+  return { botToken, allowedUserId, permissionMode };
 }
 
 export function ensureDataDir(): void {

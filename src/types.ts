@@ -10,18 +10,18 @@ export interface Channel {
   name: string;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  ownsId(channelId: string): boolean;
+  ownsId(chatId: string): boolean;
   sendMessage(
-    channelId: string,
+    chatId: string,
     text: string,
     opts?: SendMessageOpts,
   ): Promise<void>;
   sendInteractive(
-    channelId: string,
+    chatId: string,
     text: string,
     buttons: Button[],
   ): Promise<ButtonResponse>;
-  setTyping(channelId: string, isTyping: boolean): Promise<void>;
+  setTyping(chatId: string, isTyping: boolean): Promise<void>;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   emit<K extends keyof ChannelEvents>(event: K, ...args: ChannelEvents[K]): boolean;
@@ -82,14 +82,14 @@ export type EngineEvent =
 export interface Workspace {
   name: string;
   cwd: string;
-  channel_id: string;
+  chat_id: string;
   current_session_id: string | null;
 }
 
 // --- Inbound message (from channel to orchestrator) ---
 
 export interface InboundMessage {
-  channelId: string;
+  chatId: string;
   text: string;
 }
 

@@ -46,7 +46,7 @@ When you're giving a process access to your machine — your files, your keys, y
 - Relays permission prompts as interactive buttons
 - Relays AskUserQuestion as option menus
 - Relays plan approval as Approve / Reject
-- Maps chat channels to project workspaces (each chat = a CWD)
+- Maps chats to project workspaces (each chat = a CWD)
 - Manages sessions so you can start in the terminal and continue from your phone
 - Shows typing indicators while the agent works
 - That's it
