@@ -21,20 +21,44 @@ interface WriteInput {
 }
 
 /**
- * Format a tool_use event for display. Returns a MarkdownV2 string,
- * or null if we don't format this tool.
+ * Format a tool_use event for display. Returns a MarkdownV2 string.
+ * Edit/Write get rich formatting; all others get a one-line status.
  */
 export function formatToolUse(
   toolName: string,
   input: Record<string, unknown>,
-): string | null {
+): string {
   if (toolName === "Edit") {
     return formatEditDiff(input as unknown as EditInput);
   }
   if (toolName === "Write") {
     return formatWritePreview(input as unknown as WriteInput);
   }
-  return null;
+  return escapeMarkdownV2(`🔧 ${formatToolStatus(toolName, input)}`);
+}
+
+function formatToolStatus(
+  toolName: string,
+  input: Record<string, unknown>,
+): string {
+  switch (toolName) {
+    case "Bash":
+      return `Bash: ${input.command ?? "(unknown)"}`;
+    case "Read":
+      return `Read: ${input.file_path ?? "(unknown)"}`;
+    case "Glob":
+      return `Glob: ${input.pattern ?? "(unknown)"}`;
+    case "Grep":
+      return `Grep: ${input.pattern ?? "(unknown)"}`;
+    case "WebFetch":
+      return `WebFetch: ${input.url ?? "(unknown)"}`;
+    case "WebSearch":
+      return `WebSearch: ${input.query ?? "(unknown)"}`;
+    case "Agent":
+      return `Agent: ${input.description ?? "(unknown)"}`;
+    default:
+      return toolName;
+  }
 }
 
 function formatEditDiff(input: EditInput): string {
@@ -72,18 +96,25 @@ function truncateLines(lines: string[], max: number): string {
   return `${shown}\n... (${remaining} more lines)`;
 }
 
+// Tools whose output is noisy or redundant (tool_use already shows input).
+// New/unknown tools show by default.
+const SUPPRESSED_RESULTS = new Set([
+  "Read", "Edit", "Write", "Glob", "Agent",
+  "TodoWrite", "NotebookEdit", "EnterPlanMode", "ExitPlanMode",
+]);
+
 /**
- * Format a tool_result event for display. Returns a MarkdownV2 string,
- * or null if the output is empty.
+ * Format a tool_result event for display. Returns a MarkdownV2 code block
+ * with input + output, or null if suppressed/empty.
  */
 export function formatToolResult(
   toolName: string,
   output: string,
 ): string | null {
+  if (SUPPRESSED_RESULTS.has(toolName)) return null;
   if (!output.trim()) return null;
   const body = truncateLines(output.split("\n"), MAX_LINES);
-  const header = escapeMarkdownV2(`📎 ${toolName} output:`);
-  return `${header}\n\`\`\`\n${body}\n\`\`\``;
+  return `\`\`\`\n${body}\n\`\`\``;
 }
 
 /**

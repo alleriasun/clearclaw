@@ -77,20 +77,18 @@ async function main() {
               prompt: msg.text,
               permissionMode: config.permissionMode,
               onPermissionRequest: async (req) => {
-                // Flush accumulated text before showing permission prompt
                 if (fullText) {
                   await telegram.sendMessage(msg.channelId, fullText);
                   fullText = "";
                 }
-                log.info(`[perm] ${req.description}`);
-                const buttons = [
-                  { label: "Allow", value: "allow" },
-                  { label: "Deny", value: "deny" },
-                ];
+                log.info(`[perm] ${req.toolName}`);
                 const resp = await telegram.sendInteractive(
                   msg.channelId,
-                  req.description,
-                  buttons,
+                  `Allow ${req.toolName}?`,
+                  [
+                    { label: "Allow", value: "allow" },
+                    { label: "Deny", value: "deny" },
+                  ],
                 );
                 log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}`);
                 return {
@@ -101,16 +99,9 @@ async function main() {
               if (event.type === "text") fullText += event.text;
               if (event.type === "tool_use") {
                 const formatted = formatToolUse(event.toolName, event.input);
-                if (formatted) {
-                  // Flush accumulated text before showing diff
-                  if (fullText) {
-                    await telegram.sendMessage(msg.channelId, fullText);
-                    fullText = "";
-                  }
-                  await telegram.sendMessage(msg.channelId, formatted, {
-                    parseMode: "MarkdownV2",
-                  });
-                }
+                await telegram.sendMessage(msg.channelId, formatted, {
+                  parseMode: "MarkdownV2",
+                });
               }
               if (event.type === "tool_result") {
                 const formatted = formatToolResult(event.toolName, event.output);
