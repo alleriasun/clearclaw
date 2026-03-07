@@ -21,8 +21,8 @@ ClearClaw is a **transparent relay**, not an agent frontend. It routes interacti
 - Route CLI plan approval → chat Approve/Reject buttons
 - Route CLI output → formatted chat messages
 - Route user input → CLI prompt
-- Map channels to workspaces (channelId → CWD)
-- Map channels to sessions (channelId → sessionId)
+- Map chats to workspaces (chatId → CWD)
+- Map chats to sessions (chatId → sessionId)
 
 This is the single most important design constraint. When in doubt about where logic belongs, the answer is: in the CLI, not in ClearClaw.
 
@@ -42,7 +42,7 @@ Each workspace is a row in SQLite:
 | `name` | Unique identifier (e.g., `main`, `myapp`) |
 | `cwd` | Absolute path to working directory |
 | `session_id` | Current Claude Code session ID |
-| `channel_id` | The chat/channel/group mapped to this workspace |
+| `chat_id` | The chat (Telegram group, DM, Slack channel, etc.) mapped to this workspace |
 
 This is NanoClaw's model. NanoClaw stores equivalent data in SQLite with `groups` as the table name and `chatJid` as the channel identifier.
 
@@ -64,19 +64,19 @@ interface Channel {
   disconnect(): Promise<void>;
   isConnected(): boolean;
 
-  // Route: does this channel own the given channel ID?
+  // Route: does this channel own the given chat ID?
   // Prefix namespacing: tg:123, slack:C123, dc:456
-  ownsId(channelId: string): boolean;
+  ownsId(chatId: string): boolean;
 
   // Outbound
-  sendMessage(channelId: string, text: string): Promise<void>;
-  sendInteractive(channelId: string, text: string, buttons: Button[]): Promise<string>;
-  setTyping(channelId: string, isTyping: boolean): Promise<void>;
+  sendMessage(chatId: string, text: string): Promise<void>;
+  sendInteractive(chatId: string, text: string, buttons: Button[]): Promise<string>;
+  setTyping(chatId: string, isTyping: boolean): Promise<void>;
 
   // Inbound — callback-based
   // Set during construction, not part of the interface methods
-  // onMessage: (channelId: string, message: InboundMessage) => void
-  // onButtonPress: (channelId: string, callbackId: string, value: string) => void
+  // onMessage: (chatId: string, message: InboundMessage) => void
+  // onButtonPress: (chatId: string, callbackId: string, value: string) => void
 }
 
 interface Button {
@@ -86,7 +86,7 @@ interface Button {
 
 interface InboundMessage {
   id: string;
-  channelId: string;
+  chatId: string;
   sender: string;
   senderName: string;
   text: string;

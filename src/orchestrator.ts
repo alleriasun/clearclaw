@@ -1,7 +1,6 @@
 import log from "./logger.js";
 import {
-  getWorkspaceByChannel,
-  upsertWorkspace,
+  getWorkspaceByChat,
   updateSessionId,
   clearSession,
 } from "./db.js";
@@ -14,43 +13,25 @@ import type {
   PermissionMode,
 } from "./types.js";
 
-const DEFAULT_WORKSPACE = "main";
-
 export interface OrchestratorOpts {
   channel: Channel;
   engine: Engine;
-  channelId: string;
-  defaultCwd: string;
   permissionMode: PermissionMode;
 }
 
 export class Orchestrator {
   private channel: Channel;
   private engine: Engine;
-  private channelId: string;
-  private defaultCwd: string;
   private permissionMode: PermissionMode;
-  private busy = false;
+  private busyChats = new Set<string>();
 
   constructor(opts: OrchestratorOpts) {
     this.channel = opts.channel;
     this.engine = opts.engine;
-    this.channelId = opts.channelId;
-    this.defaultCwd = opts.defaultCwd;
     this.permissionMode = opts.permissionMode;
   }
 
   async start(): Promise<void> {
-    // Seed default workspace if it doesn't exist
-    if (!getWorkspaceByChannel(this.channelId)) {
-      upsertWorkspace({
-        name: DEFAULT_WORKSPACE,
-        cwd: this.defaultCwd,
-        channel_id: this.channelId,
-        current_session_id: null,
-      });
-    }
-
     this.channel.on("message", (msg) => {
       this.handleMessage(msg).catch((err) => {
         log.error({ err }, "[orchestrator] unhandled message error");
@@ -78,32 +59,38 @@ export class Orchestrator {
 
       // /new — reset session
       if (msg.text === "/new") {
-        clearSession(DEFAULT_WORKSPACE);
-        log.info("[cmd] session cleared");
-        await this.channel.sendMessage(msg.channelId, "Session cleared.");
+        const ws = getWorkspaceByChat(msg.chatId);
+        if (!ws) {
+          await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
+          return;
+        }
+        clearSession(ws.name);
+        log.info("[cmd] session cleared for workspace %s", ws.name);
+        await this.channel.sendMessage(msg.chatId, "Session cleared.");
         return;
       }
 
-      // Reject during active turn
-      if (this.busy) {
+      // Reject during active turn (per-workspace)
+      if (this.busyChats.has(msg.chatId)) {
         log.info("[msg] rejected (busy)");
         await this.channel.sendMessage(
-          msg.channelId,
+          msg.chatId,
           "Still working on the previous message...",
         );
         return;
       }
 
-      this.busy = true;
-      const ws = getWorkspaceByChannel(msg.channelId);
+      this.busyChats.add(msg.chatId);
+      const ws = getWorkspaceByChat(msg.chatId);
       if (!ws) {
-        log.info("[msg] no workspace for channel %s", msg.channelId);
-        this.busy = false;
+        log.info("[msg] no workspace for chat %s", msg.chatId);
+        this.busyChats.delete(msg.chatId);
+        await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
         return;
       }
 
       log.info(`[turn] start session=${ws.current_session_id ?? "new"} cwd=${ws.cwd}`);
-      await this.channel.setTyping(msg.channelId, true);
+      await this.channel.setTyping(msg.chatId, true);
 
       try {
         for await (const event of this.engine.runTurn({
@@ -114,7 +101,7 @@ export class Orchestrator {
           onPermissionRequest: async (req) => {
             log.info(`[perm] ${req.toolName}`);
             const resp = await this.channel.sendInteractive(
-              msg.channelId,
+              msg.chatId,
               `Allow ${req.toolName}?`,
               [
                 { label: "Allow", value: "allow" },
@@ -127,29 +114,29 @@ export class Orchestrator {
             };
           },
         })) {
-          await this.routeEngineEvent(msg.channelId, event);
+          await this.routeEngineEvent(msg.chatId, event, ws.name);
         }
       } finally {
-        this.busy = false;
-        await this.channel.setTyping(msg.channelId, false);
+        this.busyChats.delete(msg.chatId);
+        await this.channel.setTyping(msg.chatId, false);
       }
     } catch (err) {
       log.error({ err }, "[fatal]");
       await this.channel.sendMessage(
-        msg.channelId,
+        msg.chatId,
         `Internal error: ${err instanceof Error ? err.message : String(err)}`,
       ).catch(() => {});
     }
   }
 
-  private async routeEngineEvent(channelId: string, event: EngineEvent): Promise<void> {
+  private async routeEngineEvent(chatId: string, event: EngineEvent, workspaceName: string): Promise<void> {
     switch (event.type) {
       case "text":
-        await this.channel.sendMessage(channelId, event.text);
+        await this.channel.sendMessage(chatId, event.text);
         break;
       case "tool_use": {
         const formatted = formatToolUse(event.toolName, event.input);
-        await this.channel.sendMessage(channelId, formatted, {
+        await this.channel.sendMessage(chatId, formatted, {
           parseMode: "MarkdownV2",
         });
         break;
@@ -157,7 +144,7 @@ export class Orchestrator {
       case "tool_result": {
         const formatted = formatToolResult(event.toolName, event.output);
         if (formatted) {
-          await this.channel.sendMessage(channelId, formatted, {
+          await this.channel.sendMessage(chatId, formatted, {
             parseMode: "MarkdownV2",
           });
         }
@@ -169,19 +156,19 @@ export class Orchestrator {
           : "";
         log.warn(`[turn] rate limit: ${event.status}${resetMsg}`);
         await this.channel.sendMessage(
-          channelId,
+          chatId,
           `⚠️ Rate limited (${event.status}).${resetMsg}`,
         );
         break;
       }
       case "done":
         log.info(`[turn] done session=${event.sessionId}`);
-        updateSessionId(DEFAULT_WORKSPACE, event.sessionId);
+        updateSessionId(workspaceName, event.sessionId);
         break;
       case "error":
         log.error(`[turn] error: ${event.message}`);
         await this.channel.sendMessage(
-          channelId,
+          chatId,
           `Error: ${event.message}`,
         );
         break;
