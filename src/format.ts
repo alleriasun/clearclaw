@@ -1,9 +1,10 @@
 /**
  * Diff formatting utilities for tool_use display in Telegram.
  *
- * V1: simple dump — all old_string lines as `-`, all new_string lines as `+`.
- * Future: swap in a diff library for proper line-level diffing.
+ * Uses the `diff` library for proper unified diffs with context lines.
  */
+
+import { createTwoFilesPatch } from "diff";
 
 const MAX_LINES = 200;
 
@@ -62,15 +63,19 @@ function formatToolStatus(
 }
 
 function formatEditDiff(input: EditInput): string {
-  const oldLines = input.old_string.split("\n");
-  const newLines = input.new_string.split("\n");
+  const patch = createTwoFilesPatch(
+    `a/${input.file_path}`,
+    `b/${input.file_path}`,
+    input.old_string,
+    input.new_string,
+    "", "",
+    { context: 3 },
+  );
 
-  const diffLines = [
-    `--- a/${input.file_path}`,
-    `+++ b/${input.file_path}`,
-    ...oldLines.map((l) => `- ${l}`),
-    ...newLines.map((l) => `+ ${l}`),
-  ];
+  // Strip the "Index:" / "===" preamble, keep --- / +++ / @@ lines onward.
+  const lines = patch.split("\n");
+  const start = lines.findIndex((l) => l.startsWith("---"));
+  const diffLines = start >= 0 ? lines.slice(start) : lines;
 
   const body = truncateLines(diffLines, MAX_LINES);
   const header = escapeMarkdownV2(`\u270f\ufe0f Edit: ${input.file_path}`);
