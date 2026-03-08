@@ -11,14 +11,15 @@ npm run build      # tsc → dist/
 npm run check      # tsc --noEmit (type check only)
 ```
 
-**Required env vars:** `TELEGRAM_BOT_TOKEN`, `ALLOWED_CHAT_ID`
-**Optional:** `DEFAULT_CWD` (defaults to `$HOME`), `PERMISSION_MODE` (default|acceptEdits|bypassPermissions|plan|dontAsk)
+**Required env vars:** `TELEGRAM_BOT_TOKEN`, `ALLOWED_USER_ID`
+**Optional:** `PERMISSION_MODE` (default|acceptEdits|bypassPermissions|plan|dontAsk), `CLEARCLAW_HOME` (defaults to `~/.clearclaw`)
 
 ## Code Layout
 
 ```
 src/
-  index.ts              # Entry point + orchestrator
+  index.ts              # Entry point, wiring
+  orchestrator.ts       # Message routing, turn management
   types.ts              # Channel, Engine, Workspace interfaces
   config.ts             # Env → typed config
   db.ts                 # SQLite (better-sqlite3)
@@ -26,7 +27,7 @@ src/
   channel/telegram.ts   # grammY bot
 ```
 
-Six files. No build step needed for dev (`tsx` runs TS directly).
+Seven files. No build step needed for dev (`tsx` runs TS directly).
 
 ## Stack
 
@@ -48,6 +49,6 @@ ClearClaw is a relay, not an agent frontend. It does NOT own permissions, tool a
 
 ## Docs
 
-- `docs/DESIGN.md` — Full design rationale, interface specs
-- `docs/ARCHITECTURE.md` — File structure, data/permission flow diagrams
+- `docs/OVERVIEW.md` — Strategy, rationale, what ClearClaw is and isn't
+- `docs/ARCHITECTURE.md` — Concepts, workspace model, data/permission flows, interfaces, storage
 - `docs/TASKS.md` — Backlog (phased)

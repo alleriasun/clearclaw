@@ -40,7 +40,7 @@ export interface Config {
 ```
 
 - `ALLOWED_CHAT_ID` → `ALLOWED_USER_ID`. Telegram user ID (the person, not the chat).
-- `DEFAULT_CWD` removed. Workspace cwds live in the DB, set at creation time. The future onboarding flow will default to a convention path (`$CLEARCLAW_HOME/workspaces/default/`) with interactive override.
+- `DEFAULT_CWD` removed. Workspace cwds live in the DB, set at creation time. The home workspace lives at `$CLEARCLAW_HOME/workspace/` (singular — see ARCHITECTURE.md Workspace Model for rationale).
 - `DATA_DIR`: hardcoded `~/.clearclaw` → `process.env.CLEARCLAW_HOME ?? ~/.clearclaw`.
 - `allowedChatId` and `defaultCwd` fields removed from `Config`. Workspace-channel bindings and cwds are DB-only.
 

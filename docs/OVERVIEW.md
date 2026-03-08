@@ -76,7 +76,7 @@ Two interfaces keep the core thin:
 
 The orchestrator in the middle is ~200 lines. It routes inbound messages to the right engine and outbound events to the right channel. Adding a channel or engine means adding a file, not changing the core.
 
-Full design details — interfaces, schemas, permission relay, session management — are in [`DESIGN.md`](DESIGN.md).
+Full architecture details — workspace model, interfaces, permission relay, session management — are in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
