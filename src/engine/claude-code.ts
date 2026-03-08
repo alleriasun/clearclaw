@@ -152,9 +152,8 @@ export class ClaudeCodeEngine implements Engine {
         // Capture result
         if (msg.type === "result") {
           const result = msg as SDKResultMessage;
-          if (result.subtype === "success") {
-            resultSessionId = result.session_id;
-          } else if (result.errors.length) {
+          resultSessionId = result.session_id;
+          if (result.subtype !== "success" && result.errors.length) {
             yield { type: "error", message: result.errors.join("\n") };
           }
         }
