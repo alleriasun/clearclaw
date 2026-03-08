@@ -27,7 +27,7 @@
 - [ ] Fix MarkdownV2 formatting for tool_use/tool_result messages (21 warns in logs — escaping looks correct but formatted strings likely double-escape backticks meant as syntax)
 - [ ] Add debug approaches to CLAUDE.md (log locations, dev server usage)
 - [ ] Show TodoWrite/Read result to user in Telegram
-- [ ] Merge DESIGN.md and ARCHITECTURE.md into one doc
+- [x] Merge DESIGN.md into ARCHITECTURE.md + phase-1.md (DESIGN.md deleted)
 - [ ] Remove numeric ID assumption — validate/support chat_id prefixes (tg:, slack:) properly across Channel implementations
 
 ## Phase 2: Multi-workspace
@@ -55,3 +55,8 @@
 
 - [ ] Scheduled tasks (cron-style)
 - [ ] Task persistence in SQLite
+
+## Future / Parking Lot
+
+- [ ] Config file format (YAML or TOML) — env vars suffice for now, revisit when config grows
+- [ ] Semantic memory (vector search, decay/relevance) — flat CLAUDE.md/MEMORY.md suffice for now. Options: embed-based search over memory files, OpenMemory integration, or keep flat files with better organization. Needs a design decision.
