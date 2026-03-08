@@ -60,7 +60,7 @@ export class ClaudeCodeEngine implements Engine {
       if (resp.decision === "allow") {
         return { behavior: "allow", updatedInput: input };
       }
-      return { behavior: "deny", message: "User denied", interrupt: true };
+      return { behavior: "deny", message: "User denied" };
     };
 
     const q = query({
