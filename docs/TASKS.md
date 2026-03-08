@@ -22,11 +22,19 @@
 - [x] File logger to `~/.clearclaw/clearclaw.log` (dual output: console + file)
 - [x] Resilient dev server (nodemon + `tsc --noEmit` gate, 5s debounce)
 - [ ] Restart heartbeat (on startup, auto-send resume prompt into existing session or greeting for new sessions, so the bot continues without a manual poke)
+- [ ] Shell escape commands (`!git status`, `!ls`) — run shell commands directly from chat without going through the engine
 - [ ] Voice input via Telegram (receive voice messages, use STT to transcribe, feed as text prompt — Claude Code SDK may support STT natively)
+- [ ] Fix MarkdownV2 formatting for tool_use/tool_result messages (21 warns in logs — escaping looks correct but formatted strings likely double-escape backticks meant as syntax)
+- [ ] Add debug approaches to CLAUDE.md (log locations, dev server usage)
+- [ ] Show TodoWrite/Read result to user in Telegram
+- [ ] Merge DESIGN.md and ARCHITECTURE.md into one doc
+- [ ] Remove numeric ID assumption — validate/support chat_id prefixes (tg:, slack:) properly across Channel implementations
 
 ## Phase 2: Multi-workspace
 
-- [ ] Multiple workspaces (each mapped to a channel/group)
+- [x] Multiple workspaces (each mapped to a chat/group)
+- [x] DM → default workspace, project workspaces in dedicated groups
+- [ ] Workspace onboarding from chat — send a message from a new group, bot detects unmapped chat and offers to configure it as a workspace (name, cwd) via inline prompts. Replaces manual chat ID extraction from logs + SQL insert.
 - [ ] `/workspace` command to switch contexts
 - [ ] Workspace management commands (create, delete, list)
 - [ ] Per-workspace `extraArgs` for SDK (settings, mcp-config, auth). SDK supports `query({ options: { extraArgs: { settings: "...", "mcp-config": "..." } } })`. Each workspace carries its own CLI overrides so different workspaces can use different API providers or settings.
