@@ -110,15 +110,17 @@ export class Orchestrator {
             log.info(`[perm] ${req.toolName}`);
             const resp = await this.channel.sendInteractive(
               msg.chatId,
-              `Allow ${req.toolName}?`,
+              `Allow ${req.toolName}?\n${req.description}`,
               [
                 { label: "Allow", value: "allow" },
                 { label: "Deny", value: "deny" },
+                { label: "Deny+Note", value: "deny", requestText: true },
               ],
             );
-            log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}`);
+            log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
             return {
               decision: resp.value === "allow" ? "allow" : "deny",
+              message: resp.text,
             };
           },
         })) {

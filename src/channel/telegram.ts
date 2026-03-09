@@ -21,6 +21,9 @@ export class TelegramChannel extends EventEmitter implements Channel {
     (value: string) => void
   >();
 
+  // Pending text input: chatId → resolve function (for requestText follow-ups)
+  private pendingTextResolvers = new Map<string, (text: string) => void>();
+
   constructor(botToken: string, allowedUserId: number) {
     super();
     this.allowedUserId = allowedUserId;
@@ -32,6 +35,15 @@ export class TelegramChannel extends EventEmitter implements Channel {
     this.bot.on("message:text", (ctx) => {
       if (ctx.from?.id !== this.allowedUserId) return;
       const chatId = `tg:${ctx.chat.id}`;
+
+      // Intercept for requestText follow-ups before emitting as a new message
+      const textResolver = this.pendingTextResolvers.get(chatId);
+      if (textResolver) {
+        this.pendingTextResolvers.delete(chatId);
+        textResolver(ctx.message.text);
+        return;
+      }
+
       this.emit("message", { chatId, text: ctx.message.text });
     });
 
@@ -103,10 +115,10 @@ export class TelegramChannel extends EventEmitter implements Channel {
     const numId = this.numericId(chatId);
     const callbackId = crypto.randomUUID().slice(0, 8);
 
-    // Pre-compute callback data keys
-    const cbEntries = buttons.map((btn) => ({
+    // Pre-compute callback data keys (use index to avoid collisions when buttons share values)
+    const cbEntries = buttons.map((btn, i) => ({
       btn,
-      cbData: `${callbackId}:${btn.value}`,
+      cbData: `${callbackId}:${i}`,
     }));
 
     // Build inline keyboard
@@ -126,20 +138,35 @@ export class TelegramChannel extends EventEmitter implements Channel {
     };
 
     // Wait for button press or timeout (30 minutes)
-    return new Promise<ButtonResponse>((resolve) => {
+    const pressed = await new Promise<Button | null>((resolve) => {
       const timeout = setTimeout(() => {
         cleanupAll();
-        resolve({ value: "" });
+        resolve(null);
       }, 30 * 60 * 1000);
 
       for (const { btn, cbData } of cbEntries) {
         this.pendingCallbacks.set(cbData, () => {
           clearTimeout(timeout);
           cleanupAll();
-          resolve({ value: btn.value });
+          resolve(btn);
         });
       }
     });
+
+    if (!pressed) return { value: "" };
+
+    // If the button requests text, prompt for follow-up input
+    if (pressed.requestText) {
+      await this.bot.api.sendMessage(numId, "Type your note:", {
+        reply_markup: { force_reply: true },
+      });
+      const followUpText = await new Promise<string>((resolve) => {
+        this.pendingTextResolvers.set(chatId, resolve);
+      });
+      return { value: pressed.value, text: followUpText };
+    }
+
+    return { value: pressed.value };
   }
 
   async setTyping(
