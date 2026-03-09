@@ -61,7 +61,19 @@ export class ClaudeCodeEngine implements Engine {
       if (resp.decision === "allow") {
         return { behavior: "allow", updatedInput: input };
       }
-      return { behavior: "deny", message: "User denied" };
+      const denyMessage = resp.message
+        ? `User denied this action with feedback: ${resp.message}`
+        : "User denied";
+      // Deny with note: let the model read the feedback and adjust.
+      // Plain deny: interrupt to stop the turn immediately.
+      // (The SDK has a bug where interrupt causes an unhandled rejection —
+      // handleControlRequest writes to stdin after the subprocess exits.
+      // Suppressed by the unhandledRejection handler in index.ts.)
+      return {
+        behavior: "deny",
+        message: denyMessage,
+        interrupt: !resp.message,
+      };
     };
 
     const q = query({
