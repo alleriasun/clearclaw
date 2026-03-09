@@ -73,7 +73,7 @@ export class Orchestrator {
 
   private async handleMessage(msg: InboundMessage): Promise<void> {
     try {
-      log.info(`[msg] ${msg.text.slice(0, 80)}`);
+      log.info(`[msg] user=${msg.userId} ${msg.text.slice(0, 80)}`);
 
       const state = this.chat(msg.chatId);
 

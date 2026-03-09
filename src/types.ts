@@ -94,6 +94,7 @@ export interface Workspace {
 
 export interface InboundMessage {
   chatId: string;
+  userId: string;
   text: string;
 }
 

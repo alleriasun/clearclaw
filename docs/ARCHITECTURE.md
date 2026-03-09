@@ -176,6 +176,6 @@ Defined in `src/types.ts`. Two interfaces keep the orchestrator decoupled from s
 
 Environment variables:
 - `TELEGRAM_BOT_TOKEN` (required)
-- `ALLOWED_USER_ID` (required) — platform user ID of the owner (trust boundary)
+- `ALLOWED_USER_IDS` (required) — comma-separated Telegram user IDs of allowed users (trust boundary). `ALLOWED_USER_ID` accepted as single-user alias.
 - `PERMISSION_MODE` (optional, defaults to `default`)
 - `CLEARCLAW_HOME` (optional, defaults to `~/.clearclaw`) — data directory for DB, logs. Use separate values for multi-instance isolation.
