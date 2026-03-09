@@ -1,13 +1,14 @@
 import { loadConfig } from "./config.js";
-import { initDb } from "./db.js";
+import log, { initLogger } from "./logger.js";
+import { WorkspaceStore } from "./workspace-store.js";
 import { ClaudeCodeEngine } from "./engine/claude-code.js";
 import { TelegramChannel } from "./channel/telegram.js";
 import { Orchestrator } from "./orchestrator.js";
-import log from "./logger.js";
 
 async function main() {
   const config = loadConfig();
-  initDb();
+  initLogger(config.logPath);
+  const workspaceStore = new WorkspaceStore(config.workspacesPath);
 
   const channel = new TelegramChannel(config.botToken, config.allowedUserId);
   const engine = new ClaudeCodeEngine();
@@ -15,6 +16,7 @@ async function main() {
   const orchestrator = new Orchestrator({
     channel,
     engine,
+    workspaceStore,
     permissionMode: config.permissionMode,
   });
 

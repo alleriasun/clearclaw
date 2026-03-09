@@ -1,10 +1,6 @@
 import log from "./logger.js";
-import {
-  getWorkspaceByChat,
-  updateSessionId,
-  clearSession,
-} from "./db.js";
 import { formatToolUse, formatToolResult } from "./format.js";
+import type { WorkspaceStore } from "./workspace-store.js";
 import type {
   Channel,
   Engine,
@@ -16,18 +12,21 @@ import type {
 export interface OrchestratorOpts {
   channel: Channel;
   engine: Engine;
+  workspaceStore: WorkspaceStore;
   permissionMode: PermissionMode;
 }
 
 export class Orchestrator {
   private channel: Channel;
   private engine: Engine;
+  private workspaceStore: WorkspaceStore;
   private permissionMode: PermissionMode;
   private busyChats = new Set<string>();
 
   constructor(opts: OrchestratorOpts) {
     this.channel = opts.channel;
     this.engine = opts.engine;
+    this.workspaceStore = opts.workspaceStore;
     this.permissionMode = opts.permissionMode;
   }
 
@@ -59,12 +58,12 @@ export class Orchestrator {
 
       // /new — reset session
       if (msg.text === "/new") {
-        const ws = getWorkspaceByChat(msg.chatId);
+        const ws = this.workspaceStore.byChat(msg.chatId);
         if (!ws) {
           await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
           return;
         }
-        clearSession(ws.name);
+        this.workspaceStore.clearSession(ws.name);
         log.info("[cmd] session cleared for workspace %s", ws.name);
         await this.channel.sendMessage(msg.chatId, "Session cleared.");
         return;
@@ -81,7 +80,7 @@ export class Orchestrator {
       }
 
       this.busyChats.add(msg.chatId);
-      const ws = getWorkspaceByChat(msg.chatId);
+      const ws = this.workspaceStore.byChat(msg.chatId);
       if (!ws) {
         log.info("[msg] no workspace for chat %s", msg.chatId);
         this.busyChats.delete(msg.chatId);
@@ -163,7 +162,7 @@ export class Orchestrator {
       }
       case "done":
         log.info(`[turn] done session=${event.sessionId}`);
-        updateSessionId(workspaceName, event.sessionId);
+        this.workspaceStore.setSession(workspaceName, event.sessionId);
         break;
       case "error":
         log.error(`[turn] error: ${event.message}`);

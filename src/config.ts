@@ -7,11 +7,16 @@ export interface Config {
   botToken: string;
   allowedUserId: number;
   permissionMode: PermissionMode;
+  dataDir: string;
+  workspacesPath: string;
+  logPath: string;
 }
 
-const DATA_DIR = process.env.CLEARCLAW_HOME ?? path.join(os.homedir(), ".clearclaw");
-
 export function loadConfig(): Config {
+  const dataDir =
+    process.env.CLEARCLAW_HOME ?? path.join(os.homedir(), ".clearclaw");
+  fs.mkdirSync(dataDir, { recursive: true });
+
   const botToken = requireEnv("TELEGRAM_BOT_TOKEN");
   const allowedUserId = Number(requireEnv("ALLOWED_USER_ID"));
   if (Number.isNaN(allowedUserId)) {
@@ -32,19 +37,14 @@ export function loadConfig(): Config {
     );
   }
 
-  return { botToken, allowedUserId, permissionMode };
-}
-
-export function ensureDataDir(): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-export function dbPath(): string {
-  return path.join(DATA_DIR, "clearclaw.db");
-}
-
-export function logPath(): string {
-  return path.join(DATA_DIR, "clearclaw.log");
+  return {
+    botToken,
+    allowedUserId,
+    permissionMode,
+    dataDir,
+    workspacesPath: path.join(dataDir, "workspaces.json"),
+    logPath: path.join(dataDir, "clearclaw.log"),
+  };
 }
 
 function requireEnv(name: string): string {
