@@ -12,7 +12,7 @@ npm run build      # tsc → dist/ (triggers dev:relay restart)
 npm run check      # tsc --noEmit (type check only)
 ```
 
-**Required env vars:** `TELEGRAM_BOT_TOKEN`, `ALLOWED_USER_ID`
+**Required env vars:** `TELEGRAM_BOT_TOKEN`, `ALLOWED_USER_IDS` (comma-separated, channel-prefixed, e.g. `tg:12345,tg:67890`; `ALLOWED_USER_ID` also accepted)
 **Optional:** `PERMISSION_MODE` (default|acceptEdits|bypassPermissions|plan|dontAsk), `CLEARCLAW_HOME` (defaults to `~/.clearclaw`)
 
 ## Dev Server

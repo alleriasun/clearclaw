@@ -12,7 +12,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
   name = "telegram";
 
   private bot: Bot;
-  private allowedUserId: number;
+  private allowedUserIds: Set<string>;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
 
   // Pending interactive responses: callbackId → resolve function
@@ -24,17 +24,18 @@ export class TelegramChannel extends EventEmitter implements Channel {
   // Pending text input: chatId → resolve function (for requestText follow-ups)
   private pendingTextResolvers = new Map<string, (text: string) => void>();
 
-  constructor(botToken: string, allowedUserId: number) {
+  constructor(botToken: string, allowedUserIds: Set<string>) {
     super();
-    this.allowedUserId = allowedUserId;
+    this.allowedUserIds = allowedUserIds;
     this.bot = new Bot(botToken);
   }
 
   async connect(): Promise<void> {
     // Auth check: only respond to allowed user
     this.bot.on("message:text", (ctx) => {
-      if (ctx.from?.id !== this.allowedUserId) return;
+      if (!ctx.from?.id || !this.allowedUserIds.has(`tg:${ctx.from.id}`)) return;
       const chatId = `tg:${ctx.chat.id}`;
+      const userId = `tg:${ctx.from.id}`;
 
       // Intercept for requestText follow-ups before emitting as a new message
       const textResolver = this.pendingTextResolvers.get(chatId);
@@ -44,7 +45,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
         return;
       }
 
-      this.emit("message", { chatId, text: ctx.message.text });
+      this.emit("message", { chatId, userId, text: ctx.message.text });
     });
 
     // Handle inline keyboard button presses

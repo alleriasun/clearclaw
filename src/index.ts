@@ -29,7 +29,7 @@ async function main() {
   initLogger(config.logPath);
   const workspaceStore = new WorkspaceStore(config.workspacesPath);
 
-  const channel = new TelegramChannel(config.botToken, config.allowedUserId);
+  const channel = new TelegramChannel(config.botToken, config.allowedUserIds);
   const engine = new ClaudeCodeEngine();
 
   const orchestrator = new Orchestrator({
