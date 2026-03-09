@@ -30,10 +30,12 @@ export interface Channel {
 export interface Button {
   label: string;
   value: string;
+  requestText?: boolean; // prompt for follow-up text after press
 }
 
 export interface ButtonResponse {
   value: string; // button value or '' on timeout
+  text?: string; // user-provided follow-up text (when requestText button pressed)
 }
 
 export interface SendMessageOpts {
@@ -68,6 +70,7 @@ export interface PermissionRequest {
 
 export interface PermissionResponse {
   decision: "allow" | "deny";
+  message?: string; // optional feedback on deny (skips abort, lets model adjust)
 }
 
 export type EngineEvent =
