@@ -28,7 +28,7 @@
 - [ ] Add debug approaches to CLAUDE.md (log locations, dev server usage)
 - [ ] Show TodoWrite/Read result to user in Telegram
 - [x] Merge DESIGN.md into ARCHITECTURE.md + phase-1.md (DESIGN.md deleted)
-- [ ] Remove numeric ID assumption — validate/support chat_id prefixes (tg:, slack:) properly across Channel implementations
+- [x] Remove numeric ID assumption — validate/support chat_id prefixes (tg:, slack:) properly across Channel implementations
 
 ## Phase 2: Multi-workspace
 
@@ -38,7 +38,7 @@
 - [ ] `/workspace` command to switch contexts
 - [ ] Workspace management commands (create, delete, list)
 - [ ] Per-workspace `extraArgs` for SDK (settings, mcp-config, auth). SDK supports `query({ options: { extraArgs: { settings: "...", "mcp-config": "..." } } })`. Each workspace carries its own CLI overrides so different workspaces can use different API providers or settings.
-- [ ] Multi-user support (`ALLOWED_USER_IDS` comma-separated list, multiple users in a group chat). Depends on message queue — without it, one user's turn blocks everyone else.
+- [x] Multi-user support (`ALLOWED_USER_IDS` comma-separated list, multiple users in a group chat). Note: without message queue, concurrent messages from different users in the same chat get "Still working..." rejection.
 
 ## Phase 3: Multi-engine (Kiro)
 

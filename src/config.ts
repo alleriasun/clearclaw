@@ -5,7 +5,7 @@ import type { PermissionMode } from "./types.js";
 
 export interface Config {
   botToken: string;
-  allowedUserId: number;
+  allowedUserIds: Set<string>;
   permissionMode: PermissionMode;
   dataDir: string;
   defaultPromptPath: string;
@@ -19,10 +19,12 @@ export function loadConfig(): Config {
   fs.mkdirSync(dataDir, { recursive: true });
 
   const botToken = requireEnv("TELEGRAM_BOT_TOKEN");
-  const allowedUserId = Number(requireEnv("ALLOWED_USER_ID"));
-  if (Number.isNaN(allowedUserId)) {
-    throw new Error("ALLOWED_USER_ID must be a number");
-  }
+
+  const rawIds = process.env.ALLOWED_USER_IDS ?? process.env.ALLOWED_USER_ID;
+  if (!rawIds) throw new Error("Missing required env var: ALLOWED_USER_IDS");
+  const allowedUserIds = new Set(
+    rawIds.split(",").map((s) => s.trim()).filter(Boolean),
+  );
 
   const permissionMode = (process.env.PERMISSION_MODE ?? "default") as PermissionMode;
   const valid = [
@@ -40,7 +42,7 @@ export function loadConfig(): Config {
 
   return {
     botToken,
-    allowedUserId,
+    allowedUserIds,
     permissionMode,
     dataDir,
     defaultPromptPath: path.join(dataDir, "workspace", "CLAUDE.md"),
