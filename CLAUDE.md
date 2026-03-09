@@ -14,6 +14,12 @@ npm run check      # tsc --noEmit (type check only)
 **Required env vars:** `TELEGRAM_BOT_TOKEN`, `ALLOWED_USER_ID`
 **Optional:** `PERMISSION_MODE` (default|acceptEdits|bypassPermissions|plan|dontAsk), `CLEARCLAW_HOME` (defaults to `~/.clearclaw`)
 
+## Dev Server (`npm run dev`)
+
+`tsc --watch` compiles in the background; `nodemon` watches `dist/` and restarts only after successful builds. This is intentional — ClearClaw is developed remotely via Telegram through ClearClaw itself, so the dev server must stay running with the last good build even when `tsc` reports errors. A simpler `tsx --watch` would restart on every save (including broken code) and skip type checking, killing the Telegram connection mid-conversation.
+
+**Source maps:** `tsconfig.json` has `sourceMap: true` so stack traces from `dist/` map back to `.ts` lines during dev. Source maps are excluded from the published npm package via the `files` field in `package.json` (only `*.js` and `*.d.ts` are shipped — maps would be dead weight since `src/` isn't published).
+
 ## Code Layout
 
 ```
@@ -27,7 +33,7 @@ src/
   channel/telegram.ts   # grammY bot
 ```
 
-Seven files. No build step needed for dev (`tsx` runs TS directly).
+Seven files. Dev runs through `tsc --watch` → `dist/` (see Dev Server section above).
 
 ## Stack
 

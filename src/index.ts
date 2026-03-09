@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { loadConfig } from "./config.js";
 import log, { initLogger } from "./logger.js";
 import { WorkspaceStore } from "./workspace-store.js";

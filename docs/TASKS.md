@@ -2,7 +2,7 @@
 
 ## Phase 1 Improvements
 
-- [ ] Message queue (queue messages during active turn, drain after)
+- [ ] Message queue (queue messages during active turn, drain after) — prerequisite for multi-user
 - [ ] Stale detection (JSONL file size comparison before each turn)
 - [ ] Turn locking (proper mutex, not just busy flag)
 - [ ] Session-scoped permission allowlists ("Allow X for session")
@@ -38,6 +38,7 @@
 - [ ] `/workspace` command to switch contexts
 - [ ] Workspace management commands (create, delete, list)
 - [ ] Per-workspace `extraArgs` for SDK (settings, mcp-config, auth). SDK supports `query({ options: { extraArgs: { settings: "...", "mcp-config": "..." } } })`. Each workspace carries its own CLI overrides so different workspaces can use different API providers or settings.
+- [ ] Multi-user support (`ALLOWED_USER_IDS` comma-separated list, multiple users in a group chat). Depends on message queue — without it, one user's turn blocks everyone else.
 
 ## Phase 3: Multi-engine (Kiro)
 
@@ -54,7 +55,7 @@
 ## Phase 5: Scheduler
 
 - [ ] Scheduled tasks (cron-style)
-- [ ] Task persistence in SQLite
+- [ ] Task persistence (JSON or SQLite)
 
 ## Future / Parking Lot
 
