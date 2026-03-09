@@ -73,6 +73,7 @@ export class ClaudeCodeEngine implements Engine {
           permissionMode === "bypassPermissions" ? true : undefined,
         canUseTool,
         abortController,
+        settingSources: ["user", "project", "local"],
       },
     });
 

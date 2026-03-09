@@ -88,6 +88,36 @@ Permission modes are relayed, not owned:
 
 Permission config is also native — the CLI loads `settings.json` hierarchically (`~/.claude/settings.json` → `{cwd}/.claude/settings.json` → `{cwd}/.claude/settings.local.json`). The relay doesn't touch these.
 
+## Claude Code SDK Settings
+
+The Agent SDK does **not** load filesystem settings (CLAUDE.md, settings.json) by default — unlike the CLI, which loads them all automatically. The SDK defaults to isolation mode (`settingSources: []`).
+
+To match CLI behavior, pass `settingSources: ["user", "project", "local"]` in `query()` options:
+
+| Source | What it loads |
+|--------|-------------|
+| `"user"` | `~/.claude/settings.json` |
+| `"project"` | `{cwd}/.claude/settings.json` + `CLAUDE.md` files |
+| `"local"` | `{cwd}/.claude/settings.local.json` |
+
+Order does not matter — all specified sources are loaded additively. If both project and user CLAUDE.md files exist, the agent sees both.
+
+Other notable SDK `query()` options beyond what ClearClaw currently uses:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `model` | `string` | Override model (e.g. `claude-sonnet-4-6`) |
+| `maxTurns` | `number` | Max conversation turns before stopping |
+| `maxBudgetUsd` | `number` | Budget cap in USD |
+| `effort` | `'low' \| 'medium' \| 'high' \| 'max'` | Response effort level |
+| `thinking` | `ThinkingConfig` | `{ type: 'adaptive' }`, `{ type: 'enabled', budgetTokens: N }`, or `{ type: 'disabled' }` |
+| `additionalDirectories` | `string[]` | Extra directories Claude can access |
+| `allowedTools` / `disallowedTools` | `string[]` | Auto-allow or remove specific tools |
+| `mcpServers` | `Record<string, McpServerConfig>` | MCP server configurations |
+| `betas` | `SdkBeta[]` | Beta features (e.g. `'context-1m-2025-08-07'`) |
+| `debug` | `boolean` | Enable debug logging |
+| `stderr` | `(data: string) => void` | Callback for stderr output (useful with `debug: true`) |
+
 ## Session Management
 
 Sessions are scoped to workspace (CWD), not channel.
