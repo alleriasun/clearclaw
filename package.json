@@ -11,7 +11,8 @@
   ],
   "scripts": {
     "start": "tsx src/index.ts",
-    "dev": "tsc --watch & nodemon --watch dist --exec 'node dist/index.js'",
+    "dev": "tsx --watch src/index.ts",
+    "dev:relay": "nodemon --watch dist --exec 'node dist/index.js'",
     "build": "tsc",
     "check": "tsc --noEmit"
   },
