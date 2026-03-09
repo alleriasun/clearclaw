@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import log from "./logger.js";
 import { formatToolUse, formatToolResult } from "./format.js";
 import type { WorkspaceStore } from "./workspace-store.js";
@@ -14,6 +16,7 @@ export interface OrchestratorOpts {
   engine: Engine;
   workspaceStore: WorkspaceStore;
   permissionMode: PermissionMode;
+  defaultPromptPath: string;
 }
 
 export class Orchestrator {
@@ -21,6 +24,7 @@ export class Orchestrator {
   private engine: Engine;
   private workspaceStore: WorkspaceStore;
   private permissionMode: PermissionMode;
+  private defaultPromptPath: string;
   private busyChats = new Set<string>();
 
   constructor(opts: OrchestratorOpts) {
@@ -28,6 +32,7 @@ export class Orchestrator {
     this.engine = opts.engine;
     this.workspaceStore = opts.workspaceStore;
     this.permissionMode = opts.permissionMode;
+    this.defaultPromptPath = opts.defaultPromptPath;
   }
 
   async start(): Promise<void> {
@@ -91,12 +96,16 @@ export class Orchestrator {
       log.info(`[turn] start session=${ws.current_session_id ?? "new"} cwd=${ws.cwd}`);
       await this.channel.setTyping(msg.chatId, true);
 
+      // Append default workspace CLAUDE.md to non-default workspace sessions
+      const appendSystemPrompt = this.readDefaultPrompt(ws.cwd);
+
       try {
         for await (const event of this.engine.runTurn({
           sessionId: ws.current_session_id,
           cwd: ws.cwd,
           prompt: msg.text,
           permissionMode: this.permissionMode,
+          appendSystemPrompt,
           onPermissionRequest: async (req) => {
             log.info(`[perm] ${req.toolName}`);
             const resp = await this.channel.sendInteractive(
@@ -171,6 +180,17 @@ export class Orchestrator {
           `Error: ${event.message}`,
         );
         break;
+    }
+  }
+
+  /** Read default workspace CLAUDE.md to append to non-default workspace sessions. */
+  private readDefaultPrompt(workspaceCwd: string): string | undefined {
+    if (workspaceCwd === path.dirname(this.defaultPromptPath)) return undefined;
+    try {
+      const content = fs.readFileSync(this.defaultPromptPath, "utf-8").trim();
+      return content || undefined;
+    } catch {
+      return undefined;
     }
   }
 }

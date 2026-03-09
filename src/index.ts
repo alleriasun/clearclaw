@@ -19,6 +19,7 @@ async function main() {
     engine,
     workspaceStore,
     permissionMode: config.permissionMode,
+    defaultPromptPath: config.defaultPromptPath,
   });
 
   await orchestrator.start();

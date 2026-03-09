@@ -25,6 +25,7 @@ export class ClaudeCodeEngine implements Engine {
       prompt,
       permissionMode,
       onPermissionRequest,
+      appendSystemPrompt,
       signal,
     } = opts;
 
@@ -74,6 +75,15 @@ export class ClaudeCodeEngine implements Engine {
         canUseTool,
         abortController,
         settingSources: ["user", "project", "local"],
+        ...(appendSystemPrompt
+          ? {
+              systemPrompt: {
+                type: "preset" as const,
+                preset: "claude_code" as const,
+                append: appendSystemPrompt,
+              },
+            }
+          : {}),
       },
     });
 
