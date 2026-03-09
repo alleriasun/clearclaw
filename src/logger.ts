@@ -1,30 +1,30 @@
 import pino from "pino";
-import { ensureDataDir, logPath } from "./config.js";
 
-// Guarantee ~/.clearclaw/ exists before the file transport opens
-ensureDataDir();
+let log = pino({ level: "silent" });
 
-const log = pino({
-  level: process.env.LOG_LEVEL ?? "info",
-  transport: {
-    targets: [
-      {
-        target: "pino-pretty",
-        options: { destination: 1 },
-        level: process.env.LOG_LEVEL ?? "info",
-      },
-      {
-        target: "pino-roll",
-        options: {
-          file: logPath(),
-          frequency: "daily",
-          size: "10m",
-          limit: { count: 5 },
+export function initLogger(logPath: string): void {
+  log = pino({
+    level: process.env.LOG_LEVEL ?? "info",
+    transport: {
+      targets: [
+        {
+          target: "pino-pretty",
+          options: { destination: 1 },
+          level: process.env.LOG_LEVEL ?? "info",
         },
-        level: process.env.LOG_LEVEL ?? "info",
-      },
-    ],
-  },
-});
+        {
+          target: "pino-roll",
+          options: {
+            file: logPath,
+            frequency: "daily",
+            size: "10m",
+            limit: { count: 5 },
+          },
+          level: process.env.LOG_LEVEL ?? "info",
+        },
+      ],
+    },
+  });
+}
 
-export default log;
+export { log as default };
