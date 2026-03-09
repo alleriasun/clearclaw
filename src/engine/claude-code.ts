@@ -182,10 +182,14 @@ export class ClaudeCodeEngine implements Engine {
         }
       }
     } catch (err) {
-      yield {
-        type: "error",
-        message: err instanceof Error ? err.message : String(err),
-      };
+      if (err instanceof Error && err.name === "AbortError") {
+        log.info("[sdk] turn aborted");
+      } else {
+        yield {
+          type: "error",
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
 
     if (resultSessionId) {

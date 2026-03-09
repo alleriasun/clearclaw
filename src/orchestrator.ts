@@ -19,13 +19,18 @@ export interface OrchestratorOpts {
   defaultPromptPath: string;
 }
 
+interface ChatState {
+  busy: boolean;
+  abort: AbortController | null;
+}
+
 export class Orchestrator {
   private channel: Channel;
   private engine: Engine;
   private workspaceStore: WorkspaceStore;
   private permissionMode: PermissionMode;
   private defaultPromptPath: string;
-  private busyChats = new Set<string>();
+  private chats = new Map<string, ChatState>();
 
   constructor(opts: OrchestratorOpts) {
     this.channel = opts.channel;
@@ -33,6 +38,15 @@ export class Orchestrator {
     this.workspaceStore = opts.workspaceStore;
     this.permissionMode = opts.permissionMode;
     this.defaultPromptPath = opts.defaultPromptPath;
+  }
+
+  private chat(chatId: string): ChatState {
+    let s = this.chats.get(chatId);
+    if (!s) {
+      s = { busy: false, abort: null };
+      this.chats.set(chatId, s);
+    }
+    return s;
   }
 
   async start(): Promise<void> {
@@ -61,6 +75,8 @@ export class Orchestrator {
     try {
       log.info(`[msg] ${msg.text.slice(0, 80)}`);
 
+      const state = this.chat(msg.chatId);
+
       // /new — reset session
       if (msg.text === "/new") {
         const ws = this.workspaceStore.byChat(msg.chatId);
@@ -74,8 +90,27 @@ export class Orchestrator {
         return;
       }
 
-      // Reject during active turn (per-workspace)
-      if (this.busyChats.has(msg.chatId)) {
+      // /cancel — abort the running turn
+      if (msg.text === "/cancel") {
+        if (state.abort) {
+          state.abort.abort();
+          log.info("[cmd] turn cancelled");
+        } else {
+          await this.channel.sendMessage(msg.chatId, "Nothing to cancel.");
+        }
+        return;
+      }
+
+      // Workspace lookup — guard all turn logic below
+      const ws = this.workspaceStore.byChat(msg.chatId);
+      if (!ws) {
+        log.info("[msg] no workspace for chat %s", msg.chatId);
+        await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
+        return;
+      }
+
+      // Reject during active turn (per-chat)
+      if (state.busy) {
         log.info("[msg] rejected (busy)");
         await this.channel.sendMessage(
           msg.chatId,
@@ -84,14 +119,10 @@ export class Orchestrator {
         return;
       }
 
-      this.busyChats.add(msg.chatId);
-      const ws = this.workspaceStore.byChat(msg.chatId);
-      if (!ws) {
-        log.info("[msg] no workspace for chat %s", msg.chatId);
-        this.busyChats.delete(msg.chatId);
-        await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
-        return;
-      }
+      state.busy = true;
+
+      const abort = new AbortController();
+      state.abort = abort;
 
       log.info(`[turn] start session=${ws.current_session_id ?? "new"} cwd=${ws.cwd}`);
       await this.channel.setTyping(msg.chatId, true);
@@ -106,6 +137,7 @@ export class Orchestrator {
           prompt: msg.text,
           permissionMode: this.permissionMode,
           appendSystemPrompt,
+          signal: abort.signal,
           onPermissionRequest: async (req) => {
             log.info(`[perm] ${req.toolName}`);
             const resp = await this.channel.sendInteractive(
@@ -127,8 +159,13 @@ export class Orchestrator {
           await this.routeEngineEvent(msg.chatId, event, ws.name);
         }
       } finally {
-        this.busyChats.delete(msg.chatId);
+        const cancelled = abort.signal.aborted;
+        state.busy = false;
+        state.abort = null;
         await this.channel.setTyping(msg.chatId, false);
+        if (cancelled) {
+          await this.channel.sendMessage(msg.chatId, "Turn cancelled.");
+        }
       }
     } catch (err) {
       log.error({ err }, "[fatal]");
