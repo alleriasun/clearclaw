@@ -2,7 +2,13 @@
   "name": "clearclaw",
   "version": "0.1.0",
   "type": "module",
-  "private": true,
+  "bin": {
+    "clearclaw": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts"
+  ],
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsc --watch & nodemon --watch dist --exec 'node dist/index.js'",
