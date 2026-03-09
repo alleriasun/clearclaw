@@ -118,6 +118,35 @@ Other notable SDK `query()` options beyond what ClearClaw currently uses:
 | `debug` | `boolean` | Enable debug logging |
 | `stderr` | `(data: string) => void` | Callback for stderr output (useful with `debug: true`) |
 
+## Default Prompt Append
+
+The home workspace's `CLAUDE.md` defines the bot's personality, user context, and communication style. Without intervention, project workspaces never see it — the SDK only loads `CLAUDE.md` from the workspace's own `cwd` via `settingSources`.
+
+ClearClaw fixes this by appending the home workspace's `CLAUDE.md` to every non-default workspace session via the SDK's `systemPrompt` option:
+
+```
+systemPrompt: {
+  type: "preset",
+  preset: "claude_code",
+  append: <contents of ~/.clearclaw/workspace/CLAUDE.md>
+}
+```
+
+The `preset: "claude_code"` base keeps all standard Claude Code behavior (including `settingSources`-loaded CLAUDE.md files). The `append` adds the home workspace content on top — it doesn't replace anything.
+
+**System prompt layering** (additive, all active simultaneously):
+
+1. Claude Code preset (base system prompt)
+2. `~/.claude/CLAUDE.md` — user-level coding conventions (loaded by `settingSources: ["user"]`)
+3. `{cwd}/CLAUDE.md` — project-specific instructions (loaded by `settingSources: ["project"]`)
+4. Home workspace `CLAUDE.md` — personality and user context (appended via `systemPrompt.append`)
+
+**Skip for home workspace:** When the workspace's `cwd` is the home directory itself, `settingSources` already loads its `CLAUDE.md` as the project file (layer 3). Appending it again would duplicate. The orchestrator detects this and skips the append.
+
+**Opt-in by file presence:** If `~/.clearclaw/workspace/CLAUDE.md` doesn't exist, nothing is appended — pure relay behavior. No configuration needed.
+
+**Read per-turn:** The file is read on every turn, not cached at startup. Edits to the home `CLAUDE.md` take effect on the next message without restarting ClearClaw.
+
 ## Session Management
 
 Sessions are scoped to workspace (CWD), not channel.

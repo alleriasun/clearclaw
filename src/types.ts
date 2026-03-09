@@ -55,6 +55,7 @@ export interface RunTurnOpts {
   onPermissionRequest: (
     req: PermissionRequest,
   ) => Promise<PermissionResponse>;
+  appendSystemPrompt?: string;
   signal?: AbortSignal;
 }
 

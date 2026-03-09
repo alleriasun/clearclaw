@@ -8,6 +8,7 @@ export interface Config {
   allowedUserId: number;
   permissionMode: PermissionMode;
   dataDir: string;
+  defaultPromptPath: string;
   workspacesPath: string;
   logPath: string;
 }
@@ -42,6 +43,7 @@ export function loadConfig(): Config {
     allowedUserId,
     permissionMode,
     dataDir,
+    defaultPromptPath: path.join(dataDir, "workspace", "CLAUDE.md"),
     workspacesPath: path.join(dataDir, "workspaces.json"),
     logPath: path.join(dataDir, "clearclaw.log"),
   };

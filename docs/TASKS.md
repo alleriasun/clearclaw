@@ -59,5 +59,6 @@
 
 ## Future / Parking Lot
 
+- [ ] Make `defaultPromptPath` engine-agnostic — currently hardcodes `CLAUDE.md` in config, which is Claude-specific. When multi-engine support lands (Phase 3), the prompt filename should come from the engine, not config.
 - [ ] Config file format (YAML or TOML) — env vars suffice for now, revisit when config grows
 - [ ] Semantic memory (vector search, decay/relevance) — flat CLAUDE.md/MEMORY.md suffice for now. Options: embed-based search over memory files, OpenMemory integration, or keep flat files with better organization. Needs a design decision.
