@@ -6,17 +6,20 @@ Transparent relay daemon: Telegram ↔ Claude Code CLI. Routes interactions with
 
 ```bash
 npm start          # Run (requires env vars)
-npm run dev        # Run with --watch
-npm run build      # tsc → dist/
+npm run dev        # Local dev (tsx --watch, auto-restarts)
+npm run dev:relay  # Remote dev (nodemon watches dist/, explicit build)
+npm run build      # tsc → dist/ (triggers dev:relay restart)
 npm run check      # tsc --noEmit (type check only)
 ```
 
 **Required env vars:** `TELEGRAM_BOT_TOKEN`, `ALLOWED_USER_ID`
 **Optional:** `PERMISSION_MODE` (default|acceptEdits|bypassPermissions|plan|dontAsk), `CLEARCLAW_HOME` (defaults to `~/.clearclaw`)
 
-## Dev Server (`npm run dev`)
+## Dev Server
 
-`tsc --watch` compiles in the background; `nodemon` watches `dist/` and restarts only after successful builds. This is intentional — ClearClaw is developed remotely via Telegram through ClearClaw itself, so the dev server must stay running with the last good build even when `tsc` reports errors. A simpler `tsx --watch` would restart on every save (including broken code) and skip type checking, killing the Telegram connection mid-conversation.
+**`npm run dev`** — standard local development. `tsx --watch` runs TypeScript directly, restarts on file changes. Use this when developing from desktop with a terminal.
+
+**`npm run dev:relay`** — remote development via Telegram. `nodemon` watches `dist/` and restarts only when `npm run build` produces new output. Builds are explicit, not automatic. This is critical for ClearClaw-through-ClearClaw development where edits are approved one at a time over unpredictable intervals — an auto-rebuilding watcher would restart the server mid-batch, killing the Telegram connection.
 
 **Source maps:** `tsconfig.json` has `sourceMap: true` so stack traces from `dist/` map back to `.ts` lines during dev. Source maps are excluded from the published npm package via the `files` field in `package.json` (only `*.js` and `*.d.ts` are shipped — maps would be dead weight since `src/` isn't published).
 
@@ -33,7 +36,7 @@ src/
   channel/telegram.ts   # grammY bot
 ```
 
-Seven files. Dev runs through `tsc --watch` → `dist/` (see Dev Server section above).
+Seven files. See Dev Server section for build/run workflows.
 
 ## Stack
 
