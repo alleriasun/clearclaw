@@ -17,6 +17,8 @@ Transparent relay between chat channels and CLI agents. See [OVERVIEW.md](OVERVI
 
 **Multi-bot = multi-instance.** Separate bots, owners, or teams run separate ClearClaw processes with separate `CLEARCLAW_HOME` directories. No in-process multi-bot routing needed.
 
+**Personal assistant, not shared bot.** The current model assumes one owner per instance — DMs go to the owner's home workspace, groups are collaborative spaces the owner invites others into. A team/shared bot model (where non-owners DM the bot with their own workspaces) is a different product shape, not currently in scope.
+
 ## Workspace Model
 
 A **workspace** is a named unit defined by a working directory (CWD).
@@ -157,13 +159,26 @@ Claude Code stores sessions at `~/.claude/projects/{encoded-cwd-path}/sessions/`
 - **Session commands:** `/new` clears the stored session ID. Default behavior is resume.
 - **Turn isolation:** One message at a time per workspace. Concurrent turns across different workspaces are allowed.
 
+## User Identity
+
+Channels populate structured user info (`UserInfo`) on every inbound message: a display `name` (always present) and an optional platform `handle` (e.g., Telegram username, no `@` prefix).
+
+**When identity is included:** For group workspaces (non-default), the orchestrator prepends sender identity to the prompt: `[Sam (@sambot)]: the message`. This lets Claude distinguish speakers in multi-user group chats.
+
+**When identity is skipped:** For the default (home/DM) workspace, the prompt passes through unchanged — it's always the owner talking, so identity context is noise.
+
+**Layering:** The channel reports structured identity. The orchestrator decides whether to include it based on workspace type. The engine receives a plain prompt string either way — no `UserInfo` leaks into the engine interface.
+
+**Deferred:** Explicit chat type (`dm` | `group`) on `InboundMessage` and owner detection were both considered. Workspace type is a sufficient discriminator for now — the home workspace is always a DM, project workspaces are always groups. If that stops holding, chat type is easy to add (channels know natively). User identity could also flow into workspace metadata for participant memory over time, but currently it's per-message only.
+
 ## Key Interfaces
 
 Defined in `src/types.ts`. Two interfaces keep the orchestrator decoupled from specific channels and engines:
 
-- **Channel** — EventEmitter. `connect`/`disconnect`, `sendMessage`, `sendInteractive` (buttons), `setTyping`. Emits `"message"` events. Each channel owns a prefix namespace (`tg:`, `slack:`) and implements `ownsId()` for routing.
+- **Channel** — EventEmitter. `connect`/`disconnect`, `sendMessage`, `sendInteractive` (buttons), `setTyping`. Emits `"message"` events with `InboundMessage` (includes `UserInfo`). Each channel owns a prefix namespace (`tg:`, `slack:`) and implements `ownsId()` for routing.
 - **Engine** — `runTurn()` returns `AsyncIterable<EngineEvent>`. The orchestrator iterates events and routes them to the channel.
 - **Workspace** — `name`, `cwd`, `chat_id`, `current_session_id`
+- **UserInfo** — `name` (display name, always present), `handle` (optional platform handle). Populated by the channel from platform-native user data.
 
 ## Storage
 
