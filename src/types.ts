@@ -15,12 +15,15 @@ export interface Channel {
     chatId: string,
     text: string,
     opts?: SendMessageOpts,
-  ): Promise<void>;
+  ): Promise<string[]>;
   sendInteractive(
     chatId: string,
     text: string,
-    buttons: Button[],
+    buttons: Button[][],
   ): Promise<ButtonResponse>;
+  editMessage(chatId: string, handle: string, text: string): Promise<void>;
+  deleteMessage(chatId: string, handle: string): Promise<void>;
+  pinMessage(chatId: string, handle: string): Promise<void>;
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;

@@ -94,43 +94,55 @@ export class TelegramChannel extends EventEmitter implements Channel {
     chatId: string,
     text: string,
     opts?: SendMessageOpts,
-  ): Promise<void> {
+  ): Promise<string[]> {
     const numId = this.numericId(chatId);
     const chunks = splitMessage(text);
+    const handles: string[] = [];
     for (const chunk of chunks) {
       try {
-        await this.bot.api.sendMessage(numId, chunk, {
+        const sent = await this.bot.api.sendMessage(numId, chunk, {
           parse_mode: opts?.parseMode,
         });
+        handles.push(String(sent.message_id));
       } catch (err) {
         if (opts?.parseMode) {
           log.warn("[channel] sendMessage failed with %s, retrying as plain text", opts.parseMode);
-          await this.bot.api.sendMessage(numId, chunk);
+          const sent = await this.bot.api.sendMessage(numId, chunk);
+          handles.push(String(sent.message_id));
         } else {
           throw err;
         }
       }
     }
+    return handles;
   }
 
   async sendInteractive(
     chatId: string,
     text: string,
-    buttons: Button[],
+    buttons: Button[][],
   ): Promise<ButtonResponse> {
     const numId = this.numericId(chatId);
     const callbackId = crypto.randomUUID().slice(0, 8);
 
-    // Pre-compute callback data keys (use index to avoid collisions when buttons share values)
-    const cbEntries = buttons.map((btn, i) => ({
-      btn,
-      cbData: `${callbackId}:${i}`,
-    }));
+    // Pre-compute callback data keys (use flat index to avoid collisions when buttons share values)
+    const cbEntries: { btn: Button; cbData: string }[] = [];
+    let idx = 0;
+    for (const row of buttons) {
+      for (const btn of row) {
+        cbEntries.push({ btn, cbData: `${callbackId}:${idx++}` });
+      }
+    }
 
-    // Build inline keyboard
+    // Build inline keyboard — each inner array is a row
     const keyboard = new InlineKeyboard();
-    for (const { btn, cbData } of cbEntries) {
-      keyboard.text(btn.label, cbData);
+    let flatIdx = 0;
+    for (const row of buttons) {
+      for (const _btn of row) {
+        const { cbData } = cbEntries[flatIdx++];
+        keyboard.text(_btn.label, cbData);
+      }
+      keyboard.row();
     }
 
     await this.bot.api.sendMessage(numId, text, {
@@ -173,6 +185,23 @@ export class TelegramChannel extends EventEmitter implements Channel {
     }
 
     return { value: pressed.value };
+  }
+
+  async editMessage(chatId: string, handle: string, text: string): Promise<void> {
+    const numId = this.numericId(chatId);
+    await this.bot.api.editMessageText(numId, Number(handle), text);
+  }
+
+  async deleteMessage(chatId: string, handle: string): Promise<void> {
+    const numId = this.numericId(chatId);
+    await this.bot.api.deleteMessage(numId, Number(handle));
+  }
+
+  async pinMessage(chatId: string, handle: string): Promise<void> {
+    const numId = this.numericId(chatId);
+    await this.bot.api.pinChatMessage(numId, Number(handle), {
+      disable_notification: true,
+    });
   }
 
   async setTyping(
