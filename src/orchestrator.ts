@@ -73,7 +73,7 @@ export class Orchestrator {
 
   private async handleMessage(msg: InboundMessage): Promise<void> {
     try {
-      log.info(`[msg] user=${msg.userId} ${msg.text.slice(0, 80)}`);
+      log.info(`[msg] ${msg.user.name} (${msg.user.id}) ${msg.text.slice(0, 80)}`);
 
       const state = this.chat(msg.chatId);
 
@@ -128,13 +128,18 @@ export class Orchestrator {
       await this.channel.setTyping(msg.chatId, true);
 
       // Append default workspace CLAUDE.md to non-default workspace sessions
-      const appendSystemPrompt = this.readDefaultPrompt(ws.cwd);
+      const isDefaultWorkspace = ws.cwd === path.dirname(this.defaultPromptPath);
+      const appendSystemPrompt = isDefaultWorkspace ? undefined : this.readDefaultPrompt();
+
+      // In group workspaces, prepend sender identity so the engine knows who's talking
+      const sender = msg.user.handle ? `${msg.user.name} (@${msg.user.handle})` : msg.user.name;
+      const prompt = isDefaultWorkspace ? msg.text : `[${sender}]: ${msg.text}`;
 
       try {
         for await (const event of this.engine.runTurn({
           sessionId: ws.current_session_id,
           cwd: ws.cwd,
-          prompt: msg.text,
+          prompt,
           permissionMode: this.permissionMode,
           appendSystemPrompt,
           signal: abort.signal,
@@ -223,8 +228,7 @@ export class Orchestrator {
   }
 
   /** Read default workspace CLAUDE.md to append to non-default workspace sessions. */
-  private readDefaultPrompt(workspaceCwd: string): string | undefined {
-    if (workspaceCwd === path.dirname(this.defaultPromptPath)) return undefined;
+  private readDefaultPrompt(): string | undefined {
     try {
       const content = fs.readFileSync(this.defaultPromptPath, "utf-8").trim();
       return content || undefined;

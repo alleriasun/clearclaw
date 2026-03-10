@@ -90,11 +90,19 @@ export interface Workspace {
   current_session_id: string | null;
 }
 
+// --- User identity (populated by channel from platform data) ---
+
+export interface UserInfo {
+  id: string;       // platform-prefixed ID (e.g. "tg:79xxx")
+  name: string;
+  handle?: string;  // platform handle, no @ prefix (e.g. Telegram username)
+}
+
 // --- Inbound message (from channel to orchestrator) ---
 
 export interface InboundMessage {
   chatId: string;
-  userId: string;
+  user: UserInfo;
   text: string;
 }
 

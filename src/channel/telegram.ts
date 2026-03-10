@@ -35,7 +35,6 @@ export class TelegramChannel extends EventEmitter implements Channel {
     this.bot.on("message:text", (ctx) => {
       if (!ctx.from?.id || !this.allowedUserIds.has(`tg:${ctx.from.id}`)) return;
       const chatId = `tg:${ctx.chat.id}`;
-      const userId = `tg:${ctx.from.id}`;
 
       // Intercept for requestText follow-ups before emitting as a new message
       const textResolver = this.pendingTextResolvers.get(chatId);
@@ -45,7 +44,13 @@ export class TelegramChannel extends EventEmitter implements Channel {
         return;
       }
 
-      this.emit("message", { chatId, userId, text: ctx.message.text });
+      const user = {
+        id: `tg:${ctx.from.id}`,
+        name: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" "),
+        ...(ctx.from.username && { handle: ctx.from.username }),
+      };
+
+      this.emit("message", { chatId, user, text: ctx.message.text });
     });
 
     // Handle inline keyboard button presses
