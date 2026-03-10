@@ -5,7 +5,8 @@
 - [ ] Message queue (queue messages during active turn, drain after) — prerequisite for multi-user
 - [ ] Stale detection (JSONL file size comparison before each turn)
 - [ ] Turn locking (proper mutex, not just busy flag)
-- [ ] Session-scoped permission allowlists ("Allow X for session")
+- [x] `/mode` command — per-workspace permission mode switching with pinned status message
+- [ ] Session-scoped per-tool allowlists ("Allow X for session" button)
 - [x] Message splitting for 4096 char limit
 - [x] Tool use status messages (show which tools are being called)
 - [x] Relay tool outputs (SDK `user` messages with tool results are currently skipped — bash output, file contents, etc. not visible to user)
