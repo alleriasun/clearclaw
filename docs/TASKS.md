@@ -8,10 +8,12 @@
 - [x] `/mode` command — per-workspace permission mode switching with pinned status message
 - [ ] Session-scoped per-tool allowlists ("Allow X for session" button)
 - [x] Message splitting for 4096 char limit
-- [x] Tool use status messages (show which tools are being called)
-- [x] Relay tool outputs (SDK `user` messages with tool results are currently skipped — bash output, file contents, etc. not visible to user)
+- [x] Tool use status messages — rolling single message updated per tool_use, edited to per-tool summary on turn end
+- [x] Tool result suppression — engine yields tool_result events, orchestrator discards them (agent summarizes in text). Revisit if specific tools (e.g. Bash) need real-time output relay.
 - [x] Text accumulation/batching (send intermediate chunks)
-- [ ] `/cancel` command (abort current turn)
+- [x] `/cancel` command (abort current turn)
+- [x] Permission prompt formatting — 🔐 header, inline diffs for Edit, file preview for Write, code block with key detail for all other tools
+- [x] Permission button UX — 👍/👎 emoji, two-row layout, 📝 Deny + Note with feedback relay
 - [ ] `/status` command (show current session info)
 - [ ] `/help` command
 - [ ] Graceful shutdown with deferred cleanup
@@ -25,7 +27,7 @@
 - [ ] Restart heartbeat (on startup, auto-send resume prompt into existing session or greeting for new sessions, so the bot continues without a manual poke)
 - [ ] Shell escape commands (`!git status`, `!ls`) — run shell commands directly from chat without going through the engine
 - [ ] Voice input via Telegram (receive voice messages, use STT to transcribe, feed as text prompt — Claude Code SDK may support STT natively)
-- [ ] Fix MarkdownV2 formatting for tool_use/tool_result messages (21 warns in logs — escaping looks correct but formatted strings likely double-escape backticks meant as syntax)
+- [ ] Fix MarkdownV2 formatting for tool_use/tool_result messages (21 warns in logs — escaping looks correct but formatted strings likely double-escape backticks meant as syntax). Permission prompts now use proper MarkdownV2 escaping with code blocks; rolling tool messages use plain text. Remaining issues may be in text message relay.
 - [ ] Add debug approaches to CLAUDE.md (log locations, dev server usage)
 - [ ] Show TodoWrite/Read result to user in Telegram
 - [x] Merge DESIGN.md into ARCHITECTURE.md + phase-1.md (DESIGN.md deleted)

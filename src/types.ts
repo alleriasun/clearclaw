@@ -20,6 +20,7 @@ export interface Channel {
     chatId: string,
     text: string,
     buttons: Button[][],
+    opts?: SendInteractiveOpts,
   ): Promise<ButtonResponse>;
   editMessage(chatId: string, handle: string, text: string): Promise<void>;
   deleteMessage(chatId: string, handle: string): Promise<void>;
@@ -43,6 +44,10 @@ export interface ButtonResponse {
 }
 
 export interface SendMessageOpts {
+  parseMode?: "MarkdownV2" | "HTML";
+}
+
+export interface SendInteractiveOpts {
   parseMode?: "MarkdownV2" | "HTML";
 }
 
@@ -70,6 +75,7 @@ export interface PermissionRequest {
   input: Record<string, unknown>;
   description: string;
   reason?: string;
+  toolUseId: string;
 }
 
 export interface PermissionResponse {
@@ -81,11 +87,12 @@ export interface TurnStats {
   model: string;           // e.g. "claude-opus-4-6"
   contextUsed: number;     // input tokens of last API call (≈ context fill)
   contextWindow: number;   // max context window size
+  toolCalls: Record<string, number>; // tool name → call count for this turn
 }
 
 export type EngineEvent =
   | { type: "text"; text: string }
-  | { type: "tool_use"; toolName: string; input: Record<string, unknown> }
+  | { type: "tool_use"; toolName: string; input: Record<string, unknown>; toolUseId: string }
   | { type: "tool_result"; toolName: string; output: string }
   | { type: "rate_limit"; status: string; resetsAt?: number }
   | { type: "done"; sessionId: string; stats?: TurnStats }

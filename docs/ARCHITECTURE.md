@@ -180,6 +180,30 @@ Defined in `src/types.ts`. Two interfaces keep the orchestrator decoupled from s
 - **Workspace** — `name`, `cwd`, `chat_id`, `current_session_id`
 - **UserInfo** — `name` (display name, always present), `handle` (optional platform handle). Populated by the channel from platform-native user data.
 
+## Message Patterns
+
+The relay translates a stream of engine events (tool calls, results, text, permission prompts) into a chat-friendly UX. These patterns balance visibility with noise.
+
+### Rolling tool messages
+
+A single turn can trigger many tool calls. Rather than one message per call, the relay maintains a single "rolling" message that gets edited on each `tool_use` event with the current tool's status. When the turn completes, the message is edited to a summary showing per-tool call counts (e.g., `🔧 3× Read, 2× Grep, 1× Bash`).
+
+### Tool result suppression
+
+All tool results are suppressed — the agent summarizes them in its text response. The engine yields `tool_result` events but the orchestrator discards them.
+
+### Permission prompts
+
+Tiered by tool type:
+- **Edit/Write:** Rich preview — unified diff or full file content in a code block.
+- **Everything else:** Header + key detail (command, pattern, query, URL) in a code block. Falls back to JSON-serialized input for unknown tools.
+
+All prompts use a consistent `🔐 Allow {ToolName}?` header. Buttons offer Allow, Deny, and Deny + Note (feedback passed back to the agent so it can adjust).
+
+### Status message
+
+A persistent message (pinned where supported) showing current model, context usage, and permission mode. Updated at the end of each turn. Stale status messages from previous server runs are cleaned up on first update.
+
 ## Storage
 
 - `~/.clearclaw/workspace/` — The bot's home (identity, memory, skills, CLAUDE.md). Singular — only the personal/default workspace lives here; project workspaces point to existing repos.
