@@ -1,7 +1,7 @@
 /**
- * Diff formatting utilities for tool_use display in Telegram.
+ * Formatting utilities for Telegram display.
  *
- * Uses the `diff` library for proper unified diffs with context lines.
+ * Uses the `diff` library for unified diffs in Edit permission prompts.
  */
 
 import { createTwoFilesPatch } from "diff";
@@ -21,21 +21,77 @@ interface WriteInput {
   content: string;
 }
 
+const MAX_STATUS_LEN = 60;
+
 /**
- * Format a tool_use event for display. Returns a MarkdownV2 string.
- * Edit/Write get rich formatting; all others get a one-line status.
+ * Summary line for the rolling tool message after a turn completes.
+ * e.g. "🔧 3× Read, 2× Grep, 1× Bash"
  */
-export function formatToolUse(
+export function formatToolCallSummary(
+  toolCalls: Record<string, number>,
+): string | null {
+  const entries = Object.entries(toolCalls);
+  if (entries.length === 0) return null;
+  const breakdown = entries
+    .sort(([, a], [, b]) => b - a)
+    .map(([name, count]) => `${count}× ${name}`)
+    .join(", ");
+  return `🔧 ${breakdown}`;
+}
+
+/**
+ * Short one-liner for the rolling tool message. Includes key detail
+ * but truncated to stay compact.
+ */
+export function formatToolStatusLine(
   toolName: string,
   input: Record<string, unknown>,
 ): string {
+  const full = `🔧 ${formatToolStatus(toolName, input)}`;
+  if (full.length <= MAX_STATUS_LEN) return full;
+  return `${full.slice(0, MAX_STATUS_LEN - 1)}…`;
+}
+
+/**
+ * Format a permission prompt for display. Returns a MarkdownV2 string.
+ * Edit/Write include the diff/preview; other tools get a one-line description.
+ */
+export function formatPermissionPrompt(
+  toolName: string,
+  input: Record<string, unknown>,
+  description: string,
+): string {
   if (toolName === "Edit") {
-    return formatEditDiff(input as unknown as EditInput);
+    const edit = input as unknown as EditInput;
+    const patch = createTwoFilesPatch(
+      `a/${edit.file_path}`,
+      `b/${edit.file_path}`,
+      edit.old_string,
+      edit.new_string,
+      "", "",
+      { context: 3 },
+    );
+    const lines = patch.split("\n");
+    const start = lines.findIndex((l) => l.startsWith("---"));
+    const diffLines = start >= 0 ? lines.slice(start) : lines;
+    const body = escapeMarkdownV2(truncateLines(diffLines, MAX_LINES), true);
+    const header = escapeMarkdownV2(`🔐 Allow Edit? ${edit.file_path}`);
+    return `${header}\n\`\`\`diff\n${body}\n\`\`\``;
   }
+
   if (toolName === "Write") {
-    return formatWritePreview(input as unknown as WriteInput);
+    const write = input as unknown as WriteInput;
+    const lines = write.content.split("\n");
+    const body = escapeMarkdownV2(truncateLines(lines, MAX_LINES), true);
+    const header = escapeMarkdownV2(`🔐 Allow Write? ${write.file_path} (${lines.length} lines)`);
+    return `${header}\n\`\`\`\n${body}\n\`\`\``;
   }
-  return escapeMarkdownV2(`🔧 ${formatToolStatus(toolName, input)}`);
+
+  // Non-Edit/Write tools: emoji header + detail in code block
+  const detail = formatToolDetail(toolName, input);
+  const header = escapeMarkdownV2(`🔐 Allow ${toolName}?`);
+  const body = escapeMarkdownV2(truncateLines(detail.split("\n"), MAX_LINES), true);
+  return `${header}\n\`\`\`\n${body}\n\`\`\``;
 }
 
 function formatToolStatus(
@@ -47,6 +103,10 @@ function formatToolStatus(
       return `Bash: ${input.command ?? "(unknown)"}`;
     case "Read":
       return `Read: ${input.file_path ?? "(unknown)"}`;
+    case "Edit":
+      return `Edit: ${input.file_path ?? "(unknown)"}`;
+    case "Write":
+      return `Write: ${input.file_path ?? "(unknown)"}`;
     case "Glob":
       return `Glob: ${input.pattern ?? "(unknown)"}`;
     case "Grep":
@@ -62,34 +122,30 @@ function formatToolStatus(
   }
 }
 
-function formatEditDiff(input: EditInput): string {
-  const patch = createTwoFilesPatch(
-    `a/${input.file_path}`,
-    `b/${input.file_path}`,
-    input.old_string,
-    input.new_string,
-    "", "",
-    { context: 3 },
-  );
-
-  // Strip the "Index:" / "===" preamble, keep --- / +++ / @@ lines onward.
-  const lines = patch.split("\n");
-  const start = lines.findIndex((l) => l.startsWith("---"));
-  const diffLines = start >= 0 ? lines.slice(start) : lines;
-
-  const body = truncateLines(diffLines, MAX_LINES);
-  const header = escapeMarkdownV2(`\u270f\ufe0f Edit: ${input.file_path}`);
-  return `${header}\n\`\`\`diff\n${body}\n\`\`\``;
-}
-
-function formatWritePreview(input: WriteInput): string {
-  const lines = input.content.split("\n");
-  const totalLines = lines.length;
-  const body = truncateLines(lines, MAX_LINES);
-  const header = escapeMarkdownV2(
-    `\ud83d\udcc4 Write: ${input.file_path} (${totalLines} lines)`,
-  );
-  return `${header}\n\`\`\`\n${body}\n\`\`\``;
+/** Extract the key detail for a tool's permission prompt (command, query, URL, etc.). */
+function formatToolDetail(
+  toolName: string,
+  input: Record<string, unknown>,
+): string {
+  switch (toolName) {
+    case "Bash":
+      return String(input.command ?? "");
+    case "Read":
+    case "Edit":
+    case "Write":
+      return String(input.file_path ?? "");
+    case "Glob":
+    case "Grep":
+      return String(input.pattern ?? "");
+    case "WebSearch":
+      return String(input.query ?? "");
+    case "WebFetch":
+      return String(input.url ?? "");
+    case "Agent":
+      return String(input.description ?? "");
+    default:
+      return JSON.stringify(input, null, 2);
+  }
 }
 
 function truncateLines(lines: string[], max: number): string {
@@ -101,37 +157,18 @@ function truncateLines(lines: string[], max: number): string {
   return `${shown}\n... (${remaining} more lines)`;
 }
 
-// Tools whose output is noisy or redundant (tool_use already shows input).
-// New/unknown tools show by default.
-const SUPPRESSED_RESULTS = new Set([
-  "Read", "Edit", "Write", "Glob", "Agent",
-  "TodoWrite", "NotebookEdit", "EnterPlanMode", "ExitPlanMode",
-]);
-
 /**
- * Format a tool_result event for display. Returns a MarkdownV2 code block
- * with input + output, or null if suppressed/empty.
+ * Escape for Telegram MarkdownV2.
+ * Outside code blocks: all special chars. Inside: only backtick and backslash
+ * (other chars are literal inside pre blocks, escaping them adds visible backslashes).
  */
-export function formatToolResult(
-  toolName: string,
-  output: string,
-): string | null {
-  if (SUPPRESSED_RESULTS.has(toolName)) return null;
-  if (!output.trim()) return null;
-  const body = truncateLines(output.split("\n"), MAX_LINES);
-  return `\`\`\`\n${body}\n\`\`\``;
+function escapeMarkdownV2(text: string, codeBlock = false): string {
+  const pattern = codeBlock ? /[`\\]/g : /[_*\[\]()~`>#+\-=|{}.!\\]/g;
+  return text.replace(pattern, "\\$&");
 }
 
 /**
- * Escape special characters for MarkdownV2 (outside code blocks).
- * Inside ``` blocks, no escaping is needed.
- */
-function escapeMarkdownV2(text: string): string {
-  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
-}
-
-/**
- * Human-readable one-liner for a tool invocation (used in permission prompts).
+ * Human-readable one-liner for a tool invocation (used in engine's canUseTool).
  */
 export function formatToolDescription(
   toolName: string,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import log from "./logger.js";
-import { formatToolUse, formatToolResult } from "./format.js";
+import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt } from "./format.js";
 import type { WorkspaceStore } from "./workspace-store.js";
 import type {
   Channel,
@@ -26,6 +26,8 @@ interface ChatState {
   permissionMode: PermissionMode | null; // null = use config default
   statusHandle: string | null; // pinned status message handle
   stats: TurnStats | null;
+  // Rolling tool message: each tool_use replaces this single message's content
+  toolCallHandle: string | null;
 }
 
 const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
@@ -54,7 +56,10 @@ export class Orchestrator {
   private chat(chatId: string): ChatState {
     let s = this.chats.get(chatId);
     if (!s) {
-      s = { busy: false, abort: null, permissionMode: null, statusHandle: null, stats: null };
+      s = {
+        busy: false, abort: null, permissionMode: null, statusHandle: null, stats: null,
+        toolCallHandle: null,
+      };
       this.chats.set(chatId, s);
     }
     return s;
@@ -185,14 +190,20 @@ export class Orchestrator {
           signal: abort.signal,
           onPermissionRequest: async (req) => {
             log.info(`[perm] ${req.toolName}`);
+            const promptText = formatPermissionPrompt(req.toolName, req.input, req.description);
             const resp = await this.channel.sendInteractive(
               msg.chatId,
-              `Allow ${req.toolName}?\n${req.description}`,
-              [[
-                { label: "Allow", value: "allow" },
-                { label: "Deny", value: "deny" },
-                { label: "Deny+Note", value: "deny", requestText: true },
-              ]],
+              promptText,
+              [
+                [
+                  { label: "👍 Allow", value: "allow" },
+                  { label: "👎 Deny", value: "deny" },
+                ],
+                [
+                  { label: "📝 Deny + Note", value: "deny", requestText: true },
+                ],
+              ],
+              { parseMode: "MarkdownV2" },
             );
             log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
             return {
@@ -222,26 +233,34 @@ export class Orchestrator {
   }
 
   private async routeEngineEvent(chatId: string, event: EngineEvent, workspaceName: string): Promise<void> {
+    const state = this.chat(chatId);
+
     switch (event.type) {
       case "text":
         await this.channel.sendMessage(chatId, event.text);
         break;
+
       case "tool_use": {
-        const formatted = formatToolUse(event.toolName, event.input);
-        await this.channel.sendMessage(chatId, formatted, {
-          parseMode: "MarkdownV2",
-        });
-        break;
-      }
-      case "tool_result": {
-        const formatted = formatToolResult(event.toolName, event.output);
-        if (formatted) {
-          await this.channel.sendMessage(chatId, formatted, {
-            parseMode: "MarkdownV2",
-          });
+        // Rolling message: each tool_use replaces the single message's content
+        const line = formatToolStatusLine(event.toolName, event.input);
+        if (state.toolCallHandle) {
+          try {
+            await this.channel.editMessage(chatId, state.toolCallHandle, line);
+          } catch {
+            const handles = await this.channel.sendMessage(chatId, line);
+            state.toolCallHandle = handles[0];
+          }
+        } else {
+          const handles = await this.channel.sendMessage(chatId, line);
+          state.toolCallHandle = handles[0];
         }
         break;
       }
+
+      case "tool_result":
+        // All tool results suppressed — Claude summarizes in its text response
+        break;
+
       case "rate_limit": {
         const resetMsg = event.resetsAt
           ? ` Resets at ${new Date(event.resetsAt).toLocaleTimeString()}.`
@@ -253,14 +272,25 @@ export class Orchestrator {
         );
         break;
       }
+
       case "done": {
+        // Edit rolling tool message to show summary
+        if (state.toolCallHandle && event.stats) {
+          const summary = formatToolCallSummary(event.stats.toolCalls);
+          if (summary) {
+            try {
+              await this.channel.editMessage(chatId, state.toolCallHandle, summary);
+            } catch { /* edit failed, leave as-is */ }
+          }
+        }
+        state.toolCallHandle = null;
         log.info(`[turn] done session=${event.sessionId}`);
         this.workspaceStore.setSession(workspaceName, event.sessionId);
-        const state = this.chat(chatId);
         if (event.stats) state.stats = event.stats;
         await this.updateStatusMessage(chatId, state);
         break;
       }
+
       case "error":
         log.error(`[turn] error: ${event.message}`);
         await this.channel.sendMessage(

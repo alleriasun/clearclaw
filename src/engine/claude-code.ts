@@ -58,6 +58,7 @@ export class ClaudeCodeEngine implements Engine {
         input,
         description,
         reason: options.decisionReason,
+        toolUseId: options.toolUseID,
       });
       if (resp.decision === "allow") {
         return { behavior: "allow", updatedInput: input };
@@ -129,14 +130,13 @@ export class ClaudeCodeEngine implements Engine {
               yield { type: "text", text: block.text };
             }
             if (block.type === "tool_use") {
-              toolUseIdToName.set(
-                (block as unknown as { id: string }).id,
-                block.name,
-              );
+              const toolUseId = (block as unknown as { id: string }).id;
+              toolUseIdToName.set(toolUseId, block.name);
               yield {
                 type: "tool_use",
                 toolName: block.name,
                 input: block.input as Record<string, unknown>,
+                toolUseId,
               };
             }
           }
@@ -158,7 +158,7 @@ export class ClaudeCodeEngine implements Engine {
                 if (output) {
                   yield { type: "tool_result" as const, toolName, output };
                 }
-                toolUseIdToName.delete(b.tool_use_id);
+                // Retain for turn-level stats (map is GC'd when generator ends)
               }
             }
           }
@@ -193,10 +193,16 @@ export class ClaudeCodeEngine implements Engine {
           if (models.length > 0) {
             const model = models[0];
             const mu = result.modelUsage[model];
+            // Build per-tool call counts from accumulated map
+            const toolCalls: Record<string, number> = {};
+            for (const name of toolUseIdToName.values()) {
+              toolCalls[name] = (toolCalls[name] ?? 0) + 1;
+            }
             turnStats = {
               model,
               contextUsed: lastInputTokens,
               contextWindow: mu.contextWindow,
+              toolCalls,
             };
           }
 
