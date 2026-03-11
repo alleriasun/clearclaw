@@ -24,6 +24,7 @@ export interface Channel {
   editMessage(chatId: string, handle: string, text: string): Promise<void>;
   deleteMessage(chatId: string, handle: string): Promise<void>;
   pinMessage(chatId: string, handle: string): Promise<void>;
+  unpinAllMessages(chatId: string): Promise<void>;
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
@@ -76,12 +77,18 @@ export interface PermissionResponse {
   message?: string; // optional feedback on deny (skips abort, lets model adjust)
 }
 
+export interface TurnStats {
+  model: string;           // e.g. "claude-opus-4-6"
+  contextUsed: number;     // input tokens of last API call (≈ context fill)
+  contextWindow: number;   // max context window size
+}
+
 export type EngineEvent =
   | { type: "text"; text: string }
   | { type: "tool_use"; toolName: string; input: Record<string, unknown> }
   | { type: "tool_result"; toolName: string; output: string }
   | { type: "rate_limit"; status: string; resetsAt?: number }
-  | { type: "done"; sessionId: string }
+  | { type: "done"; sessionId: string; stats?: TurnStats }
   | { type: "error"; message: string };
 
 // --- Workspace ---

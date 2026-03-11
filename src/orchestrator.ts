@@ -9,6 +9,7 @@ import type {
   EngineEvent,
   InboundMessage,
   PermissionMode,
+  TurnStats,
 } from "./types.js";
 
 export interface OrchestratorOpts {
@@ -24,6 +25,7 @@ interface ChatState {
   abort: AbortController | null;
   permissionMode: PermissionMode | null; // null = use config default
   statusHandle: string | null; // pinned status message handle
+  stats: TurnStats | null;
 }
 
 const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
@@ -52,7 +54,7 @@ export class Orchestrator {
   private chat(chatId: string): ChatState {
     let s = this.chats.get(chatId);
     if (!s) {
-      s = { busy: false, abort: null, permissionMode: null, statusHandle: null };
+      s = { busy: false, abort: null, permissionMode: null, statusHandle: null, stats: null };
       this.chats.set(chatId, s);
     }
     return s;
@@ -106,8 +108,7 @@ export class Orchestrator {
         );
         if (resp.value) {
           state.permissionMode = resp.value as PermissionMode;
-          const label = MODE_OPTIONS.find((o) => o.value === resp.value)?.label ?? resp.value;
-          await this.updateStatusMessage(msg.chatId, state, label);
+          await this.updateStatusMessage(msg.chatId, state);
           log.info("[cmd] mode → %s", resp.value);
         }
         return;
@@ -122,8 +123,8 @@ export class Orchestrator {
         }
         this.workspaceStore.clearSession(ws.name);
         state.permissionMode = null;
-        const defaultLabel = MODE_OPTIONS.find((o) => o.value === this.permissionMode)?.label ?? this.permissionMode;
-        await this.updateStatusMessage(msg.chatId, state, defaultLabel);
+        state.stats = null;
+        await this.updateStatusMessage(msg.chatId, state);
         log.info("[cmd] session cleared for workspace %s", ws.name);
         await this.channel.sendMessage(msg.chatId, "Session cleared.");
         return;
@@ -252,10 +253,14 @@ export class Orchestrator {
         );
         break;
       }
-      case "done":
+      case "done": {
         log.info(`[turn] done session=${event.sessionId}`);
         this.workspaceStore.setSession(workspaceName, event.sessionId);
+        const state = this.chat(chatId);
+        if (event.stats) state.stats = event.stats;
+        await this.updateStatusMessage(chatId, state);
         break;
+      }
       case "error":
         log.error(`[turn] error: ${event.message}`);
         await this.channel.sendMessage(
@@ -266,11 +271,31 @@ export class Orchestrator {
     }
   }
 
-  private async updateStatusMessage(chatId: string, state: ChatState, label: string): Promise<void> {
-    const text = `⚙️ ${label}`;
-    if (state.statusHandle) {
-      await this.channel.editMessage(chatId, state.statusHandle, text);
+  private async updateStatusMessage(chatId: string, state: ChatState): Promise<void> {
+    const mode = state.permissionMode ?? this.permissionMode;
+    const modeLabel = MODE_OPTIONS.find((o) => o.value === mode)?.label ?? mode;
+
+    const parts: string[] = [];
+
+    if (state.stats) {
+      const pct = state.stats.contextWindow > 0
+        ? Math.round((state.stats.contextUsed / state.stats.contextWindow) * 100)
+        : 0;
+      parts.push(`🤖 ${formatModelName(state.stats.model)} ${pct}% | 🔒 ${modeLabel}`);
     } else {
+      parts.push(`🔒 ${modeLabel}`);
+    }
+
+    const text = parts.join("\n");
+    if (state.statusHandle) {
+      try {
+        await this.channel.editMessage(chatId, state.statusHandle, text);
+      } catch (err) {
+        if (!(err instanceof Error && err.message.includes("message is not modified"))) throw err;
+      }
+    } else {
+      // Clear stale pins from previous server runs
+      try { await this.channel.unpinAllMessages(chatId); } catch { /* not admin */ }
       const handles = await this.channel.sendMessage(chatId, text);
       state.statusHandle = handles[0];
       try {
@@ -302,4 +327,9 @@ export class Orchestrator {
       return undefined;
     }
   }
+}
+
+/** Strip "claude-" prefix and date suffix from model ID. e.g. "claude-opus-4-6-20250514" → "opus-4-6" */
+function formatModelName(modelId: string): string {
+  return modelId.replace(/^claude-/, "").replace(/-\d{8}$/, "");
 }

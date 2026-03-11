@@ -13,6 +13,7 @@ import type {
   Engine,
   EngineEvent,
   RunTurnOpts,
+  TurnStats,
 } from "../types.js";
 
 export class ClaudeCodeEngine implements Engine {
@@ -100,6 +101,8 @@ export class ClaudeCodeEngine implements Engine {
     });
 
     let resultSessionId: string | undefined;
+    let turnStats: TurnStats | undefined;
+    let lastInputTokens = 0;
     const toolUseIdToName = new Map<string, string>();
 
     try {
@@ -111,7 +114,16 @@ export class ClaudeCodeEngine implements Engine {
 
         // Extract text and tool_use from assistant messages
         if (msg.type === "assistant") {
-          const { content } = (msg as SDKAssistantMessage).message;
+          // BetaMessage type isn't directly importable (@anthropic-ai/sdk not installed);
+          // .message is typed as `any` so property access works without casting.
+          const betaMsg = (msg as SDKAssistantMessage).message;
+          if (betaMsg.usage) {
+            const u = betaMsg.usage;
+            lastInputTokens = (u.input_tokens ?? 0)
+              + (u.cache_read_input_tokens ?? 0)
+              + (u.cache_creation_input_tokens ?? 0);
+          }
+          const { content } = betaMsg;
           for (const block of content) {
             if (block.type === "text" && block.text) {
               yield { type: "text", text: block.text };
@@ -172,10 +184,22 @@ export class ClaudeCodeEngine implements Engine {
           }
         }
 
-        // Capture result
+        // Capture result and build turn stats
         if (msg.type === "result") {
           const result = msg as SDKResultMessage;
           resultSessionId = result.session_id;
+
+          const models = Object.keys(result.modelUsage);
+          if (models.length > 0) {
+            const model = models[0];
+            const mu = result.modelUsage[model];
+            turnStats = {
+              model,
+              contextUsed: lastInputTokens,
+              contextWindow: mu.contextWindow,
+            };
+          }
+
           if (result.subtype !== "success" && result.errors.length) {
             yield { type: "error", message: result.errors.join("\n") };
           }
@@ -193,7 +217,7 @@ export class ClaudeCodeEngine implements Engine {
     }
 
     if (resultSessionId) {
-      yield { type: "done", sessionId: resultSessionId };
+      yield { type: "done", sessionId: resultSessionId, stats: turnStats };
     }
   }
 }
