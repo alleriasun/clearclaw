@@ -1,7 +1,26 @@
 {
   "name": "clearclaw",
   "version": "0.2.0",
+  "description": "Your coding agent, from your phone — personal assistant + project workspaces on your machine, built on the CLI's permissions, config, and memory instead of replacing them.",
   "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alleriasun/clearclaw.git"
+  },
+  "homepage": "https://github.com/alleriasun/clearclaw",
+  "keywords": [
+    "claude-code",
+    "telegram",
+    "relay",
+    "agent-sdk",
+    "cli",
+    "remote",
+    "mobile",
+    "openclaw",
+    "nanoclaw",
+    "remotecode"
+  ],
   "bin": {
     "clearclaw": "dist/index.js"
   },
