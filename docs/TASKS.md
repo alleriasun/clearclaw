@@ -36,6 +36,7 @@
 - [x] Multiple workspaces (each mapped to a chat/group)
 - [x] DM → default workspace, project workspaces in dedicated groups
 - [ ] Workspace onboarding from chat — send a message from a new group, bot detects unmapped chat and offers to configure it as a workspace (name, cwd) via inline prompts. Replaces manual chat ID extraction from logs + SQL insert.
+  - ⚠️ **Gotcha: Telegram group migration.** When a bot is added as admin to a basic group, Telegram silently migrates it to a supergroup, which changes the chat ID. The old ID stops working immediately. Onboarding flow must handle the `migrate_to_chat_id` update in the Telegram API response and auto-update `workspaces.json` — otherwise the workspace link breaks and you get "No workspace linked to this group." (Learned 2026-03-10.)
 - [ ] `/workspace` command to switch contexts
 - [ ] Workspace management commands (create, delete, list)
 - [ ] Per-workspace `extraArgs` for SDK (settings, mcp-config, auth). SDK supports `query({ options: { extraArgs: { settings: "...", "mcp-config": "..." } } })`. Each workspace carries its own CLI overrides so different workspaces can use different API providers or settings.

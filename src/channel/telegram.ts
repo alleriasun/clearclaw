@@ -204,6 +204,11 @@ export class TelegramChannel extends EventEmitter implements Channel {
     });
   }
 
+  async unpinAllMessages(chatId: string): Promise<void> {
+    const numId = this.numericId(chatId);
+    await this.bot.api.unpinAllChatMessages(numId);
+  }
+
   async setTyping(
     chatId: string,
     isTyping: boolean,
