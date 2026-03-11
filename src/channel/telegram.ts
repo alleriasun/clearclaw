@@ -6,6 +6,7 @@ import type {
   Button,
   ButtonResponse,
   SendMessageOpts,
+  SendInteractiveOpts,
 } from "../types.js";
 
 export class TelegramChannel extends EventEmitter implements Channel {
@@ -121,6 +122,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
     chatId: string,
     text: string,
     buttons: Button[][],
+    opts?: SendInteractiveOpts,
   ): Promise<ButtonResponse> {
     const numId = this.numericId(chatId);
     const callbackId = crypto.randomUUID().slice(0, 8);
@@ -145,9 +147,22 @@ export class TelegramChannel extends EventEmitter implements Channel {
       keyboard.row();
     }
 
-    await this.bot.api.sendMessage(numId, text, {
-      reply_markup: keyboard,
-    });
+    let sent;
+    try {
+      sent = await this.bot.api.sendMessage(numId, text, {
+        reply_markup: keyboard,
+        ...(opts?.parseMode && { parse_mode: opts.parseMode }),
+      });
+    } catch (err) {
+      if (opts?.parseMode) {
+        log.warn("[channel] sendInteractive failed with %s, retrying as plain text", opts.parseMode);
+        sent = await this.bot.api.sendMessage(numId, text, {
+          reply_markup: keyboard,
+        });
+      } else {
+        throw err;
+      }
+    }
 
     const cleanupAll = () => {
       for (const { cbData } of cbEntries) {
@@ -175,8 +190,9 @@ export class TelegramChannel extends EventEmitter implements Channel {
 
     // If the button requests text, prompt for follow-up input
     if (pressed.requestText) {
-      await this.bot.api.sendMessage(numId, "Type your note:", {
+      await this.bot.api.sendMessage(numId, "Add your feedback:", {
         reply_markup: { force_reply: true },
+        reply_parameters: { message_id: sent.message_id },
       });
       const followUpText = await new Promise<string>((resolve) => {
         this.pendingTextResolvers.set(chatId, resolve);
