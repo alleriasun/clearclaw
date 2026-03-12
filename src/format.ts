@@ -74,24 +74,21 @@ export function formatPermissionPrompt(
     const lines = patch.split("\n");
     const start = lines.findIndex((l) => l.startsWith("---"));
     const diffLines = start >= 0 ? lines.slice(start) : lines;
-    const body = escapeMarkdownV2(truncateLines(diffLines, MAX_LINES), true);
-    const header = escapeMarkdownV2(`🔐 Allow Edit? ${edit.file_path}`);
-    return `${header}\n\`\`\`diff\n${body}\n\`\`\``;
+    const body = truncateLines(diffLines, MAX_LINES);
+    return `🔐 Allow Edit? ${edit.file_path}\n\`\`\`diff\n${body}\n\`\`\``;
   }
 
   if (toolName === "Write") {
     const write = input as unknown as WriteInput;
     const lines = write.content.split("\n");
-    const body = escapeMarkdownV2(truncateLines(lines, MAX_LINES), true);
-    const header = escapeMarkdownV2(`🔐 Allow Write? ${write.file_path} (${lines.length} lines)`);
-    return `${header}\n\`\`\`\n${body}\n\`\`\``;
+    const body = truncateLines(lines, MAX_LINES);
+    return `🔐 Allow Write? ${write.file_path} (${lines.length} lines)\n\`\`\`\n${body}\n\`\`\``;
   }
 
   // Non-Edit/Write tools: emoji header + detail in code block
   const detail = formatToolDetail(toolName, input);
-  const header = escapeMarkdownV2(`🔐 Allow ${toolName}?`);
-  const body = escapeMarkdownV2(truncateLines(detail.split("\n"), MAX_LINES), true);
-  return `${header}\n\`\`\`\n${body}\n\`\`\``;
+  const body = truncateLines(detail.split("\n"), MAX_LINES);
+  return `🔐 Allow ${toolName}?\n\`\`\`\n${body}\n\`\`\``;
 }
 
 function formatToolStatus(
@@ -155,16 +152,6 @@ function truncateLines(lines: string[], max: number): string {
   const shown = lines.slice(0, max).join("\n");
   const remaining = lines.length - max;
   return `${shown}\n... (${remaining} more lines)`;
-}
-
-/**
- * Escape for Telegram MarkdownV2.
- * Outside code blocks: all special chars. Inside: only backtick and backslash
- * (other chars are literal inside pre blocks, escaping them adds visible backslashes).
- */
-function escapeMarkdownV2(text: string, codeBlock = false): string {
-  const pattern = codeBlock ? /[`\\]/g : /[_*\[\]()~`>#+\-=|{}.!\\]/g;
-  return text.replace(pattern, "\\$&");
 }
 
 /**

@@ -20,7 +20,6 @@ export interface Channel {
     chatId: string,
     text: string,
     buttons: Button[][],
-    opts?: SendInteractiveOpts,
   ): Promise<ButtonResponse>;
   editMessage(chatId: string, handle: string, text: string): Promise<void>;
   deleteMessage(chatId: string, handle: string): Promise<void>;
@@ -44,10 +43,6 @@ export interface ButtonResponse {
 }
 
 export interface SendMessageOpts {
-  parseMode?: "MarkdownV2" | "HTML";
-}
-
-export interface SendInteractiveOpts {
   parseMode?: "MarkdownV2" | "HTML";
 }
 

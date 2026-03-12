@@ -4,7 +4,9 @@ import log, { initLogger } from "./logger.js";
 import { WorkspaceStore } from "./workspace-store.js";
 import { ClaudeCodeEngine } from "./engine/claude-code.js";
 import { TelegramChannel } from "./channel/telegram.js";
+import { SlackChannel } from "./channel/slack.js";
 import { Orchestrator } from "./orchestrator.js";
+import type { Channel } from "./types.js";
 
 // The Claude Agent SDK has a bug: handleControlRequest() writes to the
 // subprocess stdin without a .catch(), so aborting during a permission
@@ -29,7 +31,12 @@ async function main() {
   initLogger(config.logPath);
   const workspaceStore = new WorkspaceStore(config.workspacesPath);
 
-  const channel = new TelegramChannel(config.botToken, config.allowedUserIds);
+  let channel: Channel;
+  if (config.channel.type === "slack") {
+    channel = new SlackChannel(config.channel.botToken, config.channel.appToken, config.allowedUserIds);
+  } else {
+    channel = new TelegramChannel(config.channel.botToken, config.allowedUserIds);
+  }
   const engine = new ClaudeCodeEngine();
 
   const orchestrator = new Orchestrator({

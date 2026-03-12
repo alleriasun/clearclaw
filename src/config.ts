@@ -3,8 +3,21 @@ import os from "node:os";
 import path from "node:path";
 import type { PermissionMode } from "./types.js";
 
-export interface Config {
+export interface TelegramConfig {
+  type: "telegram";
   botToken: string;
+}
+
+export interface SlackConfig {
+  type: "slack";
+  botToken: string;
+  appToken: string;
+}
+
+export type ChannelConfig = TelegramConfig | SlackConfig;
+
+export interface Config {
+  channel: ChannelConfig;
   allowedUserIds: Set<string>;
   permissionMode: PermissionMode;
   dataDir: string;
@@ -18,7 +31,19 @@ export function loadConfig(): Config {
     process.env.CLEARCLAW_HOME ?? path.join(os.homedir(), ".clearclaw");
   fs.mkdirSync(dataDir, { recursive: true });
 
-  const botToken = requireEnv("TELEGRAM_BOT_TOKEN");
+  // Channel config: Slack takes priority if both SLACK_BOT_TOKEN and SLACK_APP_TOKEN are set
+  const slackBotToken = process.env.SLACK_BOT_TOKEN;
+  const slackAppToken = process.env.SLACK_APP_TOKEN;
+  const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+
+  let channel: ChannelConfig;
+  if (slackBotToken && slackAppToken) {
+    channel = { type: "slack", botToken: slackBotToken, appToken: slackAppToken };
+  } else if (telegramBotToken) {
+    channel = { type: "telegram", botToken: telegramBotToken };
+  } else {
+    throw new Error("Missing channel config: set TELEGRAM_BOT_TOKEN or both SLACK_BOT_TOKEN + SLACK_APP_TOKEN");
+  }
 
   const rawIds = process.env.ALLOWED_USER_IDS ?? process.env.ALLOWED_USER_ID;
   if (!rawIds) throw new Error("Missing required env var: ALLOWED_USER_IDS");
@@ -41,7 +66,7 @@ export function loadConfig(): Config {
   }
 
   return {
-    botToken,
+    channel,
     allowedUserIds,
     permissionMode,
     dataDir,
