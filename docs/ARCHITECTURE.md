@@ -51,13 +51,14 @@ src/
     claude-code.ts      # Claude Code SDK wrapper
   channel/
     telegram.ts         # grammY Telegram bot
+    slack.ts            # Slack Bolt (Socket Mode)
 ```
 
 ## Data Flow
 
 ```
-Telegram message
-  → TelegramChannel emits "message" event
+Chat message (Telegram / Slack)
+  → Channel emits "message" event
   → Orchestrator.handleMessage()
   → looks up workspace by chat_id
   → ClaudeCodeEngine.runTurn()
@@ -65,7 +66,7 @@ Telegram message
   → SDK yields SDKMessages (assistant text, tool calls, result)
   → Engine yields EngineEvents (text, tool_use, tool_result, done, error)
   → Orchestrator accumulates text, sends intermediate chunks
-  → TelegramChannel.sendMessage()
+  → Channel.sendMessage()
 ```
 
 ## Permission Flow
@@ -73,8 +74,8 @@ Telegram message
 ```
 SDK calls canUseTool(toolName, input)
   → Engine calls onPermissionRequest callback
-  → Orchestrator calls TelegramChannel.sendInteractive()
-  → User taps Allow/Deny inline button
+  → Orchestrator calls Channel.sendInteractive()
+  → User taps Allow/Deny button (inline keyboard / Block Kit)
   → Promise resolves with button value
   → Engine returns PermissionResult to SDK
 ```
@@ -184,6 +185,10 @@ Defined in `src/types.ts`. Two interfaces keep the orchestrator decoupled from s
 
 The relay translates a stream of engine events (tool calls, results, text, permission prompts) into a chat-friendly UX. These patterns balance visibility with noise.
 
+### Message limits
+
+Both Telegram (4096 chars) and Slack (4000 chars, 3000 for Block Kit section text) enforce per-message size limits. This bites hardest on permission prompts with large diffs — an Edit with a 200-line diff easily exceeds the limit. Current approach: `splitMessage()` chunks at the boundary. Future: consider sending diffs in a more surgical/collapsible way rather than dumping the whole thing.
+
 ### Rolling tool messages
 
 A single turn can trigger many tool calls. Rather than one message per call, the relay maintains a single "rolling" message that gets edited on each `tool_use` event with the current tool's status. When the turn completes, the message is edited to a summary showing per-tool call counts (e.g., `🔧 3× Read, 2× Grep, 1× Bash`).
@@ -204,6 +209,23 @@ All prompts use a consistent `🔐 Allow {ToolName}?` header. Buttons offer Allo
 
 A persistent message (pinned where supported) showing current model, context usage, and permission mode. Updated at the end of each turn. Stale status messages from previous server runs are cleaned up on first update.
 
+## Channel Implementations
+
+Both channels implement the same `Channel` interface but differ in platform specifics:
+
+| Concern | Telegram | Slack |
+|---------|----------|-------|
+| **Transport** | grammY, long-polling | Bolt, Socket Mode |
+| **Message limit** | 4096 chars | 3000 chars (Block Kit section.text is the binding constraint) |
+| **Splitting** | `splitMessage()` at 4096 | `splitMessage()` at 3000 |
+| **Rich formatting** | Markdown via `parse_mode` | Block Kit sections (mrkdwn) + plain `text` fallback |
+| **Typing indicator** | Native `sendChatAction("typing")` | 👀 reaction on last user message |
+| **Buttons** | Inline keyboard (callback queries) | Block Kit action buttons |
+| **Message handles** | `message_id` (number as string) | `ts` (timestamp string) |
+| **Topic/description** | `setDescription` (groups) | `setTopic` (channels), auto-deletes system messages |
+
+**Slack dual-field note:** Slack messages send both `text` (plain fallback for notifications/accessibility) and `blocks` (rich-rendered Block Kit). Both currently receive the same mrkdwn-formatted content. Slack renders mrkdwn in both fields, so there's no formatting mismatch for text content. If we ever need divergent formatting (e.g., stripping markdown from the `text` fallback), the split point is in `sendMessage` / `editMessage`.
+
 ## Storage
 
 - `~/.clearclaw/workspace/` — The bot's home (identity, memory, skills, CLAUDE.md). Singular — only the personal/default workspace lives here; project workspaces point to existing repos.
@@ -214,7 +236,12 @@ A persistent message (pinned where supported) showing current model, context usa
 ## Config
 
 Environment variables:
-- `TELEGRAM_BOT_TOKEN` (required)
-- `ALLOWED_USER_IDS` (required) — comma-separated Telegram user IDs of allowed users (trust boundary). `ALLOWED_USER_ID` accepted as single-user alias.
+
+**Channel (one required):**
+- `TELEGRAM_BOT_TOKEN` — Telegram bot token (mutually exclusive with Slack)
+- `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` — Slack bot + app-level token for Socket Mode. If both Slack and Telegram tokens are set, Slack takes priority.
+
+**General:**
+- `ALLOWED_USER_IDS` (required) — comma-separated, channel-prefixed user IDs (e.g. `tg:12345,slack:U67890`). Trust boundary. `ALLOWED_USER_ID` accepted as single-user alias.
 - `PERMISSION_MODE` (optional, defaults to `default`)
 - `CLEARCLAW_HOME` (optional, defaults to `~/.clearclaw`) — data directory for DB, logs. Use separate values for multi-instance isolation.

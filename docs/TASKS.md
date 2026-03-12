@@ -52,9 +52,12 @@
 
 ## Phase 4: Slack channel
 
-- [ ] Slack channel implementation (Socket Mode)
-- [ ] Block Kit button formatting for permissions
-- [ ] mrkdwn formatting
+- [x] Slack channel implementation (Socket Mode)
+- [x] Block Kit button formatting for permissions
+- [x] mrkdwn formatting
+- [x] Universal markdown in format.ts, channel-specific escaping (MarkdownV2 in telegram.ts, mrkdwn in slack.ts)
+- [x] Channel config (env var detection: Slack priority if both set)
+- [x] Typing indicator via emoji reactions (👀 on user's message)
 
 ## Phase 5: Scheduler
 

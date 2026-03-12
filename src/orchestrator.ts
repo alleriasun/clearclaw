@@ -203,7 +203,6 @@ export class Orchestrator {
                   { label: "📝 Deny + Note", value: "deny", requestText: true },
                 ],
               ],
-              { parseMode: "MarkdownV2" },
             );
             log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
             return {

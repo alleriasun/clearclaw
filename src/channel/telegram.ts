@@ -6,7 +6,6 @@ import type {
   Button,
   ButtonResponse,
   SendMessageOpts,
-  SendInteractiveOpts,
 } from "../types.js";
 
 export class TelegramChannel extends EventEmitter implements Channel {
@@ -122,7 +121,6 @@ export class TelegramChannel extends EventEmitter implements Channel {
     chatId: string,
     text: string,
     buttons: Button[][],
-    opts?: SendInteractiveOpts,
   ): Promise<ButtonResponse> {
     const numId = this.numericId(chatId);
     const callbackId = crypto.randomUUID().slice(0, 8);
@@ -147,21 +145,19 @@ export class TelegramChannel extends EventEmitter implements Channel {
       keyboard.row();
     }
 
+    // Convert universal markdown to MarkdownV2, fall back to plain text on failure
+    const mdv2Text = convertToMarkdownV2(text);
     let sent;
     try {
+      sent = await this.bot.api.sendMessage(numId, mdv2Text, {
+        reply_markup: keyboard,
+        parse_mode: "MarkdownV2",
+      });
+    } catch {
+      log.warn("[channel] sendInteractive failed with MarkdownV2, retrying as plain text");
       sent = await this.bot.api.sendMessage(numId, text, {
         reply_markup: keyboard,
-        ...(opts?.parseMode && { parse_mode: opts.parseMode }),
       });
-    } catch (err) {
-      if (opts?.parseMode) {
-        log.warn("[channel] sendInteractive failed with %s, retrying as plain text", opts.parseMode);
-        sent = await this.bot.api.sendMessage(numId, text, {
-          reply_markup: keyboard,
-        });
-      } else {
-        throw err;
-      }
     }
 
     const cleanupAll = () => {
@@ -252,6 +248,43 @@ export class TelegramChannel extends EventEmitter implements Channel {
   private numericId(chatId: string): number {
     return Number(chatId.replace(/^tg:/, ""));
   }
+}
+
+/**
+ * Escape for Telegram MarkdownV2.
+ * Outside code blocks: all special chars. Inside: only backtick and backslash.
+ */
+function escapeMarkdownV2(text: string, codeBlock = false): string {
+  const pattern = codeBlock ? /[`\\]/g : /[_*\[\]()~`>#+\-=|{}.!\\]/g;
+  return text.replace(pattern, "\\$&");
+}
+
+/**
+ * Convert universal markdown (with code fences) to Telegram MarkdownV2.
+ * Handles code blocks specially: fence markers stay literal, inner content
+ * only escapes ` and \, outer text gets full MarkdownV2 escaping.
+ */
+function convertToMarkdownV2(markdown: string): string {
+  const result: string[] = [];
+  let pos = 0;
+  const fenceRegex = /```(\w*)\n([\s\S]*?)```/g;
+  let match;
+
+  while ((match = fenceRegex.exec(markdown)) !== null) {
+    if (match.index > pos) {
+      result.push(escapeMarkdownV2(markdown.slice(pos, match.index)));
+    }
+    result.push("```" + match[1] + "\n");
+    result.push(escapeMarkdownV2(match[2], true));
+    result.push("```");
+    pos = match.index + match[0].length;
+  }
+
+  if (pos < markdown.length) {
+    result.push(escapeMarkdownV2(markdown.slice(pos)));
+  }
+
+  return result.join("");
 }
 
 const MAX_MSG_LEN = 4096;
