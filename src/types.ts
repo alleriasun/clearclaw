@@ -57,6 +57,7 @@ export interface RunTurnOpts {
   sessionId: string | null; // null = new session
   cwd: string;
   prompt: string;
+  attachments?: Attachment[];
   permissionMode: PermissionMode;
   onPermissionRequest: (
     req: PermissionRequest,
@@ -110,12 +111,22 @@ export interface UserInfo {
   handle?: string;  // platform handle, no @ prefix (e.g. Telegram username)
 }
 
+// --- Attachments ---
+
+/** File data from a channel, kept in memory for engine consumption. */
+export interface Attachment {
+  buffer: Buffer;
+  mimeType: string;
+  filename?: string;
+}
+
 // --- Inbound message (from channel to orchestrator) ---
 
 export interface InboundMessage {
   chatId: string;
   user: UserInfo;
   text: string;
+  attachments?: Attachment[];
 }
 
 export type { PermissionMode };

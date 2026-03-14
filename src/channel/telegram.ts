@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, type Context, InlineKeyboard } from "grammy";
 import log from "../logger.js";
 import type {
+  Attachment,
   Channel,
   Button,
   ButtonResponse,
@@ -12,6 +13,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
   name = "telegram";
 
   private bot: Bot;
+  private botToken: string;
   private allowedUserIds: Set<string>;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
 
@@ -26,32 +28,60 @@ export class TelegramChannel extends EventEmitter implements Channel {
 
   constructor(botToken: string, allowedUserIds: Set<string>) {
     super();
+    this.botToken = botToken;
     this.allowedUserIds = allowedUserIds;
     this.bot = new Bot(botToken);
   }
 
   async connect(): Promise<void> {
-    // Auth check: only respond to allowed user
     this.bot.on("message:text", (ctx) => {
-      if (!ctx.from?.id || !this.allowedUserIds.has(`tg:${ctx.from.id}`)) return;
-      const chatId = `tg:${ctx.chat.id}`;
+      const sender = this.extractSender(ctx);
+      if (!sender) return;
 
       // Intercept for requestText follow-ups before emitting as a new message
-      const textResolver = this.pendingTextResolvers.get(chatId);
+      const textResolver = this.pendingTextResolvers.get(sender.chatId);
       if (textResolver) {
-        this.pendingTextResolvers.delete(chatId);
+        this.pendingTextResolvers.delete(sender.chatId);
         textResolver(ctx.message.text);
         return;
       }
 
-      const user = {
-        id: `tg:${ctx.from.id}`,
-        name: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" "),
-        ...(ctx.from.username && { handle: ctx.from.username }),
-      };
-
-      this.emit("message", { chatId, user, text: ctx.message.text });
+      this.emit("message", { ...sender, text: ctx.message.text });
     });
+
+    // Photos: Telegram sends each photo as an array of PhotoSize objects
+    // (same image at different resolutions, sorted smallest → largest).
+    // We grab the last element for the highest resolution version.
+    this.bot.on("message:photo", async (ctx) => {
+      const photo = ctx.message.photo;
+      const largest = photo[photo.length - 1];
+      await this.handleMediaMessage(ctx, largest.file_id, "image/jpeg", undefined, ctx.message.caption);
+    });
+
+    // Documents: download with original MIME + filename
+    this.bot.on("message:document", async (ctx) => {
+      const doc = ctx.message.document;
+      await this.handleMediaMessage(
+        ctx, doc.file_id,
+        doc.mime_type ?? "application/octet-stream",
+        doc.file_name,
+        ctx.message.caption,
+      );
+    });
+
+    // Placeholder handlers for unsupported media types
+    for (const [filter, label] of [
+      ["message:voice", "Voice message"],
+      ["message:audio", "Audio message"],
+      ["message:video", "Video"],
+      ["message:sticker", "Sticker"],
+    ] as const) {
+      this.bot.on(filter, (ctx) => {
+        const sender = this.extractSender(ctx);
+        if (!sender) return;
+        this.emit("message", { ...sender, text: `[${label} — not supported]` });
+      });
+    }
 
     // Handle inline keyboard button presses
     this.bot.on("callback_query:data", async (ctx) => {
@@ -235,6 +265,57 @@ export class TelegramChannel extends EventEmitter implements Channel {
         this.typingIntervals.delete(chatId);
       }
     }
+  }
+
+  /** Extract auth-checked sender info from a grammY context. Returns null if unauthorized. */
+  private extractSender(ctx: Context): { chatId: string; user: { id: string; name: string; handle?: string } } | null {
+    if (!ctx.from?.id || !ctx.chat?.id || !this.allowedUserIds.has(`tg:${ctx.from.id}`)) return null;
+    return {
+      chatId: `tg:${ctx.chat.id}`,
+      user: {
+        id: `tg:${ctx.from.id}`,
+        name: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" "),
+        ...(ctx.from.username && { handle: ctx.from.username }),
+      },
+    };
+  }
+
+  /** Shared handler for photo/document messages: download, emit attachment or fallback. */
+  private async handleMediaMessage(
+    ctx: Context,
+    fileId: string,
+    mimeType: string,
+    filename?: string,
+    caption?: string,
+  ): Promise<void> {
+    const sender = this.extractSender(ctx);
+    if (!sender) return;
+    try {
+      const buffer = await this.downloadFile(fileId);
+      this.emit("message", {
+        ...sender,
+        text: caption ?? "",
+        attachments: [{ buffer, mimeType, filename }],
+      });
+    } catch (err) {
+      log.warn({ err }, "[channel] failed to download file %s", filename ?? fileId);
+      this.emit("message", {
+        ...sender,
+        text: caption
+          ? `${caption}\n[File download failed: ${filename ?? mimeType}]`
+          : `[File download failed: ${filename ?? mimeType}]`,
+      });
+    }
+  }
+
+  /** Download a Telegram file by file_id, returning the raw buffer. */
+  private async downloadFile(fileId: string): Promise<Buffer> {
+    const file = await this.bot.api.getFile(fileId);
+    if (!file.file_path) throw new Error("Telegram returned no file_path");
+    const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`File download failed: ${resp.status}`);
+    return Buffer.from(await resp.arrayBuffer());
   }
 
   private numericId(chatId: string): number {

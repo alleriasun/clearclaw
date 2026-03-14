@@ -7,9 +7,14 @@ import {
   type SDKUserMessage,
   type PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  ContentBlockParam,
+  MessageParam,
+} from "@anthropic-ai/sdk/resources/messages/messages.mjs";
 import log from "../logger.js";
 import { formatToolDescription } from "../format.js";
 import type {
+  Attachment,
   Engine,
   EngineEvent,
   RunTurnOpts,
@@ -23,7 +28,8 @@ export class ClaudeCodeEngine implements Engine {
     const {
       sessionId,
       cwd,
-      prompt,
+      prompt: textPrompt,
+      attachments,
       permissionMode,
       onPermissionRequest,
       appendSystemPrompt,
@@ -77,6 +83,11 @@ export class ClaudeCodeEngine implements Engine {
         interrupt: !resp.message,
       };
     };
+
+    // Plain string when no attachments, content blocks when attachments present
+    const prompt = attachments?.length
+      ? buildAttachmentPrompt(textPrompt, attachments)
+      : textPrompt;
 
     const q = query({
       prompt,
@@ -147,18 +158,13 @@ export class ClaudeCodeEngine implements Engine {
           const content = (msg as SDKUserMessage).message.content;
           if (Array.isArray(content)) {
             for (const block of content) {
-              const b = block as Record<string, unknown>;
-              if (
-                b.type === "tool_result" &&
-                typeof b.tool_use_id === "string"
-              ) {
+              if (block.type === "tool_result") {
                 const toolName =
-                  toolUseIdToName.get(b.tool_use_id) ?? "unknown";
-                const output = extractToolResultText(b.content);
+                  toolUseIdToName.get(block.tool_use_id) ?? "unknown";
+                const output = extractToolResultText(block.content);
                 if (output) {
                   yield { type: "tool_result" as const, toolName, output };
                 }
-                // Retain for turn-level stats (map is GC'd when generator ends)
               }
             }
           }
@@ -226,6 +232,77 @@ export class ClaudeCodeEngine implements Engine {
       yield { type: "done", sessionId: resultSessionId, stats: turnStats };
     }
   }
+}
+
+/**
+ * Build an AsyncIterable<SDKUserMessage> that yields a single user message
+ * with content blocks for attachments + text.
+ */
+function buildAttachmentPrompt(
+  text: string,
+  attachments: Attachment[],
+): AsyncIterable<SDKUserMessage> {
+  const contentBlocks: ContentBlockParam[] = attachments.map(encodeAttachment);
+
+  // Text prompt always comes last
+  if (text) {
+    contentBlocks.push({ type: "text", text });
+  }
+
+  const message: MessageParam = { role: "user", content: contentBlocks };
+
+  // SDKUserMessage requires these fields for type satisfaction, but they're
+  // not semantically meaningful here — we're injecting a top-level prompt,
+  // not replaying a conversation. Session management is handled by the
+  // `resume` option passed to query().
+  const msg: SDKUserMessage = {
+    type: "user",
+    message,
+    parent_tool_use_id: null,
+    session_id: "",
+  };
+
+  return (async function* () {
+    yield msg;
+  })();
+}
+
+const SUPPORTED_IMAGE_TYPES = new Set([
+  "image/jpeg", "image/png", "image/gif", "image/webp",
+]);
+
+/** Encode an attachment as an SDK content block using its in-memory buffer. */
+function encodeAttachment(att: Attachment): ContentBlockParam {
+  const data = att.buffer.toString("base64");
+
+  if (SUPPORTED_IMAGE_TYPES.has(att.mimeType)) {
+    return {
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: att.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+        data,
+      },
+    };
+  }
+
+  if (att.mimeType === "application/pdf") {
+    return {
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data },
+    };
+  }
+
+  if (att.mimeType.startsWith("text/")) {
+    const content = att.buffer.toString("utf-8");
+    const header = att.filename ? `--- ${att.filename} ---\n` : "";
+    return { type: "text", text: `${header}${content}` };
+  }
+
+  // Unsupported (includes non-standard image types like svg, bmp, tiff)
+  const name = att.filename ?? att.mimeType;
+  log.warn("[engine] unsupported attachment type: %s", att.mimeType);
+  return { type: "text", text: `[Unsupported file: ${name}]` };
 }
 
 /** Pull plain text out of a tool_result content block. */

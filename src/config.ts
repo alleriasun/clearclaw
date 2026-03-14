@@ -20,9 +20,9 @@ export interface Config {
   channel: ChannelConfig;
   allowedUserIds: Set<string>;
   permissionMode: PermissionMode;
-  dataDir: string;
   defaultPromptPath: string;
-  workspacesPath: string;
+  workspaceStorePath: string;
+  filesPath: string;
   logPath: string;
 }
 
@@ -30,6 +30,7 @@ export function loadConfig(): Config {
   const dataDir =
     process.env.CLEARCLAW_HOME ?? path.join(os.homedir(), ".clearclaw");
   fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(path.join(dataDir, "files"), { recursive: true });
 
   // Channel config: Slack takes priority if both SLACK_BOT_TOKEN and SLACK_APP_TOKEN are set
   const slackBotToken = process.env.SLACK_BOT_TOKEN;
@@ -69,9 +70,9 @@ export function loadConfig(): Config {
     channel,
     allowedUserIds,
     permissionMode,
-    dataDir,
     defaultPromptPath: path.join(dataDir, "workspace", "CLAUDE.md"),
-    workspacesPath: path.join(dataDir, "workspaces.json"),
+    workspaceStorePath: path.join(dataDir, "workspaces.json"),
+    filesPath: path.join(dataDir, "files"),
     logPath: path.join(dataDir, "clearclaw.log"),
   };
 }

@@ -29,7 +29,7 @@ process.on("unhandledRejection", (reason) => {
 async function main() {
   const config = loadConfig();
   initLogger(config.logPath);
-  const workspaceStore = new WorkspaceStore(config.workspacesPath);
+  const workspaceStore = new WorkspaceStore(config.workspaceStorePath);
 
   let channel: Channel;
   if (config.channel.type === "slack") {
@@ -45,6 +45,7 @@ async function main() {
     workspaceStore,
     permissionMode: config.permissionMode,
     defaultPromptPath: config.defaultPromptPath,
+    filesPath: config.filesPath,
   });
 
   await orchestrator.start();

@@ -2,12 +2,13 @@ import { EventEmitter } from "node:events";
 import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
 import log from "../logger.js";
-import type { Channel, Button, ButtonResponse, SendMessageOpts } from "../types.js";
+import type { Attachment, Channel, Button, ButtonResponse, SendMessageOpts } from "../types.js";
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
 
   private app: App;
+  private botToken: string;
   private botUserId: string | undefined;
   private allowedUserIds: Set<string>;
   private pendingButtonCallbacks = new Map<string, () => void>(); // actionId → resolve
@@ -17,6 +18,7 @@ export class SlackChannel extends EventEmitter implements Channel {
 
   constructor(botToken: string, appToken: string, allowedUserIds: Set<string>) {
     super();
+    this.botToken = botToken;
     this.allowedUserIds = allowedUserIds;
     this.app = new App({
       token: botToken, appToken, socketMode: true, logLevel: LogLevel.ERROR,
@@ -36,16 +38,21 @@ export class SlackChannel extends EventEmitter implements Channel {
         return;
       }
 
-      if (subtype && subtype !== "bot_message") return;
+      if (subtype && subtype !== "bot_message" && subtype !== "file_share") return;
+      // Bolt's message event is a union of many subtypes with different shapes;
+      // inline type is simpler than importing and narrowing the full union.
       const msg = event as {
         channel: string; user?: string; bot_id?: string;
         text?: string; ts: string;
+        files?: Array<{ url_private_download?: string; mimetype?: string; name?: string }>;
       };
-      if (!msg.text) return;
 
       const chatId = `slack:${msg.channel}`;
       const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
       if (isBotMessage) return;
+
+      // Need either text or files to proceed
+      if (!msg.text && (!msg.files || msg.files.length === 0)) return;
 
       const userId = msg.user;
       if (!userId || !this.allowedUserIds.has(`slack:${userId}`)) {
@@ -59,15 +66,39 @@ export class SlackChannel extends EventEmitter implements Channel {
       const textResolver = this.pendingTextCallbacks.get(chatId);
       if (textResolver) {
         this.pendingTextCallbacks.delete(chatId);
-        textResolver(msg.text);
+        textResolver(msg.text ?? "");
         return;
+      }
+
+      // Download attached files in parallel
+      let attachments: Attachment[] | undefined;
+      if (msg.files?.length) {
+        const downloadable = msg.files.filter((f) => f.url_private_download);
+        if (downloadable.length > 0) {
+          const results = await Promise.allSettled(
+            downloadable.map(async (file) => {
+              const buffer = await this.downloadFile(file.url_private_download!);
+              return { buffer, mimeType: file.mimetype ?? "application/octet-stream", filename: file.name } as Attachment;
+            }),
+          );
+          const succeeded = results
+            .filter((r): r is PromiseFulfilledResult<Attachment> => r.status === "fulfilled")
+            .map((r) => r.value);
+          for (const r of results) {
+            if (r.status === "rejected") {
+              log.warn({ err: r.reason }, "[channel] failed to download Slack file");
+            }
+          }
+          if (succeeded.length > 0) attachments = succeeded;
+        }
       }
 
       const userName = await this.resolveUserName(userId);
       this.emit("message", {
         chatId,
         user: { id: `slack:${userId}`, name: userName ?? userId },
-        text: msg.text,
+        text: msg.text ?? "",
+        ...(attachments && { attachments }),
       });
     });
 
@@ -243,6 +274,15 @@ export class SlackChannel extends EventEmitter implements Channel {
 
   private slackId(chatId: string): string {
     return chatId.replace(/^slack:/, "");
+  }
+
+  /** Download a file from Slack using bot token auth. */
+  private async downloadFile(url: string): Promise<Buffer> {
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${this.botToken}` },
+    });
+    if (!resp.ok) throw new Error(`Slack file download failed: ${resp.status}`);
+    return Buffer.from(await resp.arrayBuffer());
   }
 
   private async resolveUserName(userId: string): Promise<string | undefined> {

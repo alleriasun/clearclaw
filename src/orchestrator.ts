@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import log from "./logger.js";
+import { saveFile } from "./files.js";
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt } from "./format.js";
 import type { WorkspaceStore } from "./workspace-store.js";
 import type {
@@ -18,6 +19,7 @@ export interface OrchestratorOpts {
   workspaceStore: WorkspaceStore;
   permissionMode: PermissionMode;
   defaultPromptPath: string;
+  filesPath: string;
 }
 
 interface ChatState {
@@ -43,6 +45,7 @@ export class Orchestrator {
   private workspaceStore: WorkspaceStore;
   private permissionMode: PermissionMode;
   private defaultPromptPath: string;
+  private filesPath: string;
   private chats = new Map<string, ChatState>();
 
   constructor(opts: OrchestratorOpts) {
@@ -51,6 +54,7 @@ export class Orchestrator {
     this.workspaceStore = opts.workspaceStore;
     this.permissionMode = opts.permissionMode;
     this.defaultPromptPath = opts.defaultPromptPath;
+    this.filesPath = opts.filesPath;
   }
 
   private chat(chatId: string): ChatState {
@@ -180,11 +184,24 @@ export class Orchestrator {
       const sender = msg.user.handle ? `${msg.user.name} (@${msg.user.handle})` : msg.user.name;
       const prompt = isDefaultWorkspace ? msg.text : `[${sender}]: ${msg.text}`;
 
+      // Save attachments to disk for the audit log (failures must not block the turn)
+      if (msg.attachments?.length) {
+        const results = await Promise.allSettled(
+          msg.attachments.map((att) => saveFile(att, ws.name, this.filesPath)),
+        );
+        for (const r of results) {
+          if (r.status === "rejected") log.warn({ err: r.reason }, "[turn] failed to save attachment");
+        }
+        const saved = results.filter((r) => r.status === "fulfilled").length;
+        if (saved > 0) log.info("[turn] saved %d/%d attachment(s) for workspace %s", saved, msg.attachments.length, ws.name);
+      }
+
       try {
         for await (const event of this.engine.runTurn({
           sessionId: ws.current_session_id,
           cwd: ws.cwd,
           prompt,
+          attachments: msg.attachments,
           permissionMode: state.permissionMode ?? this.permissionMode,
           appendSystemPrompt,
           signal: abort.signal,
