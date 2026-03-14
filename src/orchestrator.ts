@@ -190,25 +190,33 @@ export class Orchestrator {
           signal: abort.signal,
           onPermissionRequest: async (req) => {
             log.info(`[perm] ${req.toolName}`);
-            const promptText = formatPermissionPrompt(req.toolName, req.input, req.description);
-            const resp = await this.channel.sendInteractive(
-              msg.chatId,
-              promptText,
-              [
+            try {
+              const promptText = formatPermissionPrompt(req.toolName, req.input, req.description);
+              const resp = await this.channel.sendInteractive(
+                msg.chatId,
+                promptText,
                 [
-                  { label: "👍 Allow", value: "allow" },
-                  { label: "👎 Deny", value: "deny" },
+                  [
+                    { label: "👍 Allow", value: "allow" },
+                    { label: "👎 Deny", value: "deny" },
+                  ],
+                  [
+                    { label: "📝 Deny + Note", value: "deny", requestText: true },
+                  ],
                 ],
-                [
-                  { label: "📝 Deny + Note", value: "deny", requestText: true },
-                ],
-              ],
-            );
-            log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
-            return {
-              decision: resp.value === "allow" ? "allow" : "deny",
-              message: resp.text,
-            };
+              );
+              log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
+              return {
+                decision: resp.value === "allow" ? "allow" : "deny",
+                message: resp.text,
+              };
+            } catch (err) {
+              log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", req.toolName);
+              return {
+                decision: "deny" as const,
+                message: "Permission prompt could not be delivered to chat — denied automatically.",
+              };
+            }
           },
         })) {
           await this.routeEngineEvent(msg.chatId, event, ws.name);
@@ -234,69 +242,77 @@ export class Orchestrator {
   private async routeEngineEvent(chatId: string, event: EngineEvent, workspaceName: string): Promise<void> {
     const state = this.chat(chatId);
 
-    switch (event.type) {
-      case "text":
-        await this.channel.sendMessage(chatId, event.text);
-        break;
+    try {
+      switch (event.type) {
+        case "text":
+          await this.channel.sendMessage(chatId, event.text);
+          break;
 
-      case "tool_use": {
-        // Rolling message: each tool_use replaces the single message's content
-        const line = formatToolStatusLine(event.toolName, event.input);
-        if (state.toolCallHandle) {
-          try {
-            await this.channel.editMessage(chatId, state.toolCallHandle, line);
-          } catch {
+        case "tool_use": {
+          // Rolling message: each tool_use replaces the single message's content
+          const line = formatToolStatusLine(event.toolName, event.input);
+          if (state.toolCallHandle) {
+            try {
+              await this.channel.editMessage(chatId, state.toolCallHandle, line);
+            } catch {
+              const handles = await this.channel.sendMessage(chatId, line);
+              state.toolCallHandle = handles[0];
+            }
+          } else {
             const handles = await this.channel.sendMessage(chatId, line);
             state.toolCallHandle = handles[0];
           }
-        } else {
-          const handles = await this.channel.sendMessage(chatId, line);
-          state.toolCallHandle = handles[0];
+          break;
         }
-        break;
-      }
 
-      case "tool_result":
-        // All tool results suppressed — Claude summarizes in its text response
-        break;
+        case "tool_result":
+          // All tool results suppressed — Claude summarizes in its text response
+          break;
 
-      case "rate_limit": {
-        const resetMsg = event.resetsAt
-          ? ` Resets at ${new Date(event.resetsAt).toLocaleTimeString()}.`
-          : "";
-        log.warn(`[turn] rate limit: ${event.status}${resetMsg}`);
-        await this.channel.sendMessage(
-          chatId,
-          `⚠️ Rate limited (${event.status}).${resetMsg}`,
-        );
-        break;
-      }
+        case "rate_limit": {
+          const resetMsg = event.resetsAt
+            ? ` Resets at ${new Date(event.resetsAt).toLocaleTimeString()}.`
+            : "";
+          log.warn(`[turn] rate limit: ${event.status}${resetMsg}`);
+          await this.channel.sendMessage(
+            chatId,
+            `⚠️ Rate limited (${event.status}).${resetMsg}`,
+          );
+          break;
+        }
 
-      case "done": {
-        // Edit rolling tool message to show summary
-        if (state.toolCallHandle && event.stats) {
-          const summary = formatToolCallSummary(event.stats.toolCalls);
-          if (summary) {
-            try {
-              await this.channel.editMessage(chatId, state.toolCallHandle, summary);
-            } catch { /* edit failed, leave as-is */ }
+        case "done": {
+          // Persist state first — channel calls below are best-effort
+          log.info(`[turn] done session=${event.sessionId}`);
+          this.workspaceStore.setSession(workspaceName, event.sessionId);
+          if (event.stats) state.stats = event.stats;
+
+          // Best-effort: update tool summary and status message
+          if (state.toolCallHandle && event.stats) {
+            const summary = formatToolCallSummary(event.stats.toolCalls);
+            if (summary) {
+              try {
+                await this.channel.editMessage(chatId, state.toolCallHandle, summary);
+              } catch { /* edit failed, leave as-is */ }
+            }
           }
+          state.toolCallHandle = null;
+          await this.updateStatusMessage(chatId, state);
+          break;
         }
-        state.toolCallHandle = null;
-        log.info(`[turn] done session=${event.sessionId}`);
-        this.workspaceStore.setSession(workspaceName, event.sessionId);
-        if (event.stats) state.stats = event.stats;
-        await this.updateStatusMessage(chatId, state);
-        break;
-      }
 
-      case "error":
-        log.error(`[turn] error: ${event.message}`);
-        await this.channel.sendMessage(
-          chatId,
-          `Error: ${event.message}`,
-        );
-        break;
+        case "error":
+          log.error(`[turn] error: ${event.message}`);
+          await this.channel.sendMessage(
+            chatId,
+            `Error: ${event.message}`,
+          );
+          break;
+      }
+    } catch (err) {
+      // Channel errors must never propagate — they'd crash the engine turn loop,
+      // killing the SDK session and losing the session ID.
+      log.warn({ err }, "[route] failed to relay %s event to channel", event.type);
     }
   }
 
