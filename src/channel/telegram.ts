@@ -166,23 +166,15 @@ export class TelegramChannel extends EventEmitter implements Channel {
       }
     };
 
-    // Wait for button press or timeout (30 minutes)
-    const pressed = await new Promise<Button | null>((resolve) => {
-      const timeout = setTimeout(() => {
-        cleanupAll();
-        resolve(null);
-      }, 30 * 60 * 1000);
-
+    // Wait for button press (no timeout — matches CLI behavior)
+    const pressed = await new Promise<Button>((resolve) => {
       for (const { btn, cbData } of cbEntries) {
         this.pendingCallbacks.set(cbData, () => {
-          clearTimeout(timeout);
           cleanupAll();
           resolve(btn);
         });
       }
     });
-
-    if (!pressed) return { value: "" };
 
     // If the button requests text, prompt for follow-up input
     if (pressed.requestText) {

@@ -162,23 +162,15 @@ export class SlackChannel extends EventEmitter implements Channel {
       }
     };
 
-    // Wait for button press or timeout (30 minutes)
-    const pressed = await new Promise<Button | null>((resolve) => {
-      const timeout = setTimeout(() => {
-        cleanupAll();
-        resolve(null);
-      }, 30 * 60 * 1000);
-
+    // Wait for button press (no timeout — matches CLI behavior)
+    const pressed = await new Promise<Button>((resolve) => {
       for (const entry of actionEntries) {
         this.pendingButtonCallbacks.set(entry.actionId, () => {
-          clearTimeout(timeout);
           cleanupAll();
           resolve(entry.btn);
         });
       }
     });
-
-    if (!pressed) return { value: "" };
 
     if (pressed.requestText) {
       await this.app.client.chat.postMessage({
