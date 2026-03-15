@@ -203,6 +203,27 @@ export class SlackChannel extends EventEmitter implements Channel {
       }
     });
 
+    // Update message to highlight the selected button (others become inert — no callbacks)
+    if (result.ts) {
+      const feedbackBlocks: KnownBlock[] = [
+        blocks[0],
+        {
+          type: "actions",
+          elements: actionEntries.map(({ btn, actionId }) => ({
+            type: "button" as const,
+            text: { type: "plain_text" as const, text: btn === pressed ? `✅ ${btn.label}` : btn.label },
+            action_id: actionId,
+            value: btn.value,
+          })),
+        },
+      ];
+      try {
+        await this.app.client.chat.update({
+          channel, ts: result.ts as string, text, blocks: feedbackBlocks,
+        });
+      } catch { /* best-effort */ }
+    }
+
     if (pressed.requestText) {
       await this.app.client.chat.postMessage({
         channel,

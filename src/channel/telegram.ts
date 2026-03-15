@@ -206,6 +206,23 @@ export class TelegramChannel extends EventEmitter implements Channel {
       }
     });
 
+    // Update keyboard to highlight the selected button (others become inert — no callbacks)
+    const feedbackKeyboard = new InlineKeyboard();
+    let entryIndex = 0;
+    for (const row of buttons) {
+      for (const button of row) {
+        const entry = cbEntries[entryIndex++];
+        const label = button === pressed ? `✅ ${button.label}` : button.label;
+        feedbackKeyboard.text(label, entry.cbData);
+      }
+      feedbackKeyboard.row();
+    }
+    try {
+      await this.bot.api.editMessageReplyMarkup(numId, sent.message_id, {
+        reply_markup: feedbackKeyboard,
+      });
+    } catch { /* best-effort */ }
+
     // If the button requests text, prompt for follow-up input
     if (pressed.requestText) {
       await this.bot.api.sendMessage(numId, "Add your feedback:", {
