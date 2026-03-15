@@ -11,8 +11,8 @@ export class SlackChannel extends EventEmitter implements Channel {
   private botToken: string;
   private botUserId: string | undefined;
   private allowedUserIds: Set<string>;
-  private pendingButtonCallbacks = new Map<string, () => void>(); // actionId → resolve
-  private pendingTextCallbacks = new Map<string, (text: string) => void>(); // chatId → resolve
+  private pendingButtonCallbacks = new Map<string, (triggerId: string) => void>(); // actionId → resolve
+  private pendingModalCallbacks = new Map<string, (text: string) => void>(); // modal callbackId → resolve
   private typingAnchorTs = new Map<string, string>(); // chatId → ts of last user message (for 👀 reaction)
   private userNameCache = new Map<string, string>();
 
@@ -62,14 +62,6 @@ export class SlackChannel extends EventEmitter implements Channel {
 
       this.typingAnchorTs.set(chatId, msg.ts);
 
-      // Intercept for requestText follow-ups
-      const textResolver = this.pendingTextCallbacks.get(chatId);
-      if (textResolver) {
-        this.pendingTextCallbacks.delete(chatId);
-        textResolver(msg.text ?? "");
-        return;
-      }
-
       // Download attached files in parallel
       let attachments: Attachment[] | undefined;
       if (msg.files?.length) {
@@ -103,11 +95,23 @@ export class SlackChannel extends EventEmitter implements Channel {
     });
 
     // Handle button presses from sendInteractive
-    this.app.action(/^ccb:/, async ({ action, ack }) => {
+    this.app.action(/^ccb:/, async ({ action, body, ack }) => {
       await ack();
       const actionId = (action as { action_id: string }).action_id;
+      const triggerId = (body as { trigger_id?: string }).trigger_id ?? "";
       const resolve = this.pendingButtonCallbacks.get(actionId);
-      if (resolve) resolve();
+      if (resolve) resolve(triggerId);
+    });
+
+    // Handle modal submissions from "Deny + Note" feedback
+    this.app.view(/^ccv:/, async ({ view, ack }) => {
+      await ack();
+      const feedbackValue = view.state?.values?.feedback_block?.feedback_input?.value ?? "";
+      const resolve = this.pendingModalCallbacks.get(view.callback_id);
+      if (resolve) {
+        this.pendingModalCallbacks.delete(view.callback_id);
+        resolve(feedbackValue);
+      }
     });
 
     await this.app.start();
@@ -194,11 +198,11 @@ export class SlackChannel extends EventEmitter implements Channel {
     };
 
     // Wait for button press (no timeout — matches CLI behavior)
-    const pressed = await new Promise<Button>((resolve) => {
+    const { button: pressed, triggerId } = await new Promise<{ button: Button; triggerId: string }>((resolve) => {
       for (const entry of actionEntries) {
-        this.pendingButtonCallbacks.set(entry.actionId, () => {
+        this.pendingButtonCallbacks.set(entry.actionId, (triggerId) => {
           cleanupAll();
-          resolve(entry.btn);
+          resolve({ button: entry.btn, triggerId });
         });
       }
     });
@@ -224,14 +228,33 @@ export class SlackChannel extends EventEmitter implements Channel {
       } catch { /* best-effort */ }
     }
 
-    if (pressed.requestText) {
-      await this.app.client.chat.postMessage({
-        channel,
-        text: "Add your feedback:",
-        ...(result.ts && { thread_ts: result.ts as string }),
+    if (pressed.requestText && triggerId) {
+      // Open a modal for feedback input (Slack equivalent of Telegram's force_reply)
+      const modalCallbackId = `ccv:${callbackId}`;
+      await this.app.client.views.open({
+        trigger_id: triggerId,
+        view: {
+          type: "modal",
+          callback_id: modalCallbackId,
+          title: { type: "plain_text", text: "Deny with feedback" },
+          submit: { type: "plain_text", text: "Submit" },
+          blocks: [
+            {
+              type: "input",
+              block_id: "feedback_block",
+              element: {
+                type: "plain_text_input",
+                action_id: "feedback_input",
+                multiline: true,
+                placeholder: { type: "plain_text", text: "Why are you denying this action?" },
+              },
+              label: { type: "plain_text", text: "Feedback" },
+            },
+          ],
+        },
       });
       const followUpText = await new Promise<string>((resolve) => {
-        this.pendingTextCallbacks.set(chatId, resolve);
+        this.pendingModalCallbacks.set(modalCallbackId, resolve);
       });
       return { value: pressed.value, text: followUpText };
     }
