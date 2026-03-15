@@ -236,7 +236,7 @@ export class SlackChannel extends EventEmitter implements Channel {
         view: {
           type: "modal",
           callback_id: modalCallbackId,
-          title: { type: "plain_text", text: "Deny with feedback" },
+          title: { type: "plain_text", text: "Deny with note" },
           submit: { type: "plain_text", text: "Submit" },
           blocks: [
             {
@@ -248,7 +248,7 @@ export class SlackChannel extends EventEmitter implements Channel {
                 multiline: true,
                 placeholder: { type: "plain_text", text: "Why are you denying this action?" },
               },
-              label: { type: "plain_text", text: "Feedback" },
+              label: { type: "plain_text", text: "Note" },
             },
           ],
         },
@@ -256,6 +256,15 @@ export class SlackChannel extends EventEmitter implements Channel {
       const followUpText = await new Promise<string>((resolve) => {
         this.pendingModalCallbacks.set(modalCallbackId, resolve);
       });
+      if (followUpText && result.ts) {
+        try {
+          await this.app.client.chat.postMessage({
+            channel,
+            text: `Denied with note:\n> ${followUpText}`,
+            thread_ts: result.ts as string,
+          });
+        } catch { /* best-effort */ }
+      }
       return { value: pressed.value, text: followUpText };
     }
 

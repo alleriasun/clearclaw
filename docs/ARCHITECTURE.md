@@ -203,7 +203,7 @@ Tiered by tool type:
 - **Edit/Write:** Rich preview — unified diff or full file content in a code block.
 - **Everything else:** Header + key detail (command, pattern, query, URL) in a code block. Falls back to JSON-serialized input for unknown tools.
 
-All prompts use a consistent `🔐 Allow {ToolName}?` header. Buttons offer Allow, Deny, and Deny + Note (feedback passed back to the agent so it can adjust).
+All prompts use a consistent `🔐 Allow {ToolName}?` header. Buttons offer Allow, Deny, and Deny + Note (feedback passed back to the agent so it can adjust). After a button is pressed, the selected button is highlighted with a ✅ prefix and the remaining buttons become inert. Deny + Note opens a follow-up input — Telegram uses `force_reply`, Slack opens a modal (`views.open`).
 
 ### Status message
 
