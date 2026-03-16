@@ -258,6 +258,13 @@ export class SlackChannel extends EventEmitter implements Channel {
     } catch { /* may not have permission */ }
   }
 
+  async updateStatus(chatId: string, text: string): Promise<void> {
+    await this.app.client.conversations.setTopic({
+      channel: this.slackId(chatId),
+      topic: text,
+    });
+  }
+
   async setTyping(chatId: string, isTyping: boolean): Promise<void> {
     const channel = this.slackId(chatId);
     const ts = this.typingAnchorTs.get(chatId);
