@@ -13,7 +13,7 @@ export class SlackChannel extends EventEmitter implements Channel {
   private allowedUserIds: Set<string>;
   private pendingButtonCallbacks = new Map<string, (triggerId: string) => void>(); // actionId → resolve
   private pendingModalCallbacks = new Map<string, (text: string) => void>(); // modal callbackId → resolve
-  private typingAnchorTs = new Map<string, string>(); // chatId → ts of last user message (for 👀 reaction)
+  private typingMessageTs = new Map<string, string>(); // chatId → ts of bot's "typing…" placeholder
   private userNameCache = new Map<string, string>();
 
   constructor(botToken: string, appToken: string, allowedUserIds: Set<string>) {
@@ -59,8 +59,6 @@ export class SlackChannel extends EventEmitter implements Channel {
         if (userId) log.info("[channel] ignored message from unauthorized user slack:%s", userId);
         return;
       }
-
-      this.typingAnchorTs.set(chatId, msg.ts);
 
       // Download attached files in parallel
       let attachments: Attachment[] | undefined;
@@ -141,30 +139,48 @@ export class SlackChannel extends EventEmitter implements Channel {
     }
   }
   async disconnect(): Promise<void> {
-    // Remove lingering typing reactions
-    for (const [chatId, ts] of this.typingAnchorTs) {
+    // Delete lingering typing placeholder messages
+    for (const [chatId, ts] of this.typingMessageTs) {
       try {
-        await this.app.client.reactions.remove({
-          channel: this.slackId(chatId), timestamp: ts, name: "eyes",
-        });
-      } catch { /* already removed or no permission */ }
+        await this.app.client.chat.delete({ channel: this.slackId(chatId), ts });
+      } catch { /* already deleted or no permission */ }
     }
-    this.typingAnchorTs.clear();
+    this.typingMessageTs.clear();
     await this.app.stop();
   }
   ownsId(chatId: string): boolean { return chatId.startsWith("slack:"); }
   async sendMessage(
     chatId: string,
     text: string,
-    _opts?: SendMessageOpts,
+    opts?: SendMessageOpts,
   ): Promise<string[]> {
     const channel = this.slackId(chatId);
     const chunks = splitMessage(text);
     const handles: string[] = [];
+
+    // If a typing placeholder exists, edit the first chunk into it instead of posting new
+    const consumeTyping = opts?.consumeTyping !== false;
+    const typingTs = consumeTyping ? this.typingMessageTs.get(chatId) : undefined;
+    if (typingTs && chunks.length > 0) {
+      this.typingMessageTs.delete(chatId);
+      const firstChunk = chunks.shift()!;
+      const blocks = mrkdwnBlocks(firstChunk);
+      try {
+        await this.app.client.chat.update({
+          channel, ts: typingTs, text: firstChunk, blocks,
+        });
+        handles.push(typingTs);
+      } catch {
+        // Placeholder was deleted externally — fall back to posting
+        const result = await this.app.client.chat.postMessage({
+          channel, text: firstChunk, blocks,
+        });
+        if (result.ts) handles.push(result.ts as string);
+      }
+    }
+
     for (const chunk of chunks) {
-      const blocks: KnownBlock[] = [
-        { type: "section", text: { type: "mrkdwn", text: chunk } },
-      ];
+      const blocks = mrkdwnBlocks(chunk);
       const result = await this.app.client.chat.postMessage({
         channel, text: chunk, blocks,
       });
@@ -191,7 +207,7 @@ export class SlackChannel extends EventEmitter implements Channel {
     }
 
     const blocks: KnownBlock[] = [
-      { type: "section", text: { type: "mrkdwn", text: splitMessage(text)[0] } },
+      mrkdwnBlocks(splitMessage(text)[0])[0],
       {
         type: "actions",
         elements: actionEntries.map(({ btn, actionId }) => ({
@@ -293,7 +309,7 @@ export class SlackChannel extends EventEmitter implements Channel {
       channel: this.slackId(chatId),
       ts: handle,
       text: chunk,
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: chunk } }],
+      blocks: mrkdwnBlocks(chunk),
     });
   }
 
@@ -336,16 +352,25 @@ export class SlackChannel extends EventEmitter implements Channel {
 
   async setTyping(chatId: string, isTyping: boolean): Promise<void> {
     const channel = this.slackId(chatId);
-    const ts = this.typingAnchorTs.get(chatId);
-    if (!ts) return;
 
-    try {
-      if (isTyping) {
-        await this.app.client.reactions.add({ channel, timestamp: ts, name: "eyes" });
-      } else {
-        await this.app.client.reactions.remove({ channel, timestamp: ts, name: "eyes" });
+    if (isTyping) {
+      if (this.typingMessageTs.has(chatId)) return;
+      try {
+        const result = await this.app.client.chat.postMessage({
+          channel, text: "_typing…_",
+        });
+        if (result.ts) this.typingMessageTs.set(chatId, result.ts as string);
+      } catch { /* best-effort */ }
+    } else {
+      // Delete placeholder if it wasn't consumed by sendMessage
+      const ts = this.typingMessageTs.get(chatId);
+      if (ts) {
+        this.typingMessageTs.delete(chatId);
+        try {
+          await this.app.client.chat.delete({ channel, ts });
+        } catch { /* already deleted */ }
       }
-    } catch { /* already added/removed, or no permission */ }
+    }
   }
 
   private slackId(chatId: string): string {
@@ -371,6 +396,10 @@ export class SlackChannel extends EventEmitter implements Channel {
       return name;
     } catch { return undefined; }
   }
+}
+
+function mrkdwnBlocks(text: string): KnownBlock[] {
+  return [{ type: "section", text: { type: "mrkdwn", text } }];
 }
 
 // Block Kit section.text has a 3000 char limit — the tightest Slack constraint.

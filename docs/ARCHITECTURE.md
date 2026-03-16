@@ -219,7 +219,7 @@ Both channels implement the same `Channel` interface but differ in platform spec
 | **Message limit** | 4096 chars | 3000 chars (Block Kit section.text is the binding constraint) |
 | **Splitting** | `splitMessage()` at 4096 | `splitMessage()` at 3000 |
 | **Rich formatting** | Markdown via `parse_mode` | Block Kit sections (mrkdwn) + plain `text` fallback |
-| **Typing indicator** | Native `sendChatAction("typing")` | 👀 reaction on last user message |
+| **Typing indicator** | Native `sendChatAction("typing")` | Posts italic "typing…" placeholder; persists through tool calls, consumed by first text response (`consumeTyping` flag) |
 | **Buttons** | Inline keyboard (callback queries) | Block Kit action buttons |
 | **Message handles** | `message_id` (number as string) | `ts` (timestamp string) |
 | **Topic/description** | `setDescription` (groups) | `setTopic` (channels), auto-deletes system messages |

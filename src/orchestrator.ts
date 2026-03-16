@@ -328,11 +328,11 @@ export class Orchestrator {
             try {
               await this.channel.editMessage(chatId, state.toolCallHandle, line);
             } catch {
-              const handles = await this.channel.sendMessage(chatId, line);
+              const handles = await this.channel.sendMessage(chatId, line, { consumeTyping: false });
               state.toolCallHandle = handles[0];
             }
           } else {
-            const handles = await this.channel.sendMessage(chatId, line);
+            const handles = await this.channel.sendMessage(chatId, line, { consumeTyping: false });
             state.toolCallHandle = handles[0];
           }
           break;
