@@ -103,6 +103,22 @@ export class SlackChannel extends EventEmitter implements Channel {
       if (resolve) resolve(triggerId);
     });
 
+    // Handle /cc slash command — emit as /<subcommand> so orchestrator handles it
+    this.app.command("/cc", async ({ command, ack }) => {
+      await ack();
+      const subcommand = command.text.trim();
+      if (!subcommand) return;
+      const chatId = `slack:${command.channel_id}`;
+      const userId = command.user_id;
+      if (!this.allowedUserIds.has(`slack:${userId}`)) return;
+      const userName = await this.resolveUserName(userId);
+      this.emit("message", {
+        chatId,
+        user: { id: `slack:${userId}`, name: userName ?? userId },
+        text: `/${subcommand}`,
+      });
+    });
+
     // Handle modal submissions from "Deny + Note" feedback
     this.app.view(/^ccv:/, async ({ view, ack }) => {
       await ack();
