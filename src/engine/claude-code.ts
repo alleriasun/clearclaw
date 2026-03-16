@@ -1,5 +1,6 @@
 import {
   query,
+  listSessions,
   type SDKAssistantMessage,
   type SDKRateLimitEvent,
   type SDKResultMessage,
@@ -18,11 +19,24 @@ import type {
   Engine,
   EngineEvent,
   RunTurnOpts,
+  SessionInfo,
   TurnStats,
 } from "../types.js";
 
 export class ClaudeCodeEngine implements Engine {
   name = "claude-code";
+
+  async listSessions(cwd: string): Promise<SessionInfo[]> {
+    const sessions = await listSessions({ dir: cwd, limit: 10 });
+    return sessions
+      .sort((a, b) => b.lastModified - a.lastModified)
+      .map((s) => ({
+        sessionId: s.sessionId,
+        summary: s.summary,
+        lastModified: s.lastModified,
+        gitBranch: s.gitBranch,
+      }));
+  }
 
   async *runTurn(opts: RunTurnOpts): AsyncIterable<EngineEvent> {
     const {

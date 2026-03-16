@@ -49,9 +49,17 @@ export interface SendMessageOpts {
 
 // --- Engine ---
 
+export interface SessionInfo {
+  sessionId: string;
+  summary: string;
+  lastModified: number;
+  gitBranch?: string;
+}
+
 export interface Engine {
   name: string;
   runTurn(opts: RunTurnOpts): AsyncIterable<EngineEvent>;
+  listSessions(cwd: string): Promise<SessionInfo[]>;
 }
 
 export interface RunTurnOpts {
