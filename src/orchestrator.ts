@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import log from "./logger.js";
 import { saveFile } from "./files.js";
-import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt } from "./format.js";
+import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, timeAgo } from "./format.js";
 import type { WorkspaceStore } from "./workspace-store.js";
 import type {
   Channel,
@@ -136,6 +136,62 @@ export class Orchestrator {
         await this.updateStatusMessage(msg.chatId, state);
         log.info("[cmd] session cleared for workspace %s", ws.name);
         await this.channel.sendMessage(msg.chatId, "Session cleared.");
+        return;
+      }
+
+      // /resume — switch to a previous session
+      if (msg.text === "/resume") {
+        if (state.busy) {
+          await this.channel.sendMessage(
+            msg.chatId,
+            "A turn is in progress. Wait for it to finish before switching sessions.",
+          );
+          return;
+        }
+        const ws = this.workspaceStore.byChat(msg.chatId);
+        if (!ws) {
+          await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
+          return;
+        }
+        const sessions = await this.engine.listSessions(ws.cwd);
+        if (sessions.length === 0) {
+          await this.channel.sendMessage(msg.chatId, "No sessions found for this workspace.");
+          return;
+        }
+        const MAX_BTN = 45;
+        // Strip ClearClaw's "[User (@handle)]: " prefix from SDK summaries
+        const stripped = sessions.map((s) => ({
+          ...s,
+          summary: s.summary.replace(/^\[.*?\]:\s*/, ""),
+        }));
+        // Build detailed list for message body
+        const listing = stripped.map((s, i) => {
+          const current = s.sessionId === ws.current_session_id ? " ✅" : "";
+          const meta = [timeAgo(s.lastModified), s.gitBranch].filter(Boolean).join(" · ");
+          return `${i + 1}. ${s.summary}${current}\n   ${meta}`;
+        }).join("\n");
+        // Concise button labels (single line)
+        const buttons = stripped.map((s, i) => {
+          const label = `${i + 1}. ${s.summary}`;
+          const truncated = label.length > MAX_BTN
+            ? label.slice(0, MAX_BTN - 1) + "…"
+            : label;
+          return [{ label: truncated, value: s.sessionId }];
+        });
+        const resp = await this.channel.sendInteractive(
+          msg.chatId,
+          `Pick a session to resume:\n\n${listing}`,
+          buttons,
+        );
+        if (resp.value) {
+          this.workspaceStore.setSession(ws.name, resp.value);
+          const picked = stripped.find((s) => s.sessionId === resp.value);
+          await this.channel.sendMessage(
+            msg.chatId,
+            `Resumed session: ${picked?.summary ?? resp.value}`,
+          );
+          log.info("[cmd] resumed session %s for workspace %s", resp.value, ws.name);
+        }
         return;
       }
 
