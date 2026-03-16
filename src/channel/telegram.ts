@@ -16,6 +16,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
   private botToken: string;
   private allowedUserIds: Set<string>;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
+  private statusHandles = new Map<string, string>(); // chatId → message handle for pinned status
 
   // Pending interactive responses: callbackId → resolve function
   private pendingCallbacks = new Map<
@@ -113,6 +114,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
       clearInterval(interval);
     }
     this.typingIntervals.clear();
+    this.statusHandles.clear();
     await this.bot.stop();
   }
 
@@ -258,6 +260,36 @@ export class TelegramChannel extends EventEmitter implements Channel {
   async unpinAllMessages(chatId: string): Promise<void> {
     const numId = this.numericId(chatId);
     await this.bot.api.unpinAllChatMessages(numId);
+  }
+
+  async updateStatus(chatId: string, text: string): Promise<void> {
+    const existing = this.statusHandles.get(chatId);
+    if (existing) {
+      try {
+        await this.editMessage(chatId, existing, text);
+        return;
+      } catch (err) {
+        if (!(err instanceof Error && err.message.includes("message is not modified"))) {
+          // Edit failed for a real reason — fall through to create new
+          log.warn("[channel] failed to edit status message, will recreate: %s",
+            err instanceof Error ? err.message : String(err));
+          this.statusHandles.delete(chatId);
+        } else {
+          return; // text unchanged, nothing to do
+        }
+      }
+    }
+    // No existing handle, or edit failed — create new pinned message
+    try { await this.unpinAllMessages(chatId); } catch { /* not admin */ }
+    const handles = await this.sendMessage(chatId, text);
+    const handle = handles[0];
+    this.statusHandles.set(chatId, handle);
+    try {
+      await this.pinMessage(chatId, handle);
+    } catch (err) {
+      log.warn("[channel] failed to pin status message (bot may not be admin): %s",
+        err instanceof Error ? err.message : String(err));
+    }
   }
 
   async setTyping(

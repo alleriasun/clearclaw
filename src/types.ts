@@ -25,6 +25,7 @@ export interface Channel {
   deleteMessage(chatId: string, handle: string): Promise<void>;
   pinMessage(chatId: string, handle: string): Promise<void>;
   unpinAllMessages(chatId: string): Promise<void>;
+  updateStatus(chatId: string, text: string): Promise<void>;
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;

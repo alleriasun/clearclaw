@@ -26,8 +26,8 @@ interface ChatState {
   busy: boolean;
   abort: AbortController | null;
   permissionMode: PermissionMode | null; // null = use config default
-  statusHandle: string | null; // pinned status message handle
   stats: TurnStats | null;
+  lastStatusText: string | null; // dedup: skip updateStatus when text unchanged
   // Rolling tool message: each tool_use replaces this single message's content
   toolCallHandle: string | null;
 }
@@ -61,7 +61,7 @@ export class Orchestrator {
     let s = this.chats.get(chatId);
     if (!s) {
       s = {
-        busy: false, abort: null, permissionMode: null, statusHandle: null, stats: null,
+        busy: false, abort: null, permissionMode: null, stats: null, lastStatusText: null,
         toolCallHandle: null,
       };
       this.chats.set(chatId, s);
@@ -337,47 +337,19 @@ export class Orchestrator {
     const mode = state.permissionMode ?? this.permissionMode;
     const modeLabel = MODE_OPTIONS.find((o) => o.value === mode)?.label ?? mode;
 
-    const parts: string[] = [];
-
+    let text: string;
     if (state.stats) {
       const pct = state.stats.contextWindow > 0
         ? Math.round((state.stats.contextUsed / state.stats.contextWindow) * 100)
         : 0;
-      parts.push(`🤖 ${formatModelName(state.stats.model)} ${pct}% | 🔒 ${modeLabel}`);
+      text = `🤖 ${formatModelName(state.stats.model)} ${pct}% | 🔒 ${modeLabel}`;
     } else {
-      parts.push(`🔒 ${modeLabel}`);
+      text = `🔒 ${modeLabel}`;
     }
 
-    const text = parts.join("\n");
-    if (state.statusHandle) {
-      try {
-        await this.channel.editMessage(chatId, state.statusHandle, text);
-      } catch (err) {
-        if (!(err instanceof Error && err.message.includes("message is not modified"))) throw err;
-      }
-    } else {
-      // Clear stale pins from previous server runs
-      try { await this.channel.unpinAllMessages(chatId); } catch { /* not admin */ }
-      const handles = await this.channel.sendMessage(chatId, text);
-      state.statusHandle = handles[0];
-      try {
-        await this.channel.pinMessage(chatId, state.statusHandle);
-      } catch (err) {
-        log.warn("[cmd] failed to pin status message (bot may not be admin): %s",
-          err instanceof Error ? err.message : String(err));
-      }
-    }
-  }
-
-  private async clearStatusMessage(chatId: string, state: ChatState): Promise<void> {
-    if (!state.statusHandle) return;
-    try {
-      await this.channel.deleteMessage(chatId, state.statusHandle);
-    } catch (err) {
-      log.warn("[cmd] failed to delete status message: %s",
-        err instanceof Error ? err.message : String(err));
-    }
-    state.statusHandle = null;
+    if (text === state.lastStatusText) return;
+    await this.channel.updateStatus(chatId, text);
+    state.lastStatusText = text;
   }
 
   /** Read default workspace CLAUDE.md to append to non-default workspace sessions. */
