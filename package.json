@@ -1,6 +1,6 @@
 {
   "name": "clearclaw",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Your coding agent, from your phone — personal assistant + project workspaces on your machine, built on the CLI's permissions, config, and memory instead of replacing them.",
   "type": "module",
   "license": "MIT",
