@@ -38,8 +38,15 @@ export interface PendingPairing {
 
 // --- Internal file structure ---
 
+export interface EngineEntry {
+  name: string;                          // engine identifier (e.g. "claude-code", "kiro")
+  default?: boolean;
+  path: string;                          // resolved executable path
+}
+
 interface ConfigData {
   channel?: ChannelConfig;
+  engines?: EngineEntry[];
   authorizedUsers: AuthorizedUser[];
   pendingPairings: PendingPairing[];
   workspaces: Workspace[];
@@ -76,6 +83,8 @@ export function resolveDataDir(): string {
 export class Config {
   // Resolved settings — populated by resolve()
   channel?: ChannelConfig;
+  engines!: Record<string, EngineEntry>;
+  defaultEngine!: string;               // derived: name of the engine with default: true
   permissionMode: PermissionMode = "default";
   private envUserIds = new Set<string>();
 
@@ -134,6 +143,17 @@ export class Config {
     }
     this.permissionMode = pm;
 
+    const data = this.read();
+    if (!data.engines?.length) {
+      throw new Error("No engines configured. Run `clearclaw setup`.");
+    }
+    this.engines = Object.fromEntries(data.engines.map((e) => [e.name, e]));
+    const defaultEntry = data.engines.find((e) => e.default);
+    if (!defaultEntry) {
+      throw new Error("No default engine configured. Run `clearclaw setup`.");
+    }
+    this.defaultEngine = defaultEntry.name;
+
     return this;
   }
 
@@ -153,6 +173,7 @@ export class Config {
     return {
       ...raw,
       channel: raw.channel as ChannelConfig | undefined,
+      engines: raw.engines as EngineEntry[] | undefined,
       authorizedUsers: (raw.authorizedUsers ?? []) as AuthorizedUser[],
       pendingPairings: (raw.pendingPairings ?? []) as PendingPairing[],
       workspaces: (raw.workspaces ?? []) as Workspace[],
@@ -172,6 +193,14 @@ export class Config {
   setChannel(config: ChannelConfig): void {
     const data = this.read();
     data.channel = config;
+    this.write(data);
+  }
+
+  // --- Engines ---
+
+  setEngines(engines: EngineEntry[]): void {
+    const data = this.read();
+    data.engines = engines;
     this.write(data);
   }
 

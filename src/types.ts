@@ -101,7 +101,7 @@ export interface PermissionResponse {
 }
 
 export interface TurnStats {
-  model: string;           // e.g. "claude-opus-4-6"
+  model: string | null;    // e.g. "claude-opus-4-6", null for ACP engines
   contextUsed: number;     // input tokens of last API call (≈ context fill)
   contextWindow: number;   // max context window size
   toolCalls: Record<string, number>; // tool name → call count for this turn
@@ -123,6 +123,7 @@ export interface Workspace {
   chat_id: string;
   current_session_id: string | null;
   behavior?: "assistant" | "relay";
+  engine?: string;         // "claude-code" (default) | "kiro" | other ACP agent
 }
 
 // --- User identity (populated by channel from platform data) ---

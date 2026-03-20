@@ -21,7 +21,7 @@ import type {
 
 export interface OrchestratorOpts {
   channel: Channel;
-  engine: Engine;
+  engines: Map<string, Engine>;
   config: Config;
 }
 
@@ -34,6 +34,7 @@ interface ChatState {
   // Rolling tool message: each tool_use replaces this single message's content
   toolCallHandle: string | null;
   todoHandle: string | null;
+  engineName: string | null; // engine name for status display when model is null
   // Per-chat message queue: relay drains immediately, assistant debounces
   messageQueue: InboundMessage[];
   debounceTimer: ReturnType<typeof setTimeout> | null;
@@ -61,14 +62,14 @@ const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
 
 export class Orchestrator {
   private channel: Channel;
-  private engine: Engine;
+  private engines: Map<string, Engine>;
   private config: Config;
   private chats = new Map<string, ChatState>();
   private tasks = new Map<string, TaskState>();
 
   constructor(opts: OrchestratorOpts) {
     this.channel = opts.channel;
-    this.engine = opts.engine;
+    this.engines = opts.engines;
     this.config = opts.config;
   }
 
@@ -77,12 +78,21 @@ export class Orchestrator {
     if (!s) {
       s = {
         busy: false, abort: null, permissionMode: null, stats: null, lastStatusText: null,
-        toolCallHandle: null, todoHandle: null,
+        toolCallHandle: null, todoHandle: null, engineName: null,
         messageQueue: [], debounceTimer: null,
       };
       this.chats.set(chatId, s);
     }
     return s;
+  }
+
+  private engineFor(ws: Workspace): Engine {
+    const name = ws.engine ?? this.config.defaultEngine;
+    const engine = this.engines.get(name);
+    if (!engine) {
+      throw new Error(`Unknown engine "${name}" configured for workspace "${ws.name}". Available: ${[...this.engines.keys()].join(", ")}`);
+    }
+    return engine;
   }
 
   async start(): Promise<void> {
@@ -223,8 +233,11 @@ export class Orchestrator {
       tools: this.buildMcpTools(chatId, behavior, turnState),
     });
 
+    const engine = ws ? this.engineFor(ws) : this.engines.get(this.config.defaultEngine)!;
+    state.engineName = engine.name;
+
     try {
-      for await (const event of this.engine.runTurn({
+      for await (const event of engine.runTurn({
         sessionId,
         cwd,
         prompt,
@@ -360,7 +373,7 @@ export class Orchestrator {
           await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
           return;
         }
-        const sessions = await this.engine.listSessions(ws.cwd);
+        const sessions = await this.engineFor(ws).listSessions(ws.cwd);
         if (sessions.length === 0) {
           await this.channel.sendMessage(msg.chatId, "No sessions found for this workspace.");
           return;
@@ -689,7 +702,10 @@ export class Orchestrator {
       const pct = state.stats.contextWindow > 0
         ? Math.round((state.stats.contextUsed / state.stats.contextWindow) * 100)
         : 0;
-      text = `🤖 ${formatModelName(state.stats.model)} ${pct}% | 🔒 ${modeLabel}`;
+      const displayName = state.stats.model
+        ? formatModelName(state.stats.model)
+        : state.engineName ?? "agent";
+      text = `🤖 ${displayName} ${pct}% | 🔒 ${modeLabel}`;
     } else {
       text = `🔒 ${modeLabel}`;
     }
