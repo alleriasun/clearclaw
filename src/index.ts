@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
 import readline from "node:readline";
 import { Config } from "./config.js";
 import type { ChannelConfig } from "./config.js";
 import log, { initLogger } from "./logger.js";
-import { ClaudeCodeEngine } from "./engine/claude-code.js";
+import { createEngineMap, ENGINE_NAMES, engineCommand } from "./engine/registry.js";
 import { TelegramChannel } from "./channel/telegram.js";
 import { SlackChannel } from "./channel/slack.js";
 import { Orchestrator } from "./orchestrator.js";
@@ -51,7 +52,10 @@ async function runDaemon(): Promise<void> {
 
   const channel = createChannel(config.channel!, (userId) => config.isAuthorized(userId), onUnauthorizedDM);
 
-  await new Orchestrator({ channel, engine: new ClaudeCodeEngine(), config }).start();
+  const enginePaths = Object.fromEntries(
+    Object.entries(config.engines).map(([name, entry]) => [name, entry.path]),
+  );
+  await new Orchestrator({ channel, engines: createEngineMap(enginePaths), config }).start();
 }
 
 async function runApprove(args: string[]): Promise<void> {
@@ -102,8 +106,37 @@ async function runSetup(): Promise<void> {
       channelConfig = { type: "telegram", botToken };
     }
 
+    let engineName: string;
+    const engineList = ENGINE_NAMES.join("/");
+    while (true) {
+      engineName = (await ask(`Default engine [${engineList}]: `)).trim().toLowerCase();
+      if (!ENGINE_NAMES.includes(engineName as typeof ENGINE_NAMES[number])) {
+        console.log(`  Please enter one of: ${engineList}`);
+        continue;
+      }
+      const cmd = engineCommand(engineName);
+      if (cmd) {
+        try {
+          execFileSync("which", [cmd], { stdio: "ignore" });
+        } catch {
+          console.log(`  "${cmd}" not found on PATH. Install it first or choose another engine.`);
+          continue;
+        }
+      }
+      break;
+    }
+
+    // Resolve executable path for the chosen engine
+    const cmd = engineCommand(engineName);
+    const resolvedPath = cmd
+      ? execFileSync("which", [cmd], { encoding: "utf-8" }).trim()
+      : engineName; // SDK-based engines don't have a standalone binary
+
     const config = new Config();
     config.setChannel(channelConfig);
+    config.setEngines([
+      { name: engineName, default: true, path: resolvedPath },
+    ]);
     console.log("Saved to ~/.clearclaw/config.json\n");
     config.resolve();
 

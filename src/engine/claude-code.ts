@@ -26,6 +26,8 @@ import type {
 export class ClaudeCodeEngine implements Engine {
   name = "claude-code";
 
+  constructor(private readonly executablePath?: string) {}
+
   async listSessions(cwd: string): Promise<SessionInfo[]> {
     const sessions = await listSessions({ dir: cwd, limit: 10 });
     return sessions
@@ -112,6 +114,7 @@ export class ClaudeCodeEngine implements Engine {
         ...sessionOpts,
         cwd,
         permissionMode,
+        ...(this.executablePath ? { pathToClaudeCodeExecutable: this.executablePath } : {}),
         allowDangerouslySkipPermissions:
           permissionMode === "bypassPermissions" ? true : undefined,
         canUseTool: permissionMode === "bypassPermissions" ? undefined : canUseTool,
