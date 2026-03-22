@@ -18,7 +18,7 @@ export function initLogger(logPath: string): void {
             file: logPath,
             frequency: "daily",
             size: "10m",
-            limit: { count: 5 },
+            limit: { count: 5, removeOtherLogFiles: true },
           },
           level: process.env.LOG_LEVEL ?? "info",
         },
