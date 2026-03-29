@@ -4,7 +4,8 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import log from "./logger.js";
 import { saveFile } from "./files.js";
-import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, timeAgo } from "./format.js";
+import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
+import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
 import type { WorkspaceStore } from "./workspace-store.js";
 import type {
   Channel,
@@ -32,6 +33,7 @@ interface ChatState {
   lastStatusText: string | null; // dedup: skip updateStatus when text unchanged
   // Rolling tool message: each tool_use replaces this single message's content
   toolCallHandle: string | null;
+  todoHandle: string | null;
 }
 
 const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
@@ -64,7 +66,7 @@ export class Orchestrator {
     if (!s) {
       s = {
         busy: false, abort: null, permissionMode: null, stats: null, lastStatusText: null,
-        toolCallHandle: null,
+        toolCallHandle: null, todoHandle: null,
       };
       this.chats.set(chatId, s);
     }
@@ -291,6 +293,31 @@ export class Orchestrator {
               return { decision: "allow" };
             }
             log.info(`[perm] ${req.toolName}`);
+
+            // Custom tool handler — replaces default Allow/Deny prompt
+            const handler = permissionHandlers.get(req.toolName);
+            if (handler) {
+              const result = handler(req.input, req.description);
+              if (result === null) {
+                // null = auto-allow (e.g. EnterPlanMode)
+                log.info(`[perm] ${req.toolName} → auto-allow (handler)`);
+                await this.channel.sendMessage(msg.chatId, "📋 Entering plan mode");
+                return { decision: "allow" };
+              }
+              try {
+                const resp = await this.channel.sendInteractive(msg.chatId, result.text, result.buttons);
+                log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
+                return result.mapResponse(resp);
+              } catch (err) {
+                log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", req.toolName);
+                return {
+                  decision: "deny" as const,
+                  message: "Permission prompt could not be delivered to chat — denied automatically.",
+                };
+              }
+            }
+
+            // Default: generic Allow/Deny prompt
             try {
               const promptText = formatPermissionPrompt(req.toolName, req.input, req.description);
               const resp = await this.channel.sendInteractive(
@@ -350,6 +377,26 @@ export class Orchestrator {
           break;
 
         case "tool_use": {
+          // TodoWrite: render task list as a rolling message
+          if (event.toolName === "TodoWrite") {
+            const text = formatTodoList(event.input);
+            if (state.todoHandle) {
+              try {
+                await this.channel.editMessage(chatId, state.todoHandle, text);
+              } catch {
+                const handles = await this.channel.sendMessage(chatId, text, { consumeTyping: false });
+                state.todoHandle = handles[0];
+              }
+            } else {
+              const handles = await this.channel.sendMessage(chatId, text, { consumeTyping: false });
+              state.todoHandle = handles[0];
+            }
+            break;
+          }
+
+          // Suppress rolling status for tools with custom permission/display handlers
+          if (displayHandledTools.has(event.toolName)) break;
+
           // Rolling message: each tool_use replaces the single message's content
           const line = formatToolStatusLine(event.toolName, event.input);
           if (state.toolCallHandle) {
@@ -398,6 +445,7 @@ export class Orchestrator {
             }
           }
           state.toolCallHandle = null;
+          state.todoHandle = null;
           await this.updateStatusMessage(chatId, state);
           break;
         }
