@@ -1,4 +1,4 @@
-import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { McpServerConfig, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 
 // --- Channel ---
 
@@ -27,6 +27,7 @@ export interface Channel {
   unpinAllMessages(chatId: string): Promise<void>;
   updateStatus(chatId: string, text: string): Promise<void>;
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
+  sendFile(chatId: string, buffer: Buffer, filename: string, opts?: SendFileOpts): Promise<void>;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   emit<K extends keyof ChannelEvents>(event: K, ...args: ChannelEvents[K]): boolean;
@@ -47,6 +48,11 @@ export interface SendMessageOpts {
   parseMode?: "MarkdownV2" | "HTML";
   /** When false, skip consuming the typing placeholder (e.g. for tool status messages). */
   consumeTyping?: boolean;
+}
+
+export interface SendFileOpts {
+  caption?: string;
+  mimeType?: string;
 }
 
 // --- Engine ---
@@ -74,6 +80,7 @@ export interface RunTurnOpts {
     req: PermissionRequest,
   ) => Promise<PermissionResponse>;
   appendSystemPrompt?: string;
+  mcpServers?: Record<string, McpServerConfig>;
   signal?: AbortSignal;
 }
 

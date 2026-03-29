@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 import log from "./logger.js";
 import { saveFile } from "./files.js";
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, timeAgo } from "./format.js";
@@ -252,6 +254,26 @@ export class Orchestrator {
         if (saved > 0) log.info("[turn] saved %d/%d attachment(s) for workspace %s", saved, msg.attachments.length, ws.name);
       }
 
+      const mcpServer = createSdkMcpServer({
+        name: "clearclaw",
+        tools: [
+          tool("send_file", "Send a file or image to the current chat conversation", {
+            file_path: z.string().optional().describe("Absolute path to the file to send"),
+            data: z.string().optional().describe("Base64-encoded file data (alternative to file_path)"),
+            filename: z.string().optional().describe("Filename (required when using data, optional with file_path)"),
+            caption: z.string().optional().describe("Optional caption to accompany the file"),
+          }, async (args) => {
+            if (!args.file_path && !args.data) throw new Error("Either file_path or data must be provided");
+            const buffer = args.file_path
+              ? await fs.promises.readFile(args.file_path)
+              : Buffer.from(args.data!, "base64");
+            const name = args.filename ?? path.basename(args.file_path ?? "file");
+            await this.channel.sendFile(msg.chatId, buffer, name, { caption: args.caption });
+            return { content: [{ type: "text" as const, text: `Sent ${name} to chat` }] };
+          }),
+        ],
+      });
+
       try {
         for await (const event of this.engine.runTurn({
           sessionId: ws.current_session_id,
@@ -260,8 +282,14 @@ export class Orchestrator {
           attachments: msg.attachments,
           permissionMode: state.permissionMode ?? this.permissionMode,
           appendSystemPrompt,
+          mcpServers: { clearclaw: mcpServer },
           signal: abort.signal,
           onPermissionRequest: async (req) => {
+            // Auto-allow ClearClaw's own MCP tools — no chat prompt needed
+            if (req.toolName.startsWith("mcp__clearclaw__")) {
+              log.info(`[perm] ${req.toolName} → auto-allow`);
+              return { decision: "allow" };
+            }
             log.info(`[perm] ${req.toolName}`);
             try {
               const promptText = formatPermissionPrompt(req.toolName, req.input, req.description);

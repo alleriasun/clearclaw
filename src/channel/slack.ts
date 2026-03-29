@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
 import log from "../logger.js";
-import type { Attachment, Channel, Button, ButtonResponse, SendMessageOpts } from "../types.js";
+import type { Attachment, Channel, Button, ButtonResponse, SendFileOpts, SendMessageOpts } from "../types.js";
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
@@ -371,6 +371,16 @@ export class SlackChannel extends EventEmitter implements Channel {
         } catch { /* already deleted */ }
       }
     }
+  }
+
+  async sendFile(chatId: string, buffer: Buffer, filename: string, opts?: SendFileOpts): Promise<void> {
+    const channel = this.slackId(chatId);
+    await this.app.client.files.uploadV2({
+      channel_id: channel,
+      file: buffer,
+      filename,
+      initial_comment: opts?.caption,
+    });
   }
 
   private slackId(chatId: string): string {
