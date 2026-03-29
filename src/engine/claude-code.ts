@@ -82,7 +82,7 @@ export class ClaudeCodeEngine implements Engine {
         toolUseId: options.toolUseID,
       });
       if (resp.decision === "allow") {
-        return { behavior: "allow", updatedInput: input };
+        return { behavior: "allow", updatedInput: resp.updatedInput ?? input };
       }
       const denyMessage = resp.message
         ? `User denied this action with feedback: ${resp.message}`

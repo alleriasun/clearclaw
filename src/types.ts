@@ -95,6 +95,7 @@ export interface PermissionRequest {
 export interface PermissionResponse {
   decision: "allow" | "deny";
   message?: string; // optional feedback on deny (skips abort, lets model adjust)
+  updatedInput?: Record<string, unknown>;
 }
 
 export interface TurnStats {
