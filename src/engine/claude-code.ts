@@ -47,6 +47,7 @@ export class ClaudeCodeEngine implements Engine {
       permissionMode,
       onPermissionRequest,
       appendSystemPrompt,
+      mcpServers,
       signal,
     } = opts;
 
@@ -114,6 +115,7 @@ export class ClaudeCodeEngine implements Engine {
         canUseTool,
         abortController,
         settingSources: ["user", "project", "local"],
+        ...(mcpServers ? { mcpServers } : {}),
         ...(appendSystemPrompt
           ? {
               systemPrompt: {

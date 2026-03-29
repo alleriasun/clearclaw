@@ -1,11 +1,13 @@
 import { EventEmitter } from "node:events";
-import { Bot, type Context, InlineKeyboard } from "grammy";
+import { Bot, type Context, InlineKeyboard, InputFile } from "grammy";
+import mime from "mime";
 import log from "../logger.js";
 import type {
   Attachment,
   Channel,
   Button,
   ButtonResponse,
+  SendFileOpts,
   SendMessageOpts,
 } from "../types.js";
 
@@ -56,13 +58,13 @@ export class TelegramChannel extends EventEmitter implements Channel {
     this.bot.on("message:photo", async (ctx) => {
       const photo = ctx.message.photo;
       const largest = photo[photo.length - 1];
-      await this.handleMediaMessage(ctx, largest.file_id, "image/jpeg", undefined, ctx.message.caption);
+      await this.handleFileMessage(ctx, largest.file_id, "image/jpeg", undefined, ctx.message.caption);
     });
 
     // Documents: download with original MIME + filename
     this.bot.on("message:document", async (ctx) => {
       const doc = ctx.message.document;
-      await this.handleMediaMessage(
+      await this.handleFileMessage(
         ctx, doc.file_id,
         doc.mime_type ?? "application/octet-stream",
         doc.file_name,
@@ -330,7 +332,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
   }
 
   /** Shared handler for photo/document messages: download, emit attachment or fallback. */
-  private async handleMediaMessage(
+  private async handleFileMessage(
     ctx: Context,
     fileId: string,
     mimeType: string,
@@ -354,6 +356,23 @@ export class TelegramChannel extends EventEmitter implements Channel {
           ? `${caption}\n[File download failed: ${filename ?? mimeType}]`
           : `[File download failed: ${filename ?? mimeType}]`,
       });
+    }
+  }
+
+  async sendFile(chatId: string, buffer: Buffer, filename: string, opts?: SendFileOpts): Promise<void> {
+    const id = this.numericId(chatId);
+    const mimeType = opts?.mimeType ?? mime.getType(filename) ?? "application/octet-stream";
+    const file = new InputFile(buffer, filename);
+    const caption = opts?.caption;
+
+    if (mimeType.startsWith("image/")) {
+      await this.bot.api.sendPhoto(id, file, { caption });
+    } else if (mimeType.startsWith("video/")) {
+      await this.bot.api.sendVideo(id, file, { caption });
+    } else if (mimeType.startsWith("audio/")) {
+      await this.bot.api.sendAudio(id, file, { caption });
+    } else {
+      await this.bot.api.sendDocument(id, file, { caption });
     }
   }
 

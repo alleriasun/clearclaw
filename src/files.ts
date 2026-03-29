@@ -1,18 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import mime from "mime";
 import path from "node:path";
 import type { Attachment } from "./types.js";
-
-/** Map common MIME types to file extensions. */
-const MIME_TO_EXT: Record<string, string> = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/gif": ".gif",
-  "image/webp": ".webp",
-  "application/pdf": ".pdf",
-  "text/plain": ".txt",
-  "text/csv": ".csv",
-};
 
 /** Save an attachment to disk for audit logging. Returns the saved file path. */
 export async function saveFile(
@@ -24,7 +14,7 @@ export async function saveFile(
   const hex = crypto.randomBytes(2).toString("hex");
   const name = att.filename
     ? sanitizeFilename(att.filename)
-    : `file${MIME_TO_EXT[att.mimeType] ?? ""}`;
+    : `file${att.mimeType ? `.${mime.getExtension(att.mimeType) ?? "bin"}` : ""}`;
   const filename = `${workspace}-${epoch}-${hex}-${name}`;
   const filePath = path.join(filesPath, filename);
 
