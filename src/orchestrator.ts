@@ -394,6 +394,12 @@ export class Orchestrator {
             break;
           }
 
+          // EnterPlanMode: SDK auto-allows without calling canUseTool, so notify here
+          if (event.toolName === "EnterPlanMode") {
+            await this.channel.sendMessage(chatId, "📋 Planning");
+            break;
+          }
+
           // Suppress rolling status for tools with custom permission/display handlers
           if (displayHandledTools.has(event.toolName)) break;
 

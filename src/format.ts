@@ -210,8 +210,7 @@ export function formatExitPlanMode(
   input: Record<string, unknown>,
   description: string,
 ): string {
-  const plan = description
-    || (typeof input.plan === "string" ? input.plan : null)
+  const plan = (typeof input.plan === "string" ? input.plan : null)
     || JSON.stringify(input, null, 2);
   const lines = plan.split("\n");
   const body = truncateLines(lines, MAX_LINES);

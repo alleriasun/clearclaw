@@ -72,8 +72,8 @@ function handleExitPlanMode(
     text,
     buttons: [
       [
-        { label: "✅ Approve", value: "approve" },
-        { label: "❌ Reject", value: "reject" },
+        { label: "👍 Approve", value: "approve" },
+        { label: "👎 Reject", value: "reject" },
       ],
       [
         { label: "📝 Reject + Note", value: "reject", requestText: true },
@@ -91,16 +91,11 @@ function handleExitPlanMode(
   };
 }
 
-function handleEnterPlanMode(): ToolPromptResult | null {
-  return null; // signal: auto-allow
-}
-
 // --- Exported maps ---
 
 export const permissionHandlers = new Map<string, ToolPromptHandler>([
   ["AskUserQuestion", handleAskUserQuestion],
   ["ExitPlanMode", handleExitPlanMode],
-  ["EnterPlanMode", handleEnterPlanMode],
 ]);
 
 /** Tools that suppress the default rolling status line in routeEngineEvent. */
