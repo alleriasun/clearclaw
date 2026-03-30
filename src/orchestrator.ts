@@ -13,6 +13,7 @@ import type {
   EngineEvent,
   InboundMessage,
   PermissionMode,
+  ReplyContext,
   TurnStats,
 } from "./types.js";
 
@@ -240,9 +241,11 @@ export class Orchestrator {
       const isDefaultWorkspace = ws.cwd === path.dirname(this.defaultPromptPath);
       const appendSystemPrompt = isDefaultWorkspace ? undefined : this.readDefaultPrompt();
 
-      // In group workspaces, prepend sender identity so the engine knows who's talking
+      // Prepend sender identity and reply context so the engine knows who's talking and what they're responding to
       const sender = msg.user.handle ? `${msg.user.name} (@${msg.user.handle})` : msg.user.name;
-      const prompt = isDefaultWorkspace ? msg.text : `[${sender}]: ${msg.text}`;
+      const msgIdTag = msg.messageId ? ` (msg:${msg.messageId})` : "";
+      const replyLine = formatReplyLine(msg.replyTo);
+      const prompt = `${replyLine}[${sender}${msgIdTag}]: ${msg.text}`;
 
       // Save attachments to disk for the audit log (failures must not block the turn)
       if (msg.attachments?.length) {
@@ -504,4 +507,15 @@ export class Orchestrator {
 /** Strip "claude-" prefix and date suffix from model ID. e.g. "claude-opus-4-6-20250514" → "opus-4-6" */
 function formatModelName(modelId: string): string {
   return modelId.replace(/^claude-/, "").replace(/-\d{8}$/, "");
+}
+
+/** Format reply context as a bracketed prefix line for the LLM prompt. */
+function formatReplyLine(replyTo?: ReplyContext): string {
+  if (!replyTo) return "";
+  const parts: string[] = [];
+  if (replyTo.senderName) parts.push(replyTo.senderName);
+  parts.push(`msg:${replyTo.messageId}`);
+  if (replyTo.mediaType) parts.push(`[${replyTo.mediaType}]`);
+  if (replyTo.text) parts.push(`"${replyTo.text}"`);
+  return `[Replying to ${parts.join(" ")}]\n`;
 }
