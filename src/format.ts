@@ -159,6 +159,86 @@ export function timeAgo(epochMs: number): string {
   return `${days}d ago`;
 }
 
+const MAX_BTN = 45;
+
+interface AskUserQuestionOption {
+  label: string;
+  description: string;
+}
+
+interface AskUserQuestionInput {
+  questions: {
+    question: string;
+    header: string;
+    options: AskUserQuestionOption[];
+    multiSelect: boolean;
+  }[];
+}
+
+/**
+ * Format the first question from an AskUserQuestion tool call.
+ * Returns { text, options } where options are the parsed option objects.
+ */
+export function formatAskUserQuestion(input: Record<string, unknown>): {
+  text: string;
+  options: AskUserQuestionOption[];
+} {
+  const { questions } = input as unknown as AskUserQuestionInput;
+  const q = questions[0];
+  const lines = [`❓ ${q.header}`, q.question, ""];
+  for (let i = 0; i < q.options.length; i++) {
+    const opt = q.options[i];
+    lines.push(`${i + 1}. ${opt.label} — ${opt.description}`);
+  }
+  return { text: lines.join("\n"), options: q.options };
+}
+
+/**
+ * Truncate a button label to MAX_BTN chars with number prefix.
+ */
+export function truncateButtonLabel(index: number, label: string): string {
+  const full = `${index + 1}. ${label}`;
+  if (full.length <= MAX_BTN) return full;
+  return `${full.slice(0, MAX_BTN - 1)}…`;
+}
+
+/**
+ * Format an ExitPlanMode permission prompt.
+ * Renders plan text from the description or input fields.
+ */
+export function formatExitPlanMode(
+  input: Record<string, unknown>,
+  description: string,
+): string {
+  const plan = (typeof input.plan === "string" ? input.plan : null)
+    || JSON.stringify(input, null, 2);
+  const lines = plan.split("\n");
+  const body = truncateLines(lines, MAX_LINES);
+  return `📋 Plan Review\n\n${body}`;
+}
+
+interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm: string;
+}
+
+/**
+ * Format a TodoWrite task list for display.
+ */
+export function formatTodoList(input: Record<string, unknown>): string {
+  const todos = (input.todos ?? []) as TodoItem[];
+  if (todos.length === 0) return "📋 Tasks\n(empty)";
+  const lines = todos.map((t) => {
+    switch (t.status) {
+      case "completed": return `✅ ${t.content}`;
+      case "in_progress": return `⏳ ${t.activeForm}`;
+      default: return `⬚ ${t.content}`;
+    }
+  });
+  return `📋 Tasks\n${lines.join("\n")}`;
+}
+
 function truncateLines(lines: string[], max: number): string {
   if (lines.length <= max) {
     return lines.join("\n");
