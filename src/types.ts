@@ -141,10 +141,20 @@ export interface Attachment {
 
 // --- Inbound message (from channel to orchestrator) ---
 
+/** Context from a replied-to / quoted message. */
+export interface ReplyContext {
+  messageId: string;
+  senderName?: string;
+  text?: string;
+  mediaType?: string;
+}
+
 export interface InboundMessage {
   chatId: string;
   user: UserInfo;
   text: string;
+  messageId?: string;
+  replyTo?: ReplyContext;
   attachments?: Attachment[];
 }
 
