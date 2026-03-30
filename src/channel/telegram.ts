@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { Bot, type Context, InlineKeyboard, InputFile } from "grammy";
+import type { Message } from "@grammyjs/types";
 import mime from "mime";
 import log from "../logger.js";
 import type {
@@ -7,6 +8,7 @@ import type {
   Channel,
   Button,
   ButtonResponse,
+  ReplyContext,
   SendFileOpts,
   SendMessageOpts,
 } from "../types.js";
@@ -49,7 +51,12 @@ export class TelegramChannel extends EventEmitter implements Channel {
         return;
       }
 
-      this.emit("message", { ...sender, text: ctx.message.text });
+      this.emit("message", {
+        ...sender,
+        text: ctx.message.text,
+        messageId: String(ctx.message.message_id),
+        replyTo: this.extractReplyContext(ctx.message),
+      });
     });
 
     // Photos: Telegram sends each photo as an array of PhotoSize objects
@@ -82,7 +89,12 @@ export class TelegramChannel extends EventEmitter implements Channel {
       this.bot.on(filter, (ctx) => {
         const sender = this.extractSender(ctx);
         if (!sender) return;
-        this.emit("message", { ...sender, text: `[${label} — not supported]` });
+        this.emit("message", {
+          ...sender,
+          text: `[${label} — not supported]`,
+          messageId: ctx.message ? String(ctx.message.message_id) : undefined,
+          replyTo: ctx.message ? this.extractReplyContext(ctx.message) : undefined,
+        });
       });
     }
 
@@ -331,6 +343,32 @@ export class TelegramChannel extends EventEmitter implements Channel {
     };
   }
 
+  /** Extract reply context from a Telegram message, if it's a reply. */
+  private extractReplyContext(msg: Message): ReplyContext | undefined {
+    const reply = msg.reply_to_message;
+    if (!reply) return undefined;
+
+    const mediaType = reply.photo ? "photo"
+      : reply.document ? "document"
+      : reply.video ? "video"
+      : reply.voice ? "voice"
+      : reply.audio ? "audio"
+      : reply.sticker ? "sticker"
+      : reply.animation ? "animation"
+      : undefined;
+
+    const senderName = reply.from
+      ? [reply.from.first_name, reply.from.last_name].filter(Boolean).join(" ")
+      : undefined;
+
+    return {
+      messageId: String(reply.message_id),
+      senderName,
+      text: reply.text ?? reply.caption,
+      mediaType,
+    };
+  }
+
   /** Shared handler for photo/document messages: download, emit attachment or fallback. */
   private async handleFileMessage(
     ctx: Context,
@@ -341,11 +379,15 @@ export class TelegramChannel extends EventEmitter implements Channel {
   ): Promise<void> {
     const sender = this.extractSender(ctx);
     if (!sender) return;
+    const messageId = ctx.message ? String(ctx.message.message_id) : undefined;
+    const replyTo = ctx.message ? this.extractReplyContext(ctx.message) : undefined;
     try {
       const buffer = await this.downloadFile(fileId);
       this.emit("message", {
         ...sender,
         text: caption ?? "",
+        messageId,
+        replyTo,
         attachments: [{ buffer, mimeType, filename }],
       });
     } catch (err) {
@@ -355,6 +397,8 @@ export class TelegramChannel extends EventEmitter implements Channel {
         text: caption
           ? `${caption}\n[File download failed: ${filename ?? mimeType}]`
           : `[File download failed: ${filename ?? mimeType}]`,
+        messageId,
+        replyTo,
       });
     }
   }

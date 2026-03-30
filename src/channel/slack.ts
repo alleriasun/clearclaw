@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
 import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
+import type { MessageElement } from "@slack/web-api/dist/types/response/ConversationsHistoryResponse.js";
 import log from "../logger.js";
-import type { Attachment, Channel, Button, ButtonResponse, SendFileOpts, SendMessageOpts } from "../types.js";
+import type { Attachment, Channel, Button, ButtonResponse, ReplyContext, SendFileOpts, SendMessageOpts } from "../types.js";
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
@@ -43,7 +44,7 @@ export class SlackChannel extends EventEmitter implements Channel {
       // inline type is simpler than importing and narrowing the full union.
       const msg = event as {
         channel: string; user?: string; bot_id?: string;
-        text?: string; ts: string;
+        text?: string; ts: string; thread_ts?: string;
         files?: Array<{ url_private_download?: string; mimetype?: string; name?: string }>;
       };
 
@@ -83,11 +84,17 @@ export class SlackChannel extends EventEmitter implements Channel {
         }
       }
 
+      const replyTo = msg.thread_ts
+        ? await this.fetchReplyContext(msg.channel, msg.thread_ts, msg.ts)
+        : undefined;
+
       const userName = await this.resolveUserName(userId);
       this.emit("message", {
         chatId,
         user: { id: `slack:${userId}`, name: userName ?? userId },
         text: msg.text ?? "",
+        messageId: msg.ts,
+        replyTo,
         ...(attachments && { attachments }),
       });
     });
@@ -405,6 +412,33 @@ export class SlackChannel extends EventEmitter implements Channel {
       if (name) this.userNameCache.set(userId, name);
       return name;
     } catch { return undefined; }
+  }
+
+  /** Fetch the parent message of a thread reply for reply context. */
+  private async fetchReplyContext(channel: string, threadTs: string, ownTs: string): Promise<ReplyContext | undefined> {
+    if (threadTs === ownTs) return undefined;
+    try {
+      const result = await this.app.client.conversations.history({
+        channel,
+        latest: threadTs,
+        limit: 1,
+        inclusive: true,
+      });
+      const parent = result.messages?.[0] as MessageElement | undefined;
+      if (!parent) return undefined;
+
+      const senderName = parent.user ? await this.resolveUserName(parent.user) : undefined;
+
+      return {
+        messageId: threadTs,
+        senderName: senderName ?? parent.user,
+        text: parent.text,
+        mediaType: parent.files?.[0]?.mimetype,
+      };
+    } catch (err) {
+      log.warn({ err }, "[channel] failed to fetch thread parent %s", threadTs);
+      return undefined;
+    }
   }
 }
 
