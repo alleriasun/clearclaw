@@ -48,4 +48,13 @@ export class WorkspaceStore {
       this.write(all);
     }
   }
+
+  setBehavior(name: string, behavior: "assistant" | "relay"): void {
+    const all = this.read();
+    const ws = all.find((w) => w.name === name);
+    if (ws) {
+      ws.behavior = behavior;
+      this.write(all);
+    }
+  }
 }
