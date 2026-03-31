@@ -8,6 +8,13 @@ import type { Attachment, Channel, Button, ButtonResponse, ReplyContext, SendFil
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
 
+  private static readonly EMOJI_TO_SLACK: Record<string, string> = {
+    "👍": "+1", "👎": "-1", "❤️": "heart", "🔥": "fire",
+    "😂": "joy", "🎉": "tada", "✅": "white_check_mark", "🚀": "rocket",
+    "👀": "eyes", "💯": "100", "🤔": "thinking_face", "😮": "open_mouth",
+    "🙏": "pray", "💪": "muscle", "⚡": "zap", "🌟": "star2",
+  };
+
   private app: App;
   private botToken: string;
   private botUserId: string | undefined;
@@ -164,9 +171,10 @@ export class SlackChannel extends EventEmitter implements Channel {
     const channel = this.slackId(chatId);
     const chunks = splitMessage(text);
     const handles: string[] = [];
+    const threadTs = opts?.replyToMessageId;
 
-    // If a typing placeholder exists, edit the first chunk into it instead of posting new
-    const consumeTyping = opts?.consumeTyping !== false;
+    // Consume typing placeholder only when not posting as a thread reply
+    const consumeTyping = !threadTs && opts?.consumeTyping !== false;
     const typingTs = consumeTyping ? this.typingMessageTs.get(chatId) : undefined;
     if (typingTs && chunks.length > 0) {
       this.typingMessageTs.delete(chatId);
@@ -190,6 +198,7 @@ export class SlackChannel extends EventEmitter implements Channel {
       const blocks = mrkdwnBlocks(chunk);
       const result = await this.app.client.chat.postMessage({
         channel, text: chunk, blocks,
+        ...(threadTs && { thread_ts: threadTs }),
       });
       if (result.ts) handles.push(result.ts as string);
     }
@@ -388,6 +397,24 @@ export class SlackChannel extends EventEmitter implements Channel {
       filename,
       initial_comment: opts?.caption,
     });
+  }
+
+  async reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void> {
+    const name = SlackChannel.EMOJI_TO_SLACK[emoji];
+    if (!name) {
+      log.warn("[channel] no Slack emoji name for %s, skipping reaction", emoji);
+      return;
+    }
+    try {
+      await this.app.client.reactions.add({
+        channel: this.slackId(chatId),
+        timestamp: messageId,
+        name,
+      });
+    } catch (err) {
+      log.warn("[channel] failed to add reaction %s: %s", name,
+        err instanceof Error ? err.message : String(err));
+    }
   }
 
   private slackId(chatId: string): string {

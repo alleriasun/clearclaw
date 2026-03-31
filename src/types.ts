@@ -28,6 +28,7 @@ export interface Channel {
   updateStatus(chatId: string, text: string): Promise<void>;
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
   sendFile(chatId: string, buffer: Buffer, filename: string, opts?: SendFileOpts): Promise<void>;
+  reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void>;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   emit<K extends keyof ChannelEvents>(event: K, ...args: ChannelEvents[K]): boolean;
@@ -48,6 +49,8 @@ export interface SendMessageOpts {
   parseMode?: "MarkdownV2" | "HTML";
   /** When false, skip consuming the typing placeholder (e.g. for tool status messages). */
   consumeTyping?: boolean;
+  /** Reply/thread to a specific platform message ID (Telegram reply, Slack thread). */
+  replyToMessageId?: string;
 }
 
 export interface SendFileOpts {
@@ -120,6 +123,7 @@ export interface Workspace {
   cwd: string;
   chat_id: string;
   current_session_id: string | null;
+  behavior?: "assistant" | "relay";
 }
 
 // --- User identity (populated by channel from platform data) ---

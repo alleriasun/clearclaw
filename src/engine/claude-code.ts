@@ -8,10 +8,10 @@ import {
   type SDKUserMessage,
   type PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  ContentBlockParam,
-  MessageParam,
-} from "@anthropic-ai/sdk/resources/messages/messages.mjs";
+// Derive message types from SDKUserMessage to avoid version mismatch with
+// the @anthropic-ai/sdk copy bundled inside the agent SDK.
+type MessageParam = SDKUserMessage["message"];
+type ContentBlockParam = Extract<MessageParam["content"], unknown[]>[number];
 import log from "../logger.js";
 import { formatToolDescription } from "../format.js";
 import type {
@@ -104,6 +104,8 @@ export class ClaudeCodeEngine implements Engine {
       ? buildAttachmentPrompt(textPrompt, attachments)
       : textPrompt;
 
+    log.info("[turn] permissionMode=%s session=%s", permissionMode, sessionId ?? "new");
+
     const q = query({
       prompt,
       options: {
@@ -112,7 +114,7 @@ export class ClaudeCodeEngine implements Engine {
         permissionMode,
         allowDangerouslySkipPermissions:
           permissionMode === "bypassPermissions" ? true : undefined,
-        canUseTool,
+        canUseTool: permissionMode === "bypassPermissions" ? undefined : canUseTool,
         abortController,
         settingSources: ["user", "project", "local"],
         ...(mcpServers ? { mcpServers } : {}),
