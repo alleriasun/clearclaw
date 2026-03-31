@@ -36,7 +36,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.50",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.89",
     "@slack/bolt": "^4.6.0",
     "diff": "^8.0.3",
     "grammy": "^1.30.0",

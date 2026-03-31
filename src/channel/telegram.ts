@@ -144,21 +144,27 @@ export class TelegramChannel extends EventEmitter implements Channel {
     const numId = this.numericId(chatId);
     const chunks = splitMessage(text);
     const handles: string[] = [];
+    let firstChunk = true;
     for (const chunk of chunks) {
+      const replyParams = firstChunk && opts?.replyToMessageId
+        ? { reply_parameters: { message_id: Number(opts.replyToMessageId) } }
+        : {};
       try {
         const sent = await this.bot.api.sendMessage(numId, chunk, {
           parse_mode: opts?.parseMode,
+          ...replyParams,
         });
         handles.push(String(sent.message_id));
       } catch (err) {
         if (opts?.parseMode) {
           log.warn("[channel] sendMessage failed with %s, retrying as plain text", opts.parseMode);
-          const sent = await this.bot.api.sendMessage(numId, chunk);
+          const sent = await this.bot.api.sendMessage(numId, chunk, replyParams);
           handles.push(String(sent.message_id));
         } else {
           throw err;
         }
       }
+      firstChunk = false;
     }
     return handles;
   }
@@ -417,6 +423,19 @@ export class TelegramChannel extends EventEmitter implements Channel {
       await this.bot.api.sendAudio(id, file, { caption });
     } else {
       await this.bot.api.sendDocument(id, file, { caption });
+    }
+  }
+
+  async reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void> {
+    const numId = this.numericId(chatId);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await this.bot.api.setMessageReaction(numId, Number(messageId), [
+        { type: "emoji" as const, emoji: emoji as any },
+      ]);
+    } catch (err) {
+      log.warn("[channel] failed to set reaction on %s: %s", messageId,
+        err instanceof Error ? err.message : String(err));
     }
   }
 

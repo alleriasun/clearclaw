@@ -15,6 +15,7 @@ import type {
   PermissionMode,
   ReplyContext,
   TurnStats,
+  Workspace,
 } from "./types.js";
 
 export interface OrchestratorOpts {
@@ -35,6 +36,9 @@ interface ChatState {
   // Rolling tool message: each tool_use replaces this single message's content
   toolCallHandle: string | null;
   todoHandle: string | null;
+  // Per-chat message queue: relay drains immediately, assistant debounces
+  messageQueue: InboundMessage[];
+  debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
@@ -43,6 +47,7 @@ const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
   { label: "Plan", value: "plan" },
   { label: "Bypass", value: "bypassPermissions" },
 ];
+
 
 export class Orchestrator {
   private channel: Channel;
@@ -68,6 +73,7 @@ export class Orchestrator {
       s = {
         busy: false, abort: null, permissionMode: null, stats: null, lastStatusText: null,
         toolCallHandle: null, todoHandle: null,
+        messageQueue: [], debounceTimer: null,
       };
       this.chats.set(chatId, s);
     }
@@ -76,7 +82,7 @@ export class Orchestrator {
 
   async start(): Promise<void> {
     this.channel.on("message", (msg) => {
-      this.handleMessage(msg).catch((err) => {
+      this.routeMessage(msg).catch((err) => {
         log.error({ err }, "[orchestrator] unhandled message error");
       });
     });
@@ -96,11 +102,142 @@ export class Orchestrator {
     await this.channel.disconnect();
   }
 
-  private async handleMessage(msg: InboundMessage): Promise<void> {
+  /** Effective behavior for a workspace: explicit setting, or home→assistant / project→relay. */
+  private effectiveBehavior(ws: Workspace): "assistant" | "relay" {
+    if (ws.behavior !== undefined) return ws.behavior;
+    return ws.cwd === path.dirname(this.defaultPromptPath) ? "assistant" : "relay";
+  }
+
+  /** Enqueue a message and either drain immediately (relay) or start debounce (assistant). */
+  private enqueueMessage(msg: InboundMessage, ws: Workspace, state: ChatState): void {
+    state.messageQueue.push(msg);
+    if (state.busy) return; // processQueuedMessages will pick up after current turn completes
+
+    if (this.effectiveBehavior(ws) === "assistant") {
+      if (state.debounceTimer) clearTimeout(state.debounceTimer);
+      this.scheduleDebounce(msg.chatId);
+    } else {
+      this.processQueuedMessages(msg.chatId).catch((err) => {
+        log.error({ err }, "[orchestrator] drain error");
+      });
+    }
+  }
+
+  private scheduleDebounce(chatId: string): void {
+    const state = this.chat(chatId);
+    state.debounceTimer = setTimeout(() => {
+      state.debounceTimer = null;
+      this.processQueuedMessages(chatId).catch((err) => {
+        log.error({ err }, "[orchestrator] drain error");
+      });
+    }, 1000);
+  }
+
+  private async processQueuedMessages(chatId: string): Promise<void> {
+    const state = this.chat(chatId);
+    if (state.messageQueue.length === 0 || state.busy) return;
+
+    const ws = this.workspaceStore.byChat(chatId);
+    if (!ws) return;
+
+    const messages = [...state.messageQueue];
+    state.messageQueue = [];
+
+    try {
+      await this.executeTurn(chatId, messages, ws, state);
+    } catch (err) {
+      log.error({ err }, "[fatal]");
+      await this.channel.sendMessage(
+        chatId,
+        `Internal error: ${err instanceof Error ? err.message : String(err)}`,
+      ).catch(() => {});
+      return;
+    }
+
+    // Post-turn drain: new messages may have arrived while the turn was running
+    if (state.messageQueue.length > 0) {
+      if (this.effectiveBehavior(ws) === "assistant") {
+        this.scheduleDebounce(chatId);
+      } else {
+        this.processQueuedMessages(chatId).catch((err) => {
+          log.error({ err }, "[orchestrator] drain error");
+        });
+      }
+    }
+  }
+
+  private async executeTurn(
+    chatId: string,
+    messages: InboundMessage[],
+    ws: Workspace,
+    state: ChatState,
+  ): Promise<void> {
+    state.busy = true;
+    const abort = new AbortController();
+    state.abort = abort;
+
+    const behavior = this.effectiveBehavior(ws);
+    const turnState = { staySilent: false, replyToMessageId: null as string | null };
+
+    log.info(`[turn] start behavior=${behavior} session=${ws.current_session_id ?? "new"} msgs=${messages.length} cwd=${ws.cwd}`);
+    await this.channel.setTyping(chatId, true);
+
+    const isHomeWorkspace = ws.cwd === path.dirname(this.defaultPromptPath);
+    const appendSystemPrompt = isHomeWorkspace ? undefined : this.readDefaultPrompt();
+
+    const prompt = buildPrompt(messages);
+
+    // Save all attachments to disk for the audit log
+    const allAttachments = messages.flatMap((m) => m.attachments ?? []);
+    if (allAttachments.length) {
+      const results = await Promise.allSettled(
+        allAttachments.map((att) => saveFile(att, ws.name, this.filesPath)),
+      );
+      for (const r of results) {
+        if (r.status === "rejected") log.warn({ err: r.reason }, "[turn] failed to save attachment");
+      }
+      const saved = results.filter((r) => r.status === "fulfilled").length;
+      if (saved > 0) log.info("[turn] saved %d/%d attachment(s) for workspace %s", saved, allAttachments.length, ws.name);
+    }
+
+    const mcpServer = createSdkMcpServer({
+      name: "clearclaw",
+      tools: this.buildMcpTools(chatId, behavior, turnState),
+    });
+
+    try {
+      for await (const event of this.engine.runTurn({
+        sessionId: ws.current_session_id,
+        cwd: ws.cwd,
+        prompt,
+        attachments: allAttachments.length > 0 ? allAttachments : undefined,
+        permissionMode: state.permissionMode ?? (behavior === "assistant" ? "bypassPermissions" : this.permissionMode),
+        appendSystemPrompt,
+        mcpServers: { clearclaw: mcpServer },
+        signal: abort.signal,
+        onPermissionRequest: (req) => this.handlePermission(req, chatId),
+      })) {
+        await this.routeEngineEvent(chatId, event, ws.name, behavior, turnState);
+      }
+    } finally {
+      const cancelled = abort.signal.aborted;
+      state.busy = false;
+      state.abort = null;
+      if (!turnState.staySilent) {
+        await this.channel.setTyping(chatId, false);
+      }
+      if (cancelled) {
+        await this.channel.sendMessage(chatId, "Turn cancelled.");
+      }
+    }
+  }
+
+  private async routeMessage(msg: InboundMessage): Promise<void> {
     try {
       log.info(`[msg] ${msg.user.name} (${msg.user.id}) ${msg.text.slice(0, 80)}`);
 
       const state = this.chat(msg.chatId);
+      const ws = this.workspaceStore.byChat(msg.chatId);
 
       // /mode — switch permission mode (works even during active turns)
       if (msg.text === "/mode") {
@@ -130,7 +267,6 @@ export class Orchestrator {
 
       // /new — reset session
       if (msg.text === "/new") {
-        const ws = this.workspaceStore.byChat(msg.chatId);
         if (!ws) {
           await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
           return;
@@ -153,7 +289,6 @@ export class Orchestrator {
           );
           return;
         }
-        const ws = this.workspaceStore.byChat(msg.chatId);
         if (!ws) {
           await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
           return;
@@ -211,156 +346,38 @@ export class Orchestrator {
         return;
       }
 
-      // Workspace lookup — guard all turn logic below
-      const ws = this.workspaceStore.byChat(msg.chatId);
+      // /behavior — switch workspace behavior (assistant or relay)
+      if (msg.text === "/behavior") {
+        if (!ws) {
+          await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.");
+          return;
+        }
+        const current = this.effectiveBehavior(ws);
+        const resp = await this.channel.sendInteractive(
+          msg.chatId,
+          `Current behavior: ${current}`,
+          [
+            [
+              { label: current === "assistant" ? "✓ Assistant" : "Assistant", value: "assistant" },
+              { label: current === "relay" ? "✓ Relay" : "Relay", value: "relay" },
+            ],
+          ],
+        );
+        if (resp.value === "assistant" || resp.value === "relay") {
+          this.workspaceStore.setBehavior(ws.name, resp.value);
+          await this.updateStatusMessage(msg.chatId, this.chat(msg.chatId));
+          log.info("[cmd] workspace %s behavior → %s", ws.name, resp.value);
+        }
+        return;
+      }
+
       if (!ws) {
         log.info("[msg] no workspace for chat %s", msg.chatId);
         await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
         return;
       }
 
-      // Reject during active turn (per-chat)
-      if (state.busy) {
-        log.info("[msg] rejected (busy)");
-        await this.channel.sendMessage(
-          msg.chatId,
-          "Still working on the previous message...",
-        );
-        return;
-      }
-
-      state.busy = true;
-
-      const abort = new AbortController();
-      state.abort = abort;
-
-      log.info(`[turn] start session=${ws.current_session_id ?? "new"} cwd=${ws.cwd}`);
-      await this.channel.setTyping(msg.chatId, true);
-
-      // Append default workspace CLAUDE.md to non-default workspace sessions
-      const isDefaultWorkspace = ws.cwd === path.dirname(this.defaultPromptPath);
-      const appendSystemPrompt = isDefaultWorkspace ? undefined : this.readDefaultPrompt();
-
-      // Prepend sender identity and reply context so the engine knows who's talking and what they're responding to
-      const sender = msg.user.handle ? `${msg.user.name} (@${msg.user.handle})` : msg.user.name;
-      const msgIdTag = msg.messageId ? ` (msg:${msg.messageId})` : "";
-      const replyLine = formatReplyLine(msg.replyTo);
-      const prompt = `${replyLine}[${sender}${msgIdTag}]: ${msg.text}`;
-
-      // Save attachments to disk for the audit log (failures must not block the turn)
-      if (msg.attachments?.length) {
-        const results = await Promise.allSettled(
-          msg.attachments.map((att) => saveFile(att, ws.name, this.filesPath)),
-        );
-        for (const r of results) {
-          if (r.status === "rejected") log.warn({ err: r.reason }, "[turn] failed to save attachment");
-        }
-        const saved = results.filter((r) => r.status === "fulfilled").length;
-        if (saved > 0) log.info("[turn] saved %d/%d attachment(s) for workspace %s", saved, msg.attachments.length, ws.name);
-      }
-
-      const mcpServer = createSdkMcpServer({
-        name: "clearclaw",
-        tools: [
-          tool("send_file", "Send a file or image to the current chat conversation", {
-            file_path: z.string().optional().describe("Absolute path to the file to send"),
-            data: z.string().optional().describe("Base64-encoded file data (alternative to file_path)"),
-            filename: z.string().optional().describe("Filename (required when using data, optional with file_path)"),
-            caption: z.string().optional().describe("Optional caption to accompany the file"),
-          }, async (args) => {
-            if (!args.file_path && !args.data) throw new Error("Either file_path or data must be provided");
-            const buffer = args.file_path
-              ? await fs.promises.readFile(args.file_path)
-              : Buffer.from(args.data!, "base64");
-            const name = args.filename ?? path.basename(args.file_path ?? "file");
-            await this.channel.sendFile(msg.chatId, buffer, name, { caption: args.caption });
-            return { content: [{ type: "text" as const, text: `Sent ${name} to chat` }] };
-          }),
-        ],
-      });
-
-      try {
-        for await (const event of this.engine.runTurn({
-          sessionId: ws.current_session_id,
-          cwd: ws.cwd,
-          prompt,
-          attachments: msg.attachments,
-          permissionMode: state.permissionMode ?? this.permissionMode,
-          appendSystemPrompt,
-          mcpServers: { clearclaw: mcpServer },
-          signal: abort.signal,
-          onPermissionRequest: async (req) => {
-            // Auto-allow ClearClaw's own MCP tools — no chat prompt needed
-            if (req.toolName.startsWith("mcp__clearclaw__")) {
-              log.info(`[perm] ${req.toolName} → auto-allow`);
-              return { decision: "allow" };
-            }
-            log.info(`[perm] ${req.toolName}`);
-
-            // Custom tool handler — replaces default Allow/Deny prompt
-            const handler = permissionHandlers.get(req.toolName);
-            if (handler) {
-              const result = handler(req.input, req.description);
-              if (result === null) {
-                // null = auto-allow (e.g. EnterPlanMode)
-                log.info(`[perm] ${req.toolName} → auto-allow (handler)`);
-                await this.channel.sendMessage(msg.chatId, "📋 Entering plan mode");
-                return { decision: "allow" };
-              }
-              try {
-                const resp = await this.channel.sendInteractive(msg.chatId, result.text, result.buttons);
-                log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
-                return result.mapResponse(resp);
-              } catch (err) {
-                log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", req.toolName);
-                return {
-                  decision: "deny" as const,
-                  message: "Permission prompt could not be delivered to chat — denied automatically.",
-                };
-              }
-            }
-
-            // Default: generic Allow/Deny prompt
-            try {
-              const promptText = formatPermissionPrompt(req.toolName, req.input, req.description);
-              const resp = await this.channel.sendInteractive(
-                msg.chatId,
-                promptText,
-                [
-                  [
-                    { label: "👍 Allow", value: "allow" },
-                    { label: "👎 Deny", value: "deny" },
-                  ],
-                  [
-                    { label: "📝 Deny + Note", value: "deny", requestText: true },
-                  ],
-                ],
-              );
-              log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
-              return {
-                decision: resp.value === "allow" ? "allow" : "deny",
-                message: resp.text,
-              };
-            } catch (err) {
-              log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", req.toolName);
-              return {
-                decision: "deny" as const,
-                message: "Permission prompt could not be delivered to chat — denied automatically.",
-              };
-            }
-          },
-        })) {
-          await this.routeEngineEvent(msg.chatId, event, ws.name);
-        }
-      } finally {
-        const cancelled = abort.signal.aborted;
-        state.busy = false;
-        state.abort = null;
-        await this.channel.setTyping(msg.chatId, false);
-        if (cancelled) {
-          await this.channel.sendMessage(msg.chatId, "Turn cancelled.");
-        }
-      }
+      this.enqueueMessage(msg, ws, state);
     } catch (err) {
       log.error({ err }, "[fatal]");
       await this.channel.sendMessage(
@@ -370,17 +387,29 @@ export class Orchestrator {
     }
   }
 
-  private async routeEngineEvent(chatId: string, event: EngineEvent, workspaceName: string): Promise<void> {
+  private async routeEngineEvent(
+    chatId: string,
+    event: EngineEvent,
+    workspaceName: string,
+    behavior: "assistant" | "relay",
+    turnState: { staySilent: boolean; replyToMessageId: string | null },
+  ): Promise<void> {
     const state = this.chat(chatId);
 
     try {
       switch (event.type) {
         case "text":
-          await this.channel.sendMessage(chatId, event.text);
+          if (turnState.staySilent) break;
+          await this.channel.sendMessage(chatId, event.text, {
+            replyToMessageId: turnState.replyToMessageId ?? undefined,
+          });
           break;
 
         case "tool_use": {
-          // TodoWrite: render task list as a rolling message
+          // In assistant behavior, all tool status is suppressed (no rolling status, no plan mode notifications)
+          if (behavior === "assistant") break;
+
+          // Relay behavior: existing display logic
           if (event.toolName === "TodoWrite") {
             const text = formatTodoList(event.input);
             if (state.todoHandle) {
@@ -397,16 +426,13 @@ export class Orchestrator {
             break;
           }
 
-          // EnterPlanMode: SDK auto-allows without calling canUseTool, so notify here
           if (event.toolName === "EnterPlanMode") {
             await this.channel.sendMessage(chatId, "📋 Planning");
             break;
           }
 
-          // Suppress rolling status for tools with custom permission/display handlers
           if (displayHandledTools.has(event.toolName)) break;
 
-          // Rolling message: each tool_use replaces the single message's content
           const line = formatToolStatusLine(event.toolName, event.input);
           if (state.toolCallHandle) {
             try {
@@ -423,7 +449,6 @@ export class Orchestrator {
         }
 
         case "tool_result":
-          // All tool results suppressed — Claude summarizes in its text response
           break;
 
         case "rate_limit": {
@@ -431,21 +456,17 @@ export class Orchestrator {
             ? ` Resets at ${new Date(event.resetsAt).toLocaleTimeString()}.`
             : "";
           log.warn(`[turn] rate limit: ${event.status}${resetMsg}`);
-          await this.channel.sendMessage(
-            chatId,
-            `⚠️ Rate limited (${event.status}).${resetMsg}`,
-          );
+          await this.channel.sendMessage(chatId, `⚠️ Rate limited (${event.status}).${resetMsg}`);
           break;
         }
 
         case "done": {
-          // Persist state first — channel calls below are best-effort
           log.info(`[turn] done session=${event.sessionId}`);
           this.workspaceStore.setSession(workspaceName, event.sessionId);
           if (event.stats) state.stats = event.stats;
 
-          // Best-effort: update tool summary and status message
-          if (state.toolCallHandle && event.stats) {
+          // Tool summary only in relay behavior
+          if (behavior === "relay" && state.toolCallHandle && event.stats) {
             const summary = formatToolCallSummary(event.stats.toolCalls);
             if (summary) {
               try {
@@ -461,16 +482,110 @@ export class Orchestrator {
 
         case "error":
           log.error(`[turn] error: ${event.message}`);
-          await this.channel.sendMessage(
-            chatId,
-            `Error: ${event.message}`,
-          );
+          await this.channel.sendMessage(chatId, `Error: ${event.message}`);
           break;
       }
     } catch (err) {
       // Channel errors must never propagate — they'd crash the engine turn loop,
       // killing the SDK session and losing the session ID.
       log.warn({ err }, "[route] failed to relay %s event to channel", event.type);
+    }
+  }
+
+  private buildMcpTools(
+    chatId: string,
+    behavior: "assistant" | "relay",
+    turnState: { staySilent: boolean; replyToMessageId: string | null },
+  ) {
+    type McpTool = NonNullable<Parameters<typeof createSdkMcpServer>[0]["tools"]>[number];
+    const tools: McpTool[] = [
+      tool("send_file", "Send a file or image to the current chat conversation", {
+        file_path: z.string().optional().describe("Absolute path to the file to send"),
+        data: z.string().optional().describe("Base64-encoded file data (alternative to file_path)"),
+        filename: z.string().optional().describe("Filename (required when using data, optional with file_path)"),
+        caption: z.string().optional().describe("Optional caption to accompany the file"),
+      }, async (args) => {
+        if (!args.file_path && !args.data) throw new Error("Either file_path or data must be provided");
+        const buffer = args.file_path
+          ? await fs.promises.readFile(args.file_path)
+          : Buffer.from(args.data!, "base64");
+        const name = args.filename ?? path.basename(args.file_path ?? "file");
+        await this.channel.sendFile(chatId, buffer, name, { caption: args.caption });
+        return { content: [{ type: "text" as const, text: `Sent ${name} to chat` }] };
+      }),
+    ];
+
+    if (behavior === "assistant") {
+      tools.push(
+        tool("stay_silent", "Stay silent — do not send any text response for this turn", {}, async () => {
+          turnState.staySilent = true;
+          await this.channel.setTyping(chatId, false); // suppress typing indicator immediately
+          return { content: [{ type: "text" as const, text: "Silent turn" }] };
+        }),
+        tool("react", "React to a specific message with an emoji", {
+          message: z.string().describe("Platform message ID from [msg:N] tag"),
+          emoji: z.string().describe("Single emoji character"),
+        }, async (args) => {
+          await this.channel.reactToMessage(chatId, args.message, args.emoji);
+          return { content: [{ type: "text" as const, text: `Reacted to ${args.message} with ${args.emoji}` }] };
+        }),
+        tool("reply_to", "Thread the text response as a reply to a specific message", {
+          message: z.string().describe("Platform message ID from [msg:N] tag"),
+        }, async (args) => {
+          turnState.replyToMessageId = args.message;
+          return { content: [{ type: "text" as const, text: `Will reply to message ${args.message}` }] };
+        }),
+      );
+    }
+
+    return tools;
+  }
+
+  private async handlePermission(
+    req: { toolName: string; input: Record<string, unknown>; description: string },
+    chatId: string,
+  ): Promise<{ decision: "allow" | "deny"; message?: string; updatedInput?: Record<string, unknown> }> {
+    // Always auto-allow ClearClaw's own MCP tools
+    if (req.toolName.startsWith("mcp__clearclaw__")) {
+      log.info(`[perm] ${req.toolName} → auto-allow`);
+      return { decision: "allow" };
+    }
+
+    log.info(`[perm] ${req.toolName}`);
+
+    // Custom tool handler
+    const handler = permissionHandlers.get(req.toolName);
+    if (handler) {
+      const result = handler(req.input, req.description);
+      if (result === null) {
+        log.info(`[perm] ${req.toolName} → auto-allow (handler)`);
+        await this.channel.sendMessage(chatId, "📋 Entering plan mode");
+        return { decision: "allow" };
+      }
+      try {
+        const resp = await this.channel.sendInteractive(chatId, result.text, result.buttons);
+        log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
+        return result.mapResponse(resp);
+      } catch (err) {
+        log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", req.toolName);
+        return { decision: "deny" as const, message: "Permission prompt could not be delivered to chat — denied automatically." };
+      }
+    }
+
+    try {
+      const resp = await this.channel.sendInteractive(
+        chatId,
+        formatPermissionPrompt(req.toolName, req.input, req.description),
+        [
+          [{ label: "👍 Allow", value: "allow" }, { label: "👎 Deny", value: "deny" }],
+          [{ label: "📝 Deny + Note", value: "deny", requestText: true }],
+        ],
+      );
+      log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
+      return { decision: resp.value === "allow" ? "allow" : "deny", message: resp.text };
+    } catch (err) {
+      log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", req.toolName);
+      return { decision: "deny" as const, message: "Permission prompt could not be delivered to chat — denied automatically." };
     }
   }
 
@@ -519,3 +634,20 @@ function formatReplyLine(replyTo?: ReplyContext): string {
   if (replyTo.text) parts.push(`"${replyTo.text}"`);
   return `[Replying to ${parts.join(" ")}]\n`;
 }
+
+/**
+ * Build the turn prompt: `[msg:N] sender: text`, one line per message.
+ * Works for both single-message (relay) and batched (assistant) turns.
+ */
+function buildPrompt(messages: InboundMessage[]): string {
+  return messages.map((msg) => {
+    const sender = msg.user.handle ? `${msg.user.name} (@${msg.user.handle})` : msg.user.name;
+    const msgIdPrefix = msg.messageId ? `[msg:${msg.messageId}] ` : "";
+    const replyLine = formatReplyLine(msg.replyTo);
+    const attachmentNote = msg.attachments?.length
+      ? ` [${msg.attachments.length} attachment(s)]`
+      : "";
+    return `${replyLine}${msgIdPrefix}${sender}: ${msg.text}${attachmentNote}`;
+  }).join("\n");
+}
+
