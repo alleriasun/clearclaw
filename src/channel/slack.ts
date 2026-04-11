@@ -3,7 +3,7 @@ import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
 import type { MessageElement } from "@slack/web-api/dist/types/response/ConversationsHistoryResponse.js";
 import log from "../logger.js";
-import type { Attachment, Channel, Button, ButtonResponse, ReplyContext, SendFileOpts, SendMessageOpts } from "../types.js";
+import type { Attachment, Channel, ChatType, Button, ButtonResponse, ReplyContext, SendFileOpts, SendMessageOpts, UserInfo } from "../types.js";
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
@@ -18,16 +18,23 @@ export class SlackChannel extends EventEmitter implements Channel {
   private app: App;
   private botToken: string;
   private botUserId: string | undefined;
-  private allowedUserIds: Set<string>;
+  private isAuthorized: (userId: string) => boolean;
+  private onUnauthorizedDM?: (chatId: string, user: UserInfo) => void;
   private pendingButtonCallbacks = new Map<string, (triggerId: string) => void>(); // actionId → resolve
   private pendingModalCallbacks = new Map<string, (text: string) => void>(); // modal callbackId → resolve
   private typingMessageTs = new Map<string, string>(); // chatId → ts of bot's "typing…" placeholder
   private userNameCache = new Map<string, string>();
 
-  constructor(botToken: string, appToken: string, allowedUserIds: Set<string>) {
+  constructor(
+    botToken: string,
+    appToken: string,
+    isAuthorized: (userId: string) => boolean,
+    onUnauthorizedDM?: (chatId: string, user: UserInfo) => void,
+  ) {
     super();
     this.botToken = botToken;
-    this.allowedUserIds = allowedUserIds;
+    this.isAuthorized = isAuthorized;
+    this.onUnauthorizedDM = onUnauthorizedDM;
     this.app = new App({
       token: botToken, appToken, socketMode: true, logLevel: LogLevel.ERROR,
     });
@@ -63,8 +70,16 @@ export class SlackChannel extends EventEmitter implements Channel {
       if (!msg.text && (!msg.files || msg.files.length === 0)) return;
 
       const userId = msg.user;
-      if (!userId || !this.allowedUserIds.has(`slack:${userId}`)) {
-        if (userId) log.info("[channel] ignored message from unauthorized user slack:%s", userId);
+      if (!userId) return;
+      const prefixedId = `slack:${userId}`;
+      if (!this.isAuthorized(prefixedId)) {
+        // Slack DM channel IDs start with "D"
+        if (msg.channel.startsWith("D") && this.onUnauthorizedDM) {
+          const userName = await this.resolveUserName(userId);
+          this.onUnauthorizedDM(chatId, { id: prefixedId, name: userName ?? userId });
+        } else {
+          log.info("[channel] ignored message from unauthorized user %s", prefixedId);
+        }
         return;
       }
 
@@ -95,10 +110,13 @@ export class SlackChannel extends EventEmitter implements Channel {
         ? await this.fetchReplyContext(msg.channel, msg.thread_ts, msg.ts)
         : undefined;
 
+      const chatType: ChatType = msg.channel.startsWith("D") ? "dm" : "group";
+
       const userName = await this.resolveUserName(userId);
       this.emit("message", {
         chatId,
-        user: { id: `slack:${userId}`, name: userName ?? userId },
+        chatType,
+        user: { id: prefixedId, name: userName ?? userId },
         text: msg.text ?? "",
         messageId: msg.ts,
         replyTo,
@@ -122,10 +140,12 @@ export class SlackChannel extends EventEmitter implements Channel {
       if (!subcommand) return;
       const chatId = `slack:${command.channel_id}`;
       const userId = command.user_id;
-      if (!this.allowedUserIds.has(`slack:${userId}`)) return;
+      if (!this.isAuthorized(`slack:${userId}`)) return;
+      const chatType: ChatType = command.channel_id.startsWith("D") ? "dm" : "group";
       const userName = await this.resolveUserName(userId);
       this.emit("message", {
         chatId,
+        chatType,
         user: { id: `slack:${userId}`, name: userName ?? userId },
         text: `/${subcommand}`,
       });

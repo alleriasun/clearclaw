@@ -6,7 +6,7 @@ import log from "./logger.js";
 import { saveFile } from "./files.js";
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
-import type { WorkspaceStore } from "./workspace-store.js";
+import type { Config } from "./config.js";
 import type {
   Channel,
   Engine,
@@ -21,10 +21,7 @@ import type {
 export interface OrchestratorOpts {
   channel: Channel;
   engine: Engine;
-  workspaceStore: WorkspaceStore;
-  permissionMode: PermissionMode;
-  defaultPromptPath: string;
-  filesPath: string;
+  config: Config;
 }
 
 interface ChatState {
@@ -52,19 +49,13 @@ const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
 export class Orchestrator {
   private channel: Channel;
   private engine: Engine;
-  private workspaceStore: WorkspaceStore;
-  private permissionMode: PermissionMode;
-  private defaultPromptPath: string;
-  private filesPath: string;
+  private config: Config;
   private chats = new Map<string, ChatState>();
 
   constructor(opts: OrchestratorOpts) {
     this.channel = opts.channel;
     this.engine = opts.engine;
-    this.workspaceStore = opts.workspaceStore;
-    this.permissionMode = opts.permissionMode;
-    this.defaultPromptPath = opts.defaultPromptPath;
-    this.filesPath = opts.filesPath;
+    this.config = opts.config;
   }
 
   private chat(chatId: string): ChatState {
@@ -105,7 +96,7 @@ export class Orchestrator {
   /** Effective behavior for a workspace: explicit setting, or home→assistant / project→relay. */
   private effectiveBehavior(ws: Workspace): "assistant" | "relay" {
     if (ws.behavior !== undefined) return ws.behavior;
-    return ws.cwd === path.dirname(this.defaultPromptPath) ? "assistant" : "relay";
+    return ws.cwd === path.dirname(this.config.defaultPromptPath) ? "assistant" : "relay";
   }
 
   /** Enqueue a message and either drain immediately (relay) or start debounce (assistant). */
@@ -137,7 +128,7 @@ export class Orchestrator {
     const state = this.chat(chatId);
     if (state.messageQueue.length === 0 || state.busy) return;
 
-    const ws = this.workspaceStore.byChat(chatId);
+    const ws = this.config.workspaceByChat(chatId);
     if (!ws) return;
 
     const messages = [...state.messageQueue];
@@ -182,7 +173,7 @@ export class Orchestrator {
     log.info(`[turn] start behavior=${behavior} session=${ws.current_session_id ?? "new"} msgs=${messages.length} cwd=${ws.cwd}`);
     await this.channel.setTyping(chatId, true);
 
-    const isHomeWorkspace = ws.cwd === path.dirname(this.defaultPromptPath);
+    const isHomeWorkspace = ws.cwd === path.dirname(this.config.defaultPromptPath);
     const appendSystemPrompt = isHomeWorkspace ? undefined : this.readDefaultPrompt();
 
     const prompt = buildPrompt(messages);
@@ -191,7 +182,7 @@ export class Orchestrator {
     const allAttachments = messages.flatMap((m) => m.attachments ?? []);
     if (allAttachments.length) {
       const results = await Promise.allSettled(
-        allAttachments.map((att) => saveFile(att, ws.name, this.filesPath)),
+        allAttachments.map((att) => saveFile(att, ws.name, this.config.filesPath)),
       );
       for (const r of results) {
         if (r.status === "rejected") log.warn({ err: r.reason }, "[turn] failed to save attachment");
@@ -211,7 +202,7 @@ export class Orchestrator {
         cwd: ws.cwd,
         prompt,
         attachments: allAttachments.length > 0 ? allAttachments : undefined,
-        permissionMode: state.permissionMode ?? (behavior === "assistant" ? "bypassPermissions" : this.permissionMode),
+        permissionMode: state.permissionMode ?? (behavior === "assistant" ? "bypassPermissions" : this.config.permissionMode),
         appendSystemPrompt,
         mcpServers: { clearclaw: mcpServer },
         signal: abort.signal,
@@ -237,11 +228,11 @@ export class Orchestrator {
       log.info(`[msg] ${msg.user.name} (${msg.user.id}) ${msg.text.slice(0, 80)}`);
 
       const state = this.chat(msg.chatId);
-      const ws = this.workspaceStore.byChat(msg.chatId);
+      const ws = this.config.workspaceByChat(msg.chatId);
 
       // /mode — switch permission mode (works even during active turns)
       if (msg.text === "/mode") {
-        const currentMode = state.permissionMode ?? this.permissionMode;
+        const currentMode = state.permissionMode ?? this.config.permissionMode;
         const buttons = [
           MODE_OPTIONS.slice(0, 2).map((opt) => ({
             label: opt.value === currentMode ? `✓ ${opt.label}` : opt.label,
@@ -271,7 +262,7 @@ export class Orchestrator {
           await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
           return;
         }
-        this.workspaceStore.clearSession(ws.name);
+        this.config.clearSession(ws.name);
         state.permissionMode = null;
         state.stats = null;
         await this.updateStatusMessage(msg.chatId, state);
@@ -324,7 +315,7 @@ export class Orchestrator {
           buttons,
         );
         if (resp.value) {
-          this.workspaceStore.setSession(ws.name, resp.value);
+          this.config.setSession(ws.name, resp.value);
           const picked = stripped.find((s) => s.sessionId === resp.value);
           await this.channel.sendMessage(
             msg.chatId,
@@ -335,7 +326,7 @@ export class Orchestrator {
         return;
       }
 
-      // /cancel — abort the running turn
+      // /cancel — abort running turn
       if (msg.text === "/cancel") {
         if (state.abort) {
           state.abort.abort();
@@ -364,7 +355,7 @@ export class Orchestrator {
           ],
         );
         if (resp.value === "assistant" || resp.value === "relay") {
-          this.workspaceStore.setBehavior(ws.name, resp.value);
+          this.config.setBehavior(ws.name, resp.value);
           await this.updateStatusMessage(msg.chatId, this.chat(msg.chatId));
           log.info("[cmd] workspace %s behavior → %s", ws.name, resp.value);
         }
@@ -373,7 +364,7 @@ export class Orchestrator {
 
       if (!ws) {
         log.info("[msg] no workspace for chat %s", msg.chatId);
-        await this.channel.sendMessage(msg.chatId, "No workspace linked to this group.");
+        await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.");
         return;
       }
 
@@ -386,6 +377,7 @@ export class Orchestrator {
       ).catch(() => {});
     }
   }
+
 
   private async routeEngineEvent(
     chatId: string,
@@ -462,7 +454,7 @@ export class Orchestrator {
 
         case "done": {
           log.info(`[turn] done session=${event.sessionId}`);
-          this.workspaceStore.setSession(workspaceName, event.sessionId);
+          this.config.setSession(workspaceName, event.sessionId);
           if (event.stats) state.stats = event.stats;
 
           // Tool summary only in relay behavior
@@ -590,7 +582,7 @@ export class Orchestrator {
   }
 
   private async updateStatusMessage(chatId: string, state: ChatState): Promise<void> {
-    const mode = state.permissionMode ?? this.permissionMode;
+    const mode = state.permissionMode ?? this.config.permissionMode;
     const modeLabel = MODE_OPTIONS.find((o) => o.value === mode)?.label ?? mode;
 
     let text: string;
@@ -611,7 +603,7 @@ export class Orchestrator {
   /** Read default workspace CLAUDE.md to append to non-default workspace sessions. */
   private readDefaultPrompt(): string | undefined {
     try {
-      const content = fs.readFileSync(this.defaultPromptPath, "utf-8").trim();
+      const content = fs.readFileSync(this.config.defaultPromptPath, "utf-8").trim();
       return content || undefined;
     } catch {
       return undefined;

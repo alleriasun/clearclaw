@@ -6,11 +6,13 @@ import log from "../logger.js";
 import type {
   Attachment,
   Channel,
+  ChatType,
   Button,
   ButtonResponse,
   ReplyContext,
   SendFileOpts,
   SendMessageOpts,
+  UserInfo,
 } from "../types.js";
 
 export class TelegramChannel extends EventEmitter implements Channel {
@@ -18,7 +20,8 @@ export class TelegramChannel extends EventEmitter implements Channel {
 
   private bot: Bot;
   private botToken: string;
-  private allowedUserIds: Set<string>;
+  private isAuthorized: (userId: string) => boolean;
+  private onUnauthorizedDM?: (chatId: string, user: UserInfo) => void;
   private typingIntervals = new Map<string, ReturnType<typeof setInterval>>();
   private statusHandles = new Map<string, string>(); // chatId → message handle for pinned status
 
@@ -31,10 +34,15 @@ export class TelegramChannel extends EventEmitter implements Channel {
   // Pending text input: chatId → resolve function (for requestText follow-ups)
   private pendingTextResolvers = new Map<string, (text: string) => void>();
 
-  constructor(botToken: string, allowedUserIds: Set<string>) {
+  constructor(
+    botToken: string,
+    isAuthorized: (userId: string) => boolean,
+    onUnauthorizedDM?: (chatId: string, user: UserInfo) => void,
+  ) {
     super();
     this.botToken = botToken;
-    this.allowedUserIds = allowedUserIds;
+    this.isAuthorized = isAuthorized;
+    this.onUnauthorizedDM = onUnauthorizedDM;
     this.bot = new Bot(botToken);
   }
 
@@ -336,16 +344,30 @@ export class TelegramChannel extends EventEmitter implements Channel {
     }
   }
 
+  /** Build user info from a grammY context (no auth check). */
+  private buildUserInfo(ctx: Context): UserInfo | null {
+    if (!ctx.from?.id) return null;
+    return {
+      id: `tg:${ctx.from.id}`,
+      name: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" "),
+      ...(ctx.from.username && { handle: ctx.from.username }),
+    };
+  }
+
   /** Extract auth-checked sender info from a grammY context. Returns null if unauthorized. */
-  private extractSender(ctx: Context): { chatId: string; user: { id: string; name: string; handle?: string } } | null {
-    if (!ctx.from?.id || !ctx.chat?.id || !this.allowedUserIds.has(`tg:${ctx.from.id}`)) return null;
+  private extractSender(ctx: Context): { chatId: string; chatType: ChatType; user: UserInfo } | null {
+    const user = this.buildUserInfo(ctx);
+    if (!user || !ctx.chat?.id || !this.isAuthorized(user.id)) {
+      // Notify unauthorized DM senders with their user ID (for pairing)
+      if (user && ctx.chat?.type === "private" && this.onUnauthorizedDM) {
+        this.onUnauthorizedDM(`tg:${ctx.chat.id}`, user);
+      }
+      return null;
+    }
     return {
       chatId: `tg:${ctx.chat.id}`,
-      user: {
-        id: `tg:${ctx.from.id}`,
-        name: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" "),
-        ...(ctx.from.username && { handle: ctx.from.username }),
-      },
+      chatType: ctx.chat.type === "private" ? "dm" : "group",
+      user,
     };
   }
 
