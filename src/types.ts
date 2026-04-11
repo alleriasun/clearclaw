@@ -153,8 +153,12 @@ export interface ReplyContext {
   mediaType?: string;
 }
 
+export type ChatType = "dm" | "group";
+
+
 export interface InboundMessage {
   chatId: string;
+  chatType: ChatType;
   user: UserInfo;
   text: string;
   messageId?: string;
