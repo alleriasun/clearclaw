@@ -29,9 +29,9 @@
     "dist/**/*.d.ts"
   ],
   "scripts": {
-    "start": "tsx src/index.ts",
-    "dev": "tsx --watch src/index.ts",
-    "dev:relay": "nodemon --watch dist --exec 'node dist/index.js'",
+    "start": "tsx src/index.ts daemon",
+    "dev": "tsx --watch src/index.ts daemon",
+    "dev:relay": "nodemon --watch dist --exec 'node dist/index.js daemon'",
     "build": "tsc",
     "check": "tsc --noEmit"
   },
