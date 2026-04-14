@@ -38,6 +38,12 @@ interface ChatState {
   debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
+interface TaskState {
+  sessionId: string | null;
+  cwd: string;
+  prompt: string;
+}
+
 const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
   { label: "Default", value: "default" },
   { label: "Accept Edits", value: "acceptEdits" },
@@ -51,6 +57,7 @@ export class Orchestrator {
   private engine: Engine;
   private config: Config;
   private chats = new Map<string, ChatState>();
+  private tasks = new Map<string, TaskState>();
 
   constructor(opts: OrchestratorOpts) {
     this.channel = opts.channel;
@@ -111,6 +118,100 @@ export class Orchestrator {
       this.processQueuedMessages(msg.chatId).catch((err) => {
         log.error({ err }, "[orchestrator] drain error");
       });
+    }
+  }
+
+  private enqueueTaskMessage(msg: InboundMessage, task: TaskState, state: ChatState): void {
+    state.messageQueue.push(msg);
+    if (state.busy) return;
+    this.processTaskQueue(msg.chatId).catch((err) => {
+      log.error({ err }, "[orchestrator] task drain error");
+    });
+  }
+
+  private async processTaskQueue(chatId: string): Promise<void> {
+    const state = this.chat(chatId);
+    const task = this.tasks.get(chatId);
+    if (state.messageQueue.length === 0 || state.busy || !task) return;
+
+    const messages = [...state.messageQueue];
+    state.messageQueue = [];
+
+    try {
+      await this.executeTaskTurn(chatId, messages, task, state);
+    } catch (err) {
+      log.error({ err }, "[fatal]");
+      await this.channel.sendMessage(
+        chatId,
+        `Internal error: ${err instanceof Error ? err.message : String(err)}`,
+      ).catch(() => {});
+      return;
+    }
+
+    // Post-turn drain
+    if (state.messageQueue.length > 0 && this.tasks.has(chatId)) {
+      this.processTaskQueue(chatId).catch((err) => {
+        log.error({ err }, "[orchestrator] task drain error");
+      });
+    }
+  }
+
+  private async executeTaskTurn(
+    chatId: string,
+    messages: InboundMessage[],
+    task: TaskState,
+    state: ChatState,
+  ): Promise<void> {
+    state.busy = true;
+    const abort = new AbortController();
+    state.abort = abort;
+
+    const turnState = { staySilent: false, replyToMessageId: null as string | null };
+
+    log.info(`[task-turn] start session=${task.sessionId ?? "new"} msgs=${messages.length} cwd=${task.cwd}`);
+    await this.channel.setTyping(chatId, true);
+
+    const prompt = buildPrompt(messages);
+
+    const mcpServer = createSdkMcpServer({
+      name: "clearclaw",
+      tools: this.buildMcpTools(chatId, "relay", turnState),
+    });
+
+    try {
+      for await (const event of this.engine.runTurn({
+        sessionId: task.sessionId,
+        cwd: task.cwd,
+        prompt,
+        permissionMode: "bypassPermissions",
+        appendSystemPrompt: task.prompt,
+        mcpServers: { clearclaw: mcpServer },
+        signal: abort.signal,
+        onPermissionRequest: (req) => this.handlePermission(req, chatId),
+      })) {
+        // Handle done event locally — routeEngineEvent's done handler calls
+        // config.setSession(workspaceName, ...) which is workspace-specific.
+        if (event.type === "done") {
+          log.info(`[task-turn] done session=${event.sessionId}`);
+          const currentTask = this.tasks.get(chatId);
+          if (currentTask) {
+            currentTask.sessionId = event.sessionId;
+          }
+          if (event.stats) state.stats = event.stats;
+          state.toolCallHandle = null;
+          state.todoHandle = null;
+          break;
+        }
+        // All other events route normally
+        await this.routeEngineEvent(chatId, event, "", "relay", turnState);
+      }
+    } finally {
+      state.busy = false;
+      state.abort = null;
+      if (!turnState.staySilent) {
+        await this.channel.setTyping(chatId, false);
+      }
+      // Don't send "Turn cancelled" — /cancel already sent "Setup cancelled"
     }
   }
 
@@ -228,6 +329,33 @@ export class Orchestrator {
       log.info(`[msg] ${msg.user.name} (${msg.user.id}) ${msg.text.slice(0, 80)}`);
 
       const state = this.chat(msg.chatId);
+
+      // /cancel — abort running turn or clear active task (must come before task routing)
+      if (msg.text === "/cancel") {
+        const task = this.tasks.get(msg.chatId);
+        if (task) {
+          this.tasks.delete(msg.chatId);
+          if (state.abort) state.abort.abort();
+          log.info("[cmd] task cancelled for chat %s", msg.chatId);
+          await this.channel.sendMessage(msg.chatId, "Setup cancelled.");
+          return;
+        }
+        if (state.abort) {
+          state.abort.abort();
+          log.info("[cmd] turn cancelled");
+        } else {
+          await this.channel.sendMessage(msg.chatId, "Nothing to cancel.");
+        }
+        return;
+      }
+
+      // Task routing — takes priority over workspace and all other commands
+      const existingTask = this.tasks.get(msg.chatId);
+      if (existingTask) {
+        this.enqueueTaskMessage(msg, existingTask, state);
+        return;
+      }
+
       const ws = this.config.workspaceByChat(msg.chatId);
 
       // /mode — switch permission mode (works even during active turns)
@@ -326,17 +454,6 @@ export class Orchestrator {
         return;
       }
 
-      // /cancel — abort running turn
-      if (msg.text === "/cancel") {
-        if (state.abort) {
-          state.abort.abort();
-          log.info("[cmd] turn cancelled");
-        } else {
-          await this.channel.sendMessage(msg.chatId, "Nothing to cancel.");
-        }
-        return;
-      }
-
       // /behavior — switch workspace behavior (assistant or relay)
       if (msg.text === "/behavior") {
         if (!ws) {
@@ -363,8 +480,23 @@ export class Orchestrator {
       }
 
       if (!ws) {
-        log.info("[msg] no workspace for chat %s", msg.chatId);
-        await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.");
+        if (this.config.isAuthorized(msg.user.id)) {
+          const newTask: TaskState = {
+            sessionId: null,
+            cwd: path.dirname(this.config.defaultPromptPath),
+            prompt: [
+              "THIS IS A TASK SESSION — not a regular conversation.",
+              "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
+              "Your only job: help set up a workspace for this chat. Use the onboarding skill.",
+            ].join("\n"),
+          };
+          this.tasks.set(msg.chatId, newTask);
+          log.info("[task] onboarding started for chat %s", msg.chatId);
+          this.enqueueTaskMessage(msg, newTask, state);
+        } else {
+          log.info("[msg] no workspace for chat %s", msg.chatId);
+          await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.");
+        }
         return;
       }
 
@@ -506,6 +638,42 @@ export class Orchestrator {
         return { content: [{ type: "text" as const, text: `Sent ${name} to chat` }] };
       }),
     ];
+
+    // Task tools — only available during task turns
+    if (this.tasks.has(chatId)) {
+      tools.push(
+        tool("workspace_create", "Create a new workspace and link it to the current chat", {
+          name: z.string().describe("Workspace name (unique, e.g. 'myproject')"),
+          cwd: z.string().describe("Absolute path to the workspace directory"),
+          behavior: z.enum(["assistant", "relay"]).optional()
+            .describe("Workspace behavior mode"),
+        }, async (args) => {
+          if (this.config.workspaceByName(args.name)) {
+            throw new Error(`Workspace "${args.name}" already exists. Choose a different name.`);
+          }
+          fs.mkdirSync(args.cwd, { recursive: true });
+          this.config.upsertWorkspace({
+            name: args.name,
+            cwd: args.cwd,
+            chat_id: chatId,
+            current_session_id: null,
+            behavior: args.behavior,
+          });
+          log.info("[tool] workspace_create: %s → %s (chat %s)", args.name, args.cwd, chatId);
+          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created at ${args.cwd}, linked to this chat.` }] };
+        }),
+        tool("task_complete", "Signal that the current task is complete", {
+          message: z.string().optional().describe("Summary of what was accomplished"),
+        }, async (args) => {
+          if (!this.tasks.has(chatId)) {
+            throw new Error("No active task for this chat.");
+          }
+          this.tasks.delete(chatId);
+          log.info("[tool] task_complete: chat %s — %s", chatId, args.message ?? "done");
+          return { content: [{ type: "text" as const, text: "Task completed." }] };
+        }),
+      );
+    }
 
     if (behavior === "assistant") {
       tools.push(
