@@ -294,17 +294,9 @@ export class Config {
   syncSkills(): void {
     const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     const srcSkills = path.join(pkgRoot, "skills");
-    const destSkills = path.join(this.dataDir, "workspace", ".claude", "skills");
     if (!fs.existsSync(srcSkills)) return;
-    for (const entry of fs.readdirSync(srcSkills, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const srcDir = path.join(srcSkills, entry.name);
-      const destDir = path.join(destSkills, entry.name);
-      fs.mkdirSync(destDir, { recursive: true });
-      for (const file of fs.readdirSync(srcDir)) {
-        fs.copyFileSync(path.join(srcDir, file), path.join(destDir, file));
-      }
-    }
+    const destSkills = path.join(this.dataDir, "workspace", ".claude", "skills");
+    fs.cpSync(srcSkills, destSkills, { recursive: true, force: true });
   }
 
   approveUser(userId: string, userName: string, chatId: string): void {

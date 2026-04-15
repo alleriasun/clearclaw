@@ -44,6 +44,12 @@ interface TaskState {
   prompt: string;
 }
 
+type TurnContext = Workspace | TaskState;
+
+function isTask(ctx: TurnContext): ctx is TaskState {
+  return "prompt" in ctx;
+}
+
 const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
   { label: "Default", value: "default" },
   { label: "Accept Edits", value: "acceptEdits" },
@@ -100,118 +106,25 @@ export class Orchestrator {
     await this.channel.disconnect();
   }
 
-  /** Effective behavior for a workspace: explicit setting, or home→assistant / project→relay. */
-  private effectiveBehavior(ws: Workspace): "assistant" | "relay" {
-    if (ws.behavior !== undefined) return ws.behavior;
-    return ws.cwd === path.dirname(this.config.defaultPromptPath) ? "assistant" : "relay";
+  /** Effective behavior: tasks→assistant, workspace→explicit setting or home→assistant / project→relay. */
+  private effectiveBehavior(ctx: TurnContext): "assistant" | "relay" {
+    if (isTask(ctx)) return "assistant";
+    if (ctx.behavior !== undefined) return ctx.behavior;
+    return ctx.cwd === path.dirname(this.config.defaultPromptPath) ? "assistant" : "relay";
   }
 
-  /** Enqueue a message and either drain immediately (relay) or start debounce (assistant). */
-  private enqueueMessage(msg: InboundMessage, ws: Workspace, state: ChatState): void {
+  /** Enqueue a message and drain — immediately for relay, debounced for assistant/task. */
+  private enqueueMessage(msg: InboundMessage, ctx: TurnContext, state: ChatState): void {
     state.messageQueue.push(msg);
-    if (state.busy) return; // processQueuedMessages will pick up after current turn completes
+    if (state.busy) return;
 
-    if (this.effectiveBehavior(ws) === "assistant") {
+    if (this.effectiveBehavior(ctx) === "assistant") {
       if (state.debounceTimer) clearTimeout(state.debounceTimer);
       this.scheduleDebounce(msg.chatId);
     } else {
       this.processQueuedMessages(msg.chatId).catch((err) => {
         log.error({ err }, "[orchestrator] drain error");
       });
-    }
-  }
-
-  private enqueueTaskMessage(msg: InboundMessage, task: TaskState, state: ChatState): void {
-    state.messageQueue.push(msg);
-    if (state.busy) return;
-    this.processTaskQueue(msg.chatId).catch((err) => {
-      log.error({ err }, "[orchestrator] task drain error");
-    });
-  }
-
-  private async processTaskQueue(chatId: string): Promise<void> {
-    const state = this.chat(chatId);
-    const task = this.tasks.get(chatId);
-    if (state.messageQueue.length === 0 || state.busy || !task) return;
-
-    const messages = [...state.messageQueue];
-    state.messageQueue = [];
-
-    try {
-      await this.executeTaskTurn(chatId, messages, task, state);
-    } catch (err) {
-      log.error({ err }, "[fatal]");
-      await this.channel.sendMessage(
-        chatId,
-        `Internal error: ${err instanceof Error ? err.message : String(err)}`,
-      ).catch(() => {});
-      return;
-    }
-
-    // Post-turn drain
-    if (state.messageQueue.length > 0 && this.tasks.has(chatId)) {
-      this.processTaskQueue(chatId).catch((err) => {
-        log.error({ err }, "[orchestrator] task drain error");
-      });
-    }
-  }
-
-  private async executeTaskTurn(
-    chatId: string,
-    messages: InboundMessage[],
-    task: TaskState,
-    state: ChatState,
-  ): Promise<void> {
-    state.busy = true;
-    const abort = new AbortController();
-    state.abort = abort;
-
-    const turnState = { staySilent: false, replyToMessageId: null as string | null };
-
-    log.info(`[task-turn] start session=${task.sessionId ?? "new"} msgs=${messages.length} cwd=${task.cwd}`);
-    await this.channel.setTyping(chatId, true);
-
-    const prompt = buildPrompt(messages);
-
-    const mcpServer = createSdkMcpServer({
-      name: "clearclaw",
-      tools: this.buildMcpTools(chatId, "relay", turnState),
-    });
-
-    try {
-      for await (const event of this.engine.runTurn({
-        sessionId: task.sessionId,
-        cwd: task.cwd,
-        prompt,
-        permissionMode: "bypassPermissions",
-        appendSystemPrompt: task.prompt,
-        mcpServers: { clearclaw: mcpServer },
-        signal: abort.signal,
-        onPermissionRequest: (req) => this.handlePermission(req, chatId),
-      })) {
-        // Handle done event locally — routeEngineEvent's done handler calls
-        // config.setSession(workspaceName, ...) which is workspace-specific.
-        if (event.type === "done") {
-          log.info(`[task-turn] done session=${event.sessionId}`);
-          const currentTask = this.tasks.get(chatId);
-          if (currentTask) {
-            currentTask.sessionId = event.sessionId;
-          }
-          if (event.stats) state.stats = event.stats;
-          state.toolCallHandle = null;
-          state.todoHandle = null;
-          break;
-        }
-        // All other events route normally
-        await this.routeEngineEvent(chatId, event, "", "relay", turnState);
-      }
-    } finally {
-      state.busy = false;
-      state.abort = null;
-      if (!turnState.staySilent) {
-        await this.channel.setTyping(chatId, false);
-      }
-      // Don't send "Turn cancelled" — /cancel already sent "Setup cancelled"
     }
   }
 
@@ -229,14 +142,15 @@ export class Orchestrator {
     const state = this.chat(chatId);
     if (state.messageQueue.length === 0 || state.busy) return;
 
-    const ws = this.config.workspaceByChat(chatId);
-    if (!ws) return;
+    const ctx: TurnContext | undefined =
+      this.tasks.get(chatId) ?? this.config.workspaceByChat(chatId);
+    if (!ctx) return;
 
     const messages = [...state.messageQueue];
     state.messageQueue = [];
 
     try {
-      await this.executeTurn(chatId, messages, ws, state);
+      await this.executeTurn(chatId, messages, ctx, state);
     } catch (err) {
       log.error({ err }, "[fatal]");
       await this.channel.sendMessage(
@@ -248,7 +162,7 @@ export class Orchestrator {
 
     // Post-turn drain: new messages may have arrived while the turn was running
     if (state.messageQueue.length > 0) {
-      if (this.effectiveBehavior(ws) === "assistant") {
+      if (this.effectiveBehavior(ctx) === "assistant") {
         this.scheduleDebounce(chatId);
       } else {
         this.processQueuedMessages(chatId).catch((err) => {
@@ -261,27 +175,35 @@ export class Orchestrator {
   private async executeTurn(
     chatId: string,
     messages: InboundMessage[],
-    ws: Workspace,
+    ctx: TurnContext,
     state: ChatState,
   ): Promise<void> {
+    const task = isTask(ctx) ? ctx : undefined;
+    const ws = isTask(ctx) ? undefined : ctx;
+
     state.busy = true;
     const abort = new AbortController();
     state.abort = abort;
 
-    const behavior = this.effectiveBehavior(ws);
+    const behavior = this.effectiveBehavior(ctx);
     const turnState = { staySilent: false, replyToMessageId: null as string | null };
+    const sessionId = task ? task.sessionId : ws!.current_session_id;
+    const cwd = task ? task.cwd : ws!.cwd;
+    const logPrefix = task ? "[task-turn]" : "[turn]";
 
-    log.info(`[turn] start behavior=${behavior} session=${ws.current_session_id ?? "new"} msgs=${messages.length} cwd=${ws.cwd}`);
+    log.info("%s start session=%s msgs=%d cwd=%s", logPrefix, sessionId ?? "new", messages.length, cwd);
     await this.channel.setTyping(chatId, true);
 
-    const isHomeWorkspace = ws.cwd === path.dirname(this.config.defaultPromptPath);
-    const appendSystemPrompt = isHomeWorkspace ? undefined : this.readDefaultPrompt();
+    const isHomeWorkspace = ws && ws.cwd === path.dirname(this.config.defaultPromptPath);
+    const appendSystemPrompt = task
+      ? task.prompt
+      : (isHomeWorkspace ? undefined : this.readDefaultPrompt());
 
     const prompt = buildPrompt(messages);
 
-    // Save all attachments to disk for the audit log
+    // Save attachments for workspace turns
     const allAttachments = messages.flatMap((m) => m.attachments ?? []);
-    if (allAttachments.length) {
+    if (ws && allAttachments.length) {
       const results = await Promise.allSettled(
         allAttachments.map((att) => saveFile(att, ws.name, this.config.filesPath)),
       );
@@ -299,17 +221,38 @@ export class Orchestrator {
 
     try {
       for await (const event of this.engine.runTurn({
-        sessionId: ws.current_session_id,
-        cwd: ws.cwd,
+        sessionId,
+        cwd,
         prompt,
-        attachments: allAttachments.length > 0 ? allAttachments : undefined,
+        attachments: ws && allAttachments.length > 0 ? allAttachments : undefined,
         permissionMode: state.permissionMode ?? (behavior === "assistant" ? "bypassPermissions" : this.config.permissionMode),
         appendSystemPrompt,
         mcpServers: { clearclaw: mcpServer },
         signal: abort.signal,
         onPermissionRequest: (req) => this.handlePermission(req, chatId),
       })) {
-        await this.routeEngineEvent(chatId, event, ws.name, behavior, turnState);
+        // Handle done event inline — task vs workspace need different session storage
+        if (event.type === "done") {
+          log.info("%s done session=%s", logPrefix, event.sessionId);
+          if (task) {
+            const currentTask = this.tasks.get(chatId);
+            if (currentTask) currentTask.sessionId = event.sessionId;
+          } else {
+            this.config.setSession(ws!.name, event.sessionId);
+          }
+          if (event.stats) state.stats = event.stats;
+          if (behavior === "relay" && state.toolCallHandle && event.stats) {
+            const summary = formatToolCallSummary(event.stats.toolCalls);
+            if (summary) {
+              try { await this.channel.editMessage(chatId, state.toolCallHandle, summary); } catch { /* */ }
+            }
+          }
+          state.toolCallHandle = null;
+          state.todoHandle = null;
+          await this.updateStatusMessage(chatId, state);
+          break;
+        }
+        await this.routeEngineEvent(chatId, event, ws?.name ?? "", behavior, turnState);
       }
     } finally {
       const cancelled = abort.signal.aborted;
@@ -318,7 +261,8 @@ export class Orchestrator {
       if (!turnState.staySilent) {
         await this.channel.setTyping(chatId, false);
       }
-      if (cancelled) {
+      // Task cancel already sent "Setup cancelled" from /cancel handler
+      if (cancelled && !task) {
         await this.channel.sendMessage(chatId, "Turn cancelled.");
       }
     }
@@ -352,7 +296,7 @@ export class Orchestrator {
       // Task routing — takes priority over workspace and all other commands
       const existingTask = this.tasks.get(msg.chatId);
       if (existingTask) {
-        this.enqueueTaskMessage(msg, existingTask, state);
+        this.enqueueMessage(msg, existingTask, state);
         return;
       }
 
@@ -492,7 +436,7 @@ export class Orchestrator {
           };
           this.tasks.set(msg.chatId, newTask);
           log.info("[task] onboarding started for chat %s", msg.chatId);
-          this.enqueueTaskMessage(msg, newTask, state);
+          this.enqueueMessage(msg, newTask, state);
         } else {
           log.info("[msg] no workspace for chat %s", msg.chatId);
           await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.");
@@ -584,25 +528,9 @@ export class Orchestrator {
           break;
         }
 
-        case "done": {
-          log.info(`[turn] done session=${event.sessionId}`);
-          this.config.setSession(workspaceName, event.sessionId);
-          if (event.stats) state.stats = event.stats;
-
-          // Tool summary only in relay behavior
-          if (behavior === "relay" && state.toolCallHandle && event.stats) {
-            const summary = formatToolCallSummary(event.stats.toolCalls);
-            if (summary) {
-              try {
-                await this.channel.editMessage(chatId, state.toolCallHandle, summary);
-              } catch { /* edit failed, leave as-is */ }
-            }
-          }
-          state.toolCallHandle = null;
-          state.todoHandle = null;
-          await this.updateStatusMessage(chatId, state);
+        case "done":
+          // Handled inline in executeTurn (task vs workspace need different session storage)
           break;
-        }
 
         case "error":
           log.error(`[turn] error: ${event.message}`);
@@ -665,9 +593,6 @@ export class Orchestrator {
         tool("task_complete", "Signal that the current task is complete", {
           message: z.string().optional().describe("Summary of what was accomplished"),
         }, async (args) => {
-          if (!this.tasks.has(chatId)) {
-            throw new Error("No active task for this chat.");
-          }
           this.tasks.delete(chatId);
           log.info("[tool] task_complete: chat %s — %s", chatId, args.message ?? "done");
           return { content: [{ type: "text" as const, text: "Task completed." }] };
