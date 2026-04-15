@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { fileURLToPath } from "node:url";
 import type { PermissionMode, Workspace } from "./types.js";
 
 // --- Channel config types ---
@@ -286,6 +287,16 @@ export class Config {
     const defaultCwd = path.join(this.dataDir, "workspace");
     fs.mkdirSync(defaultCwd, { recursive: true });
     this.upsertWorkspace({ name: "default", cwd: defaultCwd, chat_id: chatId, current_session_id: null });
+    this.syncSkills();
+  }
+
+  /** Copy bundled skills from the repo's skills/ directory to the home workspace's .claude/skills/. */
+  syncSkills(): void {
+    const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const srcSkills = path.join(pkgRoot, "skills");
+    if (!fs.existsSync(srcSkills)) return;
+    const destSkills = path.join(this.dataDir, "workspace", ".claude", "skills");
+    fs.cpSync(srcSkills, destSkills, { recursive: true, force: true });
   }
 
   approveUser(userId: string, userName: string, chatId: string): void {

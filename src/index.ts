@@ -12,6 +12,7 @@ import type { Channel, UserInfo } from "./types.js";
 
 async function runDaemon(): Promise<void> {
   const config = new Config().resolve();
+  config.syncSkills();
   initLogger(config.logPath);
 
   // The Claude Agent SDK has a bug: handleControlRequest() writes to the
