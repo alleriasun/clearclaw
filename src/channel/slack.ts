@@ -194,6 +194,19 @@ export class SlackChannel extends EventEmitter implements Channel {
     const handles: string[] = [];
     const threadTs = opts?.replyToMessageId;
 
+    /** Post a chunk with mrkdwn blocks, falling back to plain text on failure. */
+    const postChunk = async (chunk: string, extra: Record<string, unknown> = {}): Promise<string | undefined> => {
+      const blocks = mrkdwnBlocks(chunk);
+      try {
+        const r = await this.app.client.chat.postMessage({ channel, text: chunk, blocks, ...extra });
+        return r.ts as string | undefined;
+      } catch {
+        log.warn("[channel] postMessage failed with mrkdwn, retrying as plain text");
+        const r = await this.app.client.chat.postMessage({ channel, text: chunk, ...extra });
+        return r.ts as string | undefined;
+      }
+    };
+
     // Consume typing placeholder only when not posting as a thread reply
     const consumeTyping = !threadTs && opts?.consumeTyping !== false;
     const typingTs = consumeTyping ? this.typingMessageTs.get(chatId) : undefined;
@@ -207,21 +220,15 @@ export class SlackChannel extends EventEmitter implements Channel {
         });
         handles.push(typingTs);
       } catch {
-        // Placeholder was deleted externally — fall back to posting
-        const result = await this.app.client.chat.postMessage({
-          channel, text: firstChunk, blocks,
-        });
-        if (result.ts) handles.push(result.ts as string);
+        // Placeholder was deleted externally or mrkdwn invalid — post instead
+        const ts = await postChunk(firstChunk);
+        if (ts) handles.push(ts);
       }
     }
 
     for (const chunk of chunks) {
-      const blocks = mrkdwnBlocks(chunk);
-      const result = await this.app.client.chat.postMessage({
-        channel, text: chunk, blocks,
-        ...(threadTs && { thread_ts: threadTs }),
-      });
-      if (result.ts) handles.push(result.ts as string);
+      const ts = await postChunk(chunk, threadTs ? { thread_ts: threadTs } : {});
+      if (ts) handles.push(ts);
     }
     return handles;
   }
