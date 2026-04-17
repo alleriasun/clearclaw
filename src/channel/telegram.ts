@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { Bot, type Context, InlineKeyboard, InputFile } from "grammy";
 import type { Message } from "@grammyjs/types";
 import mime from "mime";
+import telegramifyMarkdown from "telegramify-markdown";
 import log from "../logger.js";
 import type {
   Attachment,
@@ -157,20 +158,17 @@ export class TelegramChannel extends EventEmitter implements Channel {
       const replyParams = firstChunk && opts?.replyToMessageId
         ? { reply_parameters: { message_id: Number(opts.replyToMessageId) } }
         : {};
+      const rendered = telegramifyMarkdown(chunk, "escape");
       try {
-        const sent = await this.bot.api.sendMessage(numId, chunk, {
-          parse_mode: opts?.parseMode,
+        const sent = await this.bot.api.sendMessage(numId, rendered, {
+          parse_mode: "MarkdownV2",
           ...replyParams,
         });
         handles.push(String(sent.message_id));
       } catch (err) {
-        if (opts?.parseMode) {
-          log.warn("[channel] sendMessage failed with %s, retrying as plain text", opts.parseMode);
-          const sent = await this.bot.api.sendMessage(numId, chunk, replyParams);
-          handles.push(String(sent.message_id));
-        } else {
-          throw err;
-        }
+        log.warn("[channel] sendMessage failed with MarkdownV2, retrying as plain text");
+        const sent = await this.bot.api.sendMessage(numId, chunk, replyParams);
+        handles.push(String(sent.message_id));
       }
       firstChunk = false;
     }
@@ -206,7 +204,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
     }
 
     // Convert universal markdown to MarkdownV2, fall back to plain text on failure
-    const mdv2Text = convertToMarkdownV2(text);
+    const mdv2Text = telegramifyMarkdown(text, "escape");
     let sent;
     try {
       sent = await this.bot.api.sendMessage(numId, mdv2Text, {
@@ -474,43 +472,6 @@ export class TelegramChannel extends EventEmitter implements Channel {
   private numericId(chatId: string): number {
     return Number(chatId.replace(/^tg:/, ""));
   }
-}
-
-/**
- * Escape for Telegram MarkdownV2.
- * Outside code blocks: all special chars. Inside: only backtick and backslash.
- */
-function escapeMarkdownV2(text: string, codeBlock = false): string {
-  const pattern = codeBlock ? /[`\\]/g : /[_*\[\]()~`>#+\-=|{}.!\\]/g;
-  return text.replace(pattern, "\\$&");
-}
-
-/**
- * Convert universal markdown (with code fences) to Telegram MarkdownV2.
- * Handles code blocks specially: fence markers stay literal, inner content
- * only escapes ` and \, outer text gets full MarkdownV2 escaping.
- */
-function convertToMarkdownV2(markdown: string): string {
-  const result: string[] = [];
-  let pos = 0;
-  const fenceRegex = /```(\w*)\n([\s\S]*?)```/g;
-  let match;
-
-  while ((match = fenceRegex.exec(markdown)) !== null) {
-    if (match.index > pos) {
-      result.push(escapeMarkdownV2(markdown.slice(pos, match.index)));
-    }
-    result.push("```" + match[1] + "\n");
-    result.push(escapeMarkdownV2(match[2], true));
-    result.push("```");
-    pos = match.index + match[0].length;
-  }
-
-  if (pos < markdown.length) {
-    result.push(escapeMarkdownV2(markdown.slice(pos)));
-  }
-
-  return result.join("");
 }
 
 const MAX_MSG_LEN = 4096;

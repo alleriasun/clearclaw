@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
 import type { MessageElement } from "@slack/web-api/dist/types/response/ConversationsHistoryResponse.js";
+import { slackifyMarkdown } from "slackify-markdown";
 import log from "../logger.js";
 import type { Attachment, Channel, ChatType, Button, ButtonResponse, ReplyContext, SendFileOpts, SendMessageOpts, UserInfo } from "../types.js";
 
@@ -490,7 +491,14 @@ export class SlackChannel extends EventEmitter implements Channel {
 }
 
 function mrkdwnBlocks(text: string): KnownBlock[] {
-  return [{ type: "section", text: { type: "mrkdwn", text } }];
+  let rendered: string;
+  try {
+    rendered = slackifyMarkdown(text);
+  } catch (err) {
+    log.warn({ err }, "[channel] slackifyMarkdown failed, sending raw text");
+    rendered = text;
+  }
+  return [{ type: "section", text: { type: "mrkdwn", text: rendered } }];
 }
 
 // Block Kit section.text has a 3000 char limit — the tightest Slack constraint.

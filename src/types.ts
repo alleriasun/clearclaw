@@ -46,7 +46,6 @@ export interface ButtonResponse {
 }
 
 export interface SendMessageOpts {
-  parseMode?: "MarkdownV2" | "HTML";
   /** When false, skip consuming the typing placeholder (e.g. for tool status messages). */
   consumeTyping?: boolean;
   /** Reply/thread to a specific platform message ID (Telegram reply, Slack thread). */
