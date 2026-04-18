@@ -31,6 +31,7 @@ export class AcpEngine implements Engine {
       sessionId,
       cwd,
       prompt: textPrompt,
+      attachments,
       permissionMode,
       onPermissionRequest,
       signal,
@@ -78,12 +79,13 @@ export class AcpEngine implements Engine {
       );
       const conn = new ClientSideConnection((_agent) => client, stream);
 
-      // Initialize
-      await conn.initialize({
+      // Initialize and read agent capabilities
+      const initResponse = await conn.initialize({
         protocolVersion: PROTOCOL_VERSION,
         clientInfo: { name: "clearclaw", version: "0.4.0" },
         clientCapabilities: {},
       });
+      const supportsImages = initResponse.agentCapabilities?.promptCapabilities?.image ?? false;
 
       // Create or resume session
       let acpSessionId: string;
@@ -104,10 +106,25 @@ export class AcpEngine implements Engine {
       };
       signal?.addEventListener("abort", onAbort, { once: true });
 
+      // Build prompt content blocks: text + any image attachments
+      const promptBlocks: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [
+        { type: "text", text: textPrompt },
+      ];
+      const imageAttachments = attachments?.filter((a) => a.mimeType.startsWith("image/")) ?? [];
+      if (imageAttachments.length > 0) {
+        if (supportsImages) {
+          for (const att of imageAttachments) {
+            promptBlocks.push({ type: "image", data: att.buffer.toString("base64"), mimeType: att.mimeType });
+          }
+        } else {
+          log.warn("[acp:%s] dropping %d image attachment(s) — agent does not support images", this.name, imageAttachments.length);
+        }
+      }
+
       // Send prompt — resolves when turn completes
       const promptResponse = conn.prompt({
         sessionId: acpSessionId,
-        prompt: [{ type: "text", text: textPrompt }],
+        prompt: promptBlocks,
       });
 
       // When prompt completes, push done event and close queue
