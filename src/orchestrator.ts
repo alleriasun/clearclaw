@@ -34,6 +34,9 @@ interface ChatState {
   // Rolling tool message: each tool_use replaces this single message's content
   toolCallHandle: string | null;
   todoHandle: string | null;
+  // Rolling text message: streaming engines (text_chunk) accumulate here
+  textHandle: string | null;
+  textBuffer: string;
   engineName: string | null; // engine name for status display when model is null
   // Per-chat message queue: relay drains immediately, assistant debounces
   messageQueue: InboundMessage[];
@@ -78,7 +81,8 @@ export class Orchestrator {
     if (!s) {
       s = {
         busy: false, abort: null, permissionMode: null, stats: null, lastStatusText: null,
-        toolCallHandle: null, todoHandle: null, engineName: null,
+        toolCallHandle: null, todoHandle: null, textHandle: null, textBuffer: "",
+        engineName: null,
         messageQueue: [], debounceTimer: null,
       };
       this.chats.set(chatId, s);
@@ -266,6 +270,14 @@ export class Orchestrator {
           }
           state.toolCallHandle = null;
           state.todoHandle = null;
+          // Final formatted edit for any pending streaming text
+          if (state.textHandle && state.textBuffer) {
+            try {
+              await this.channel.editMessage(chatId, state.textHandle, state.textBuffer);
+            } catch { /* best effort */ }
+          }
+          state.textHandle = null;
+          state.textBuffer = "";
           await this.updateStatusMessage(chatId, state);
           break;
         }
@@ -492,7 +504,40 @@ export class Orchestrator {
           });
           break;
 
+        case "text_chunk": {
+          if (turnState.staySilent) break;
+          state.textBuffer += event.text;
+          const plainOpts = { format: "plain" as const };
+          if (state.textHandle) {
+            try {
+              await this.channel.editMessage(chatId, state.textHandle, state.textBuffer, plainOpts);
+            } catch {
+              const handles = await this.channel.sendMessage(chatId, state.textBuffer, {
+                ...plainOpts,
+                replyToMessageId: turnState.replyToMessageId ?? undefined,
+              });
+              state.textHandle = handles[0];
+            }
+          } else {
+            const handles = await this.channel.sendMessage(chatId, state.textBuffer, {
+              ...plainOpts,
+              replyToMessageId: turnState.replyToMessageId ?? undefined,
+            });
+            state.textHandle = handles[0];
+          }
+          break;
+        }
+
         case "tool_use": {
+          // Flush streaming text — final edit with markdown formatting
+          if (state.textHandle && state.textBuffer) {
+            try {
+              await this.channel.editMessage(chatId, state.textHandle, state.textBuffer);
+            } catch { /* best effort */ }
+          }
+          state.textHandle = null;
+          state.textBuffer = "";
+
           // In assistant behavior, all tool status is suppressed (no rolling status, no plan mode notifications)
           if (behavior === "assistant") break;
 

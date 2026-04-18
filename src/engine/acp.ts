@@ -182,7 +182,7 @@ function mapSessionUpdate(
     case "agent_message_chunk": {
       const content = update.content;
       if (content.type === "text") {
-        return { type: "text", text: content.text };
+        return { type: "text_chunk", text: content.text };
       }
       return null;
     }

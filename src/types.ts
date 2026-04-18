@@ -14,14 +14,14 @@ export interface Channel {
   sendMessage(
     chatId: string,
     text: string,
-    opts?: SendMessageOpts,
+    opts?: MessageOpts,
   ): Promise<string[]>;
   sendInteractive(
     chatId: string,
     text: string,
     buttons: Button[][],
   ): Promise<ButtonResponse>;
-  editMessage(chatId: string, handle: string, text: string): Promise<void>;
+  editMessage(chatId: string, handle: string, text: string, opts?: MessageOpts): Promise<void>;
   deleteMessage(chatId: string, handle: string): Promise<void>;
   pinMessage(chatId: string, handle: string): Promise<void>;
   unpinAllMessages(chatId: string): Promise<void>;
@@ -45,11 +45,15 @@ export interface ButtonResponse {
   text?: string; // user-provided follow-up text (when requestText button pressed)
 }
 
-export interface SendMessageOpts {
+export type TextFormat = "markdown" | "plain";
+
+export interface MessageOpts {
   /** When false, skip consuming the typing placeholder (e.g. for tool status messages). */
   consumeTyping?: boolean;
   /** Reply/thread to a specific platform message ID (Telegram reply, Slack thread). */
   replyToMessageId?: string;
+  /** Text format hint. Defaults to "markdown". */
+  format?: TextFormat;
 }
 
 export interface SendFileOpts {
@@ -109,6 +113,7 @@ export interface TurnStats {
 
 export type EngineEvent =
   | { type: "text"; text: string }
+  | { type: "text_chunk"; text: string }
   | { type: "tool_use"; toolName: string; input: Record<string, unknown>; toolUseId: string }
   | { type: "tool_result"; toolName: string; output: string }
   | { type: "rate_limit"; status: string; resetsAt?: number }

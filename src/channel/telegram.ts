@@ -12,7 +12,7 @@ import type {
   ButtonResponse,
   ReplyContext,
   SendFileOpts,
-  SendMessageOpts,
+  MessageOpts,
   UserInfo,
 } from "../types.js";
 
@@ -148,27 +148,33 @@ export class TelegramChannel extends EventEmitter implements Channel {
   async sendMessage(
     chatId: string,
     text: string,
-    opts?: SendMessageOpts,
+    opts?: MessageOpts,
   ): Promise<string[]> {
     const numId = this.numericId(chatId);
     const chunks = splitMessage(text);
     const handles: string[] = [];
+    const plain = opts?.format === "plain";
     let firstChunk = true;
     for (const chunk of chunks) {
       const replyParams = firstChunk && opts?.replyToMessageId
         ? { reply_parameters: { message_id: Number(opts.replyToMessageId) } }
         : {};
-      const rendered = telegramifyMarkdown(chunk, "escape");
-      try {
-        const sent = await this.bot.api.sendMessage(numId, rendered, {
-          parse_mode: "MarkdownV2",
-          ...replyParams,
-        });
-        handles.push(String(sent.message_id));
-      } catch (err) {
-        log.warn("[channel] sendMessage failed with MarkdownV2, retrying as plain text");
+      if (plain) {
         const sent = await this.bot.api.sendMessage(numId, chunk, replyParams);
         handles.push(String(sent.message_id));
+      } else {
+        const rendered = telegramifyMarkdown(chunk, "escape");
+        try {
+          const sent = await this.bot.api.sendMessage(numId, rendered, {
+            parse_mode: "MarkdownV2",
+            ...replyParams,
+          });
+          handles.push(String(sent.message_id));
+        } catch (err) {
+          log.warn("[channel] sendMessage failed with MarkdownV2, retrying as plain text");
+          const sent = await this.bot.api.sendMessage(numId, chunk, replyParams);
+          handles.push(String(sent.message_id));
+        }
       }
       firstChunk = false;
     }
@@ -266,9 +272,18 @@ export class TelegramChannel extends EventEmitter implements Channel {
     return { value: pressed.value };
   }
 
-  async editMessage(chatId: string, handle: string, text: string): Promise<void> {
+  async editMessage(chatId: string, handle: string, text: string, opts?: MessageOpts): Promise<void> {
     const numId = this.numericId(chatId);
-    await this.bot.api.editMessageText(numId, Number(handle), text);
+    if (opts?.format === "plain") {
+      await this.bot.api.editMessageText(numId, Number(handle), text);
+    } else {
+      const rendered = telegramifyMarkdown(text, "escape");
+      try {
+        await this.bot.api.editMessageText(numId, Number(handle), rendered, { parse_mode: "MarkdownV2" });
+      } catch {
+        await this.bot.api.editMessageText(numId, Number(handle), text);
+      }
+    }
   }
 
   async deleteMessage(chatId: string, handle: string): Promise<void> {
