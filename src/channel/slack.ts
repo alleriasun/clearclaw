@@ -4,7 +4,7 @@ import type { KnownBlock } from "@slack/types";
 import type { MessageElement } from "@slack/web-api/dist/types/response/ConversationsHistoryResponse.js";
 import { slackifyMarkdown } from "slackify-markdown";
 import log from "../logger.js";
-import type { Attachment, Channel, ChatType, Button, ButtonResponse, ReplyContext, SendFileOpts, SendMessageOpts, UserInfo } from "../types.js";
+import type { Attachment, Channel, ChatType, Button, ButtonResponse, ReplyContext, SendFileOpts, MessageOpts, UserInfo } from "../types.js";
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
@@ -187,15 +187,21 @@ export class SlackChannel extends EventEmitter implements Channel {
   async sendMessage(
     chatId: string,
     text: string,
-    opts?: SendMessageOpts,
+    opts?: MessageOpts,
   ): Promise<string[]> {
     const channel = this.slackId(chatId);
     const chunks = splitMessage(text);
     const handles: string[] = [];
     const threadTs = opts?.replyToMessageId;
 
-    /** Post a chunk with mrkdwn blocks, falling back to plain text on failure. */
+    const plain = opts?.format === "plain";
+
+    /** Post a chunk, with mrkdwn blocks unless plain format requested. */
     const postChunk = async (chunk: string, extra: Record<string, unknown> = {}): Promise<string | undefined> => {
+      if (plain) {
+        const r = await this.app.client.chat.postMessage({ channel, text: chunk, ...extra });
+        return r.ts as string | undefined;
+      }
       const blocks = mrkdwnBlocks(chunk);
       try {
         const r = await this.app.client.chat.postMessage({ channel, text: chunk, blocks, ...extra });
@@ -213,16 +219,25 @@ export class SlackChannel extends EventEmitter implements Channel {
     if (typingTs && chunks.length > 0) {
       this.typingMessageTs.delete(chatId);
       const firstChunk = chunks.shift()!;
-      const blocks = mrkdwnBlocks(firstChunk);
-      try {
-        await this.app.client.chat.update({
-          channel, ts: typingTs, text: firstChunk, blocks,
-        });
-        handles.push(typingTs);
-      } catch {
-        // Placeholder was deleted externally or mrkdwn invalid — post instead
-        const ts = await postChunk(firstChunk);
-        if (ts) handles.push(ts);
+      if (plain) {
+        try {
+          await this.app.client.chat.update({ channel, ts: typingTs, text: firstChunk });
+          handles.push(typingTs);
+        } catch {
+          const ts = await postChunk(firstChunk);
+          if (ts) handles.push(ts);
+        }
+      } else {
+        const blocks = mrkdwnBlocks(firstChunk);
+        try {
+          await this.app.client.chat.update({
+            channel, ts: typingTs, text: firstChunk, blocks,
+          });
+          handles.push(typingTs);
+        } catch {
+          const ts = await postChunk(firstChunk);
+          if (ts) handles.push(ts);
+        }
       }
     }
 
@@ -347,14 +362,22 @@ export class SlackChannel extends EventEmitter implements Channel {
     return { value: pressed.value };
   }
 
-  async editMessage(chatId: string, handle: string, text: string): Promise<void> {
+  async editMessage(chatId: string, handle: string, text: string, opts?: MessageOpts): Promise<void> {
     const chunk = splitMessage(text)[0];
-    await this.app.client.chat.update({
-      channel: this.slackId(chatId),
-      ts: handle,
-      text: chunk,
-      blocks: mrkdwnBlocks(chunk),
-    });
+    if (opts?.format === "plain") {
+      await this.app.client.chat.update({
+        channel: this.slackId(chatId),
+        ts: handle,
+        text: chunk,
+      });
+    } else {
+      await this.app.client.chat.update({
+        channel: this.slackId(chatId),
+        ts: handle,
+        text: chunk,
+        blocks: mrkdwnBlocks(chunk),
+      });
+    }
   }
 
   async deleteMessage(chatId: string, handle: string): Promise<void> {
