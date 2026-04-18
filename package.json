@@ -26,7 +26,8 @@
   },
   "files": [
     "dist/**/*.js",
-    "dist/**/*.d.ts"
+    "dist/**/*.d.ts",
+    "prompts/**/*.md"
   ],
   "scripts": {
     "start": "tsx src/index.ts daemon",

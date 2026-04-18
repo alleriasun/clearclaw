@@ -4,6 +4,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import log from "./logger.js";
 import { saveFile } from "./files.js";
+import { assemblePrompt } from "./prompt.js";
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
 import type { Config } from "./config.js";
@@ -194,10 +195,13 @@ export class Orchestrator {
     log.info("%s start session=%s msgs=%d cwd=%s", logPrefix, sessionId ?? "new", messages.length, cwd);
     await this.channel.setTyping(chatId, true);
 
-    const isHomeWorkspace = ws && ws.cwd === path.dirname(this.config.defaultPromptPath);
+    const assembledPrompt = assemblePrompt(
+      this.config.frameworkPromptDir,
+      this.config.instructionsDir,
+    );
     const appendSystemPrompt = task
-      ? task.prompt
-      : (isHomeWorkspace ? undefined : this.readDefaultPrompt());
+      ? (assembledPrompt ? `${assembledPrompt}\n\n${task.prompt}` : task.prompt)
+      : assembledPrompt;
 
     const prompt = buildPrompt(messages);
 
@@ -431,7 +435,7 @@ export class Orchestrator {
             prompt: [
               "THIS IS A TASK SESSION — not a regular conversation.",
               "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
-              "Your only job: help set up a workspace for this chat. Use the onboarding skill.",
+              "Your only job: help set up a workspace for this chat. Follow the Workspace Onboarding instructions in the system prompt.",
             ].join("\n"),
           };
           this.tasks.set(msg.chatId, newTask);
@@ -691,16 +695,6 @@ export class Orchestrator {
     if (text === state.lastStatusText) return;
     await this.channel.updateStatus(chatId, text);
     state.lastStatusText = text;
-  }
-
-  /** Read default workspace CLAUDE.md to append to non-default workspace sessions. */
-  private readDefaultPrompt(): string | undefined {
-    try {
-      const content = fs.readFileSync(this.config.defaultPromptPath, "utf-8").trim();
-      return content || undefined;
-    } catch {
-      return undefined;
-    }
   }
 }
 

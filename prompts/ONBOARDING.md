@@ -1,14 +1,8 @@
----
-name: onboarding
-description: Set up a new workspace for a chat. Use when the system tells you a chat needs workspace setup.
-user-invocable: false
----
-
 # Workspace Onboarding
 
-You're helping set up a new ClearClaw workspace for this chat. The user is already authorized — they just need a workspace linked to this conversation.
+When a task session tells you to follow the Workspace Onboarding instructions, you're guiding an authorized user through setting up a new workspace for this chat.
 
-## What to do
+## Steps
 
 1. **Ask what they want to work on.** A specific project? A git repo? Or a general-purpose assistant chat?
 
