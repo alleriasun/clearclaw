@@ -133,21 +133,24 @@ export class Config {
 
   // --- File I/O (internal) ---
 
-  private read(): ConfigData {
-    if (!fs.existsSync(this.filePath)) {
-      return { authorizedUsers: [], pendingPairings: [], workspaces: [] };
-    }
+  private readRaw(): Record<string, unknown> {
+    if (!fs.existsSync(this.filePath)) return {};
     try {
-      const raw = JSON.parse(fs.readFileSync(this.filePath, "utf-8"));
-      return {
-        channel: raw.channel,
-        authorizedUsers: raw.authorizedUsers ?? [],
-        pendingPairings: raw.pendingPairings ?? [],
-        workspaces: raw.workspaces ?? [],
-      };
+      return JSON.parse(fs.readFileSync(this.filePath, "utf-8"));
     } catch {
-      return { authorizedUsers: [], pendingPairings: [], workspaces: [] };
+      return {};
     }
+  }
+
+  private read(): ConfigData {
+    const raw = this.readRaw();
+    return {
+      ...raw,
+      channel: raw.channel as ChannelConfig | undefined,
+      authorizedUsers: (raw.authorizedUsers ?? []) as AuthorizedUser[],
+      pendingPairings: (raw.pendingPairings ?? []) as PendingPairing[],
+      workspaces: (raw.workspaces ?? []) as Workspace[],
+    };
   }
 
   private write(data: ConfigData): void {
