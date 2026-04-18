@@ -83,6 +83,8 @@ export class Config {
   readonly defaultPromptPath: string;
   readonly filesPath: string;
   readonly logPath: string;
+  readonly instructionsDir: string;
+  readonly frameworkPromptDir: string;
 
   private readonly dataDir = resolveDataDir();
   private readonly filePath: string;
@@ -92,6 +94,10 @@ export class Config {
     this.defaultPromptPath = path.join(this.dataDir, "workspace", "CLAUDE.md");
     this.filesPath = path.join(this.dataDir, "files");
     this.logPath = path.join(this.dataDir, "clearclaw.log");
+    this.instructionsDir = path.join(this.dataDir, "workspace", "instructions");
+    this.frameworkPromptDir = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)), "..", "prompts",
+    );
   }
 
   /** Resolve channel + env vars. Throws if no channel config found. */
@@ -287,16 +293,7 @@ export class Config {
     const defaultCwd = path.join(this.dataDir, "workspace");
     fs.mkdirSync(defaultCwd, { recursive: true });
     this.upsertWorkspace({ name: "default", cwd: defaultCwd, chat_id: chatId, current_session_id: null });
-    this.syncSkills();
-  }
-
-  /** Copy bundled skills from the repo's skills/ directory to the home workspace's .claude/skills/. */
-  syncSkills(): void {
-    const pkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-    const srcSkills = path.join(pkgRoot, "skills");
-    if (!fs.existsSync(srcSkills)) return;
-    const destSkills = path.join(this.dataDir, "workspace", ".claude", "skills");
-    fs.cpSync(srcSkills, destSkills, { recursive: true, force: true });
+    fs.mkdirSync(path.join(defaultCwd, "instructions"), { recursive: true });
   }
 
   approveUser(userId: string, userName: string, chatId: string): void {

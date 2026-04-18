@@ -83,5 +83,6 @@
 - [ ] Inject message timestamp and current time into each turn — agent has no reliable sense of when it is
 - [ ] ChatType context (DM vs group) — surface in turn prompt so agent adjusts tone accordingly
 - [ ] Behavior mode context — agent should know whether it's in assistant or relay mode (affects system prompt framing, not just permissions)
+- [x] Prompt assembly architecture — framework prompts (`prompts/SYSTEM.md`, `ONBOARDING.md`) bundled in repo, user instructions (`instructions/IDENTITY.md`, `USER.md`, `TOOLS.md`) in home workspace, assembled per-turn by `src/prompt.ts`. Replaces monolithic home workspace CLAUDE.md. `syncSkills()` removed.
 - [ ] Session/memory self-management — strategy for when to auto-compact, when to surface memory, when to summarize vs. continue; currently context just grows until it breaks
 - [ ] Semantic memory (vector search, decay/relevance) — flat CLAUDE.md/MEMORY.md suffice for now; needs a design decision before building

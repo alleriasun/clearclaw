@@ -47,6 +47,7 @@ src/
   config.ts             # Env vars → typed config object
   db.ts                 # SQLite: workspaces table
   format.ts             # Message formatting (tool descriptions, diffs)
+  prompt.ts             # Prompt assembly (framework + user → system prompt)
   engine/
     claude-code.ts      # Claude Code SDK wrapper
   channel/
@@ -121,34 +122,23 @@ Other notable SDK `query()` options beyond what ClearClaw currently uses:
 | `debug` | `boolean` | Enable debug logging |
 | `stderr` | `(data: string) => void` | Callback for stderr output (useful with `debug: true`) |
 
-## Default Prompt Append
+## Prompt Assembly
 
-The home workspace's `CLAUDE.md` defines the bot's personality, user context, and communication style. Without intervention, project workspaces never see it — the SDK only loads `CLAUDE.md` from the workspace's own `cwd` via `settingSources`.
+`assemblePrompt()` in `src/prompt.ts` reads `.md` files from two directories per-turn and concatenates them into a single string:
 
-ClearClaw fixes this by appending the home workspace's `CLAUDE.md` to every non-default workspace session via the SDK's `systemPrompt` option:
+- **`prompts/`** (framework, bundled in repo) — `SYSTEM.md` (core behavior) + `ONBOARDING.md` (workspace setup flow)
+- **`~/.clearclaw/workspace/instructions/`** (user, all optional) — `IDENTITY.md`, `USER.md`, `TOOLS.md`
 
-```
-systemPrompt: {
-  type: "preset",
-  preset: "claude_code",
-  append: <contents of ~/.clearclaw/workspace/CLAUDE.md>
-}
-```
+Framework content first, user content appended. Applied to all workspaces. Files read fresh every turn — edits take effect on the next message.
 
-The `preset: "claude_code"` base keeps all standard Claude Code behavior (including `settingSources`-loaded CLAUDE.md files). The `append` adds the home workspace content on top — it doesn't replace anything.
+**Claude Code engine delivery:** The assembled string is passed via `systemPrompt: { type: "preset", preset: "claude_code", append: <assembled> }`. The `preset` keeps all standard Claude Code behavior (including `settingSources`-loaded CLAUDE.md files). The `append` adds assembled content on top. Other engines will deliver the same assembled string through their own mechanism.
 
-**System prompt layering** (additive, all active simultaneously):
+**System prompt layering** (Claude Code, additive):
 
 1. Claude Code preset (base system prompt)
-2. `~/.claude/CLAUDE.md` — user-level coding conventions (loaded by `settingSources: ["user"]`)
-3. `{cwd}/CLAUDE.md` — project-specific instructions (loaded by `settingSources: ["project"]`)
-4. Home workspace `CLAUDE.md` — personality and user context (appended via `systemPrompt.append`)
-
-**Skip for home workspace:** When the workspace's `cwd` is the home directory itself, `settingSources` already loads its `CLAUDE.md` as the project file (layer 3). Appending it again would duplicate. The orchestrator detects this and skips the append.
-
-**Opt-in by file presence:** If `~/.clearclaw/workspace/CLAUDE.md` doesn't exist, nothing is appended — pure relay behavior. No configuration needed.
-
-**Read per-turn:** The file is read on every turn, not cached at startup. Edits to the home `CLAUDE.md` take effect on the next message without restarting ClearClaw.
+2. `~/.claude/CLAUDE.md` — user-level coding conventions (`settingSources: ["user"]`)
+3. `{cwd}/CLAUDE.md` — project-specific instructions (`settingSources: ["project"]`)
+4. Assembled prompt — framework + user content (`systemPrompt.append`)
 
 ## Session Management
 
@@ -228,7 +218,7 @@ Both channels implement the same `Channel` interface but differ in platform spec
 
 ## Storage
 
-- `~/.clearclaw/workspace/` — The bot's home (identity, memory, skills, CLAUDE.md). Singular — only the personal/default workspace lives here; project workspaces point to existing repos.
+- `~/.clearclaw/workspace/` — The bot's home. User instruction files in `instructions/`, memory in `memory/` (daily notes + curated `MEMORY.md`), knowledge in `knowledge/`. Singular — only the personal/default workspace lives here; project workspaces point to existing repos.
 - `~/.clearclaw/clearclaw.db` — SQLite: workspaces table (routing: chat → cwd + session)
 - `~/.clearclaw/clearclaw.log` — Daemon log (console + file dual output)
 - `~/.claude/projects/...` — Session data (owned by Claude Code, not us)
