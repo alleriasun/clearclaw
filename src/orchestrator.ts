@@ -429,13 +429,14 @@ export class Orchestrator {
 
       if (!ws) {
         if (this.config.isAuthorized(msg.user.id)) {
+          const chatType = msg.chatType === "dm" ? "DM" : "group";
           const newTask: TaskState = {
             sessionId: null,
             cwd: path.dirname(this.config.defaultPromptPath),
             prompt: [
               "THIS IS A TASK SESSION — not a regular conversation.",
               "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
-              "Your only job: help set up a workspace for this chat. Follow the Workspace Onboarding instructions in the system prompt.",
+              `This is a ${chatType} chat. Follow the Workspace Onboarding instructions in the system prompt.`,
             ].join("\n"),
           };
           this.tasks.set(msg.chatId, newTask);
