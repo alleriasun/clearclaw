@@ -291,16 +291,7 @@ export class Config {
 
   // --- Approval ---
 
-  ensureDefaultWorkspace(chatId: string): void {
-    if (this.workspaceByChat(chatId) || this.workspaceByName("default")) return;
-    const defaultCwd = path.join(this.dataDir, "workspace");
-    fs.mkdirSync(defaultCwd, { recursive: true });
-    this.upsertWorkspace({ name: "default", cwd: defaultCwd, chat_id: chatId, current_session_id: null });
-    fs.mkdirSync(path.join(defaultCwd, "instructions"), { recursive: true });
-  }
-
-  approveUser(userId: string, userName: string, chatId: string): void {
+  approveUser(userId: string, userName: string): void {
     this.addUser({ id: userId, name: userName, approvedAt: Date.now() });
-    this.ensureDefaultWorkspace(chatId);
   }
 }

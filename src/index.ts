@@ -69,7 +69,7 @@ async function runApprove(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  config.approveUser(pairing.userId, pairing.userName, pairing.chatId);
+  config.approveUser(pairing.userId, pairing.userName);
   console.log(`Approved ${pairing.userName} (${pairing.userId})`);
 }
 
@@ -149,7 +149,7 @@ async function runSetup(): Promise<void> {
       return;
     }
 
-    config.approveUser(pairing.userId, pairing.userName, pairing.chatId);
+    config.approveUser(pairing.userId, pairing.userName);
     console.log(`  Approved ${pairing.userName} (${pairing.userId})`);
     await channel.sendMessage(chatId, "You're approved! The bot is being set up — you'll be able to chat soon.");
     console.log("\nSetup complete! Start the daemon:\n  clearclaw daemon\n");
