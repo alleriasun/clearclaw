@@ -80,7 +80,7 @@ export class Config {
   private envUserIds = new Set<string>();
 
   // Derived paths
-  readonly defaultPromptPath: string;
+  readonly homeWorkspacePath: string;
   readonly filesPath: string;
   readonly logPath: string;
   readonly instructionsDir: string;
@@ -91,7 +91,7 @@ export class Config {
 
   constructor() {
     this.filePath = path.join(this.dataDir, "config.json");
-    this.defaultPromptPath = path.join(this.dataDir, "workspace", "CLAUDE.md");
+    this.homeWorkspacePath = path.join(this.dataDir, "workspace");
     this.filesPath = path.join(this.dataDir, "files");
     this.logPath = path.join(this.dataDir, "clearclaw.log");
     this.instructionsDir = path.join(this.dataDir, "workspace", "instructions");

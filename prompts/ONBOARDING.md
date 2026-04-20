@@ -26,14 +26,14 @@ The task prompt tells you the chat type: DM or group. Use this to adapt the flow
 
 - Be conversational. Don't dump all questions at once.
 - Keep workspace names short: `clearclaw`, `myapp`, `notes` — not `my-awesome-project-workspace`.
-- If the user just wants a quick assistant chat (no specific project), create a workspace pointing at `~/.clearclaw/workspace` with assistant behavior.
+- If the user just wants a quick assistant chat (no specific project), create a workspace pointing at the home workspace path (provided in the task prompt) with assistant behavior.
 - If something goes wrong (bad path, name conflict), explain and ask them to try again.
 
 ### DM chats (home workspace)
 
 For DMs, this is the user's personal assistant setup. Create the home workspace, then run the "Get to Know You" bootstrap.
 
-1. **Create the home workspace.** Call `workspace_create` with name `default`, cwd `~/.clearclaw/workspace`, and behavior `assistant`. Don't ask -- DMs are always the home workspace.
+1. **Create the home workspace.** Call `workspace_create` with name `default`, cwd set to the home workspace path (provided in the task prompt), and behavior `assistant`. Don't ask -- DMs are always the home workspace.
 
 2. **Get to know them.** Ask structured questions, one at a time:
    - What should I call you?

@@ -45,7 +45,6 @@ src/
   orchestrator.ts       # Message routing, turn management
   types.ts              # Channel, Engine, Workspace, event types
   config.ts             # Env vars → typed config object
-  db.ts                 # SQLite: workspaces table
   format.ts             # Message formatting (tool descriptions, diffs)
   prompt.ts             # Prompt assembly (framework + user → system prompt)
   engine/

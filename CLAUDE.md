@@ -27,7 +27,7 @@ npm run check      # tsc --noEmit (type check only)
 - All imports use `.js` extension (required by NodeNext module resolution, even for `.ts` source files)
 - Interfaces defined in `types.ts`, implementations in their own files
 - Data types use `interface`/`type` + plain objects. Classes only for Channel and Engine implementations
-- ClearClaw is a relay, not an agent frontend. It does NOT own permissions, tool allowlists, MCP config, memory, or system prompts — the CLI owns all of those. When in doubt about where logic belongs: in the CLI, not here.
+- ClearClaw is a relay that adds orchestration on top of CLI agents. It owns prompt assembly (framework + user instruction files), onboarding, and permission relay UX. The CLI owns tool execution, settings, and session management. When in doubt about where logic belongs: in the CLI, not here.
 - **Design specs** go in `docs/specs/YYYY-MM-DD-<slug>.md` — context, research, decisions with tradeoffs explored, the "why" story. No file-level implementation details.
 - **Implementation plans** go in `docs/plans/YYYY-MM-DD-<slug>.md` — step-by-step build recipes with exact file paths, code changes, and commands. The "how" recipe.
 - When developing through ClearClaw (remote via Telegram/Slack), large file writes will fail because the permission prompt content exceeds chat message limits. Break writes into smaller chunks: create/touch the file first, then append sections via Edit.
