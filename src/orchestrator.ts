@@ -111,7 +111,7 @@ export class Orchestrator {
   private effectiveBehavior(ctx: TurnContext): "assistant" | "relay" {
     if (isTask(ctx)) return "assistant";
     if (ctx.behavior !== undefined) return ctx.behavior;
-    return ctx.cwd === path.dirname(this.config.defaultPromptPath) ? "assistant" : "relay";
+    return ctx.cwd === this.config.homeWorkspacePath ? "assistant" : "relay";
   }
 
   /** Enqueue a message and drain — immediately for relay, debounced for assistant/task. */
@@ -432,11 +432,12 @@ export class Orchestrator {
           const chatType = msg.chatType === "dm" ? "DM" : "group";
           const newTask: TaskState = {
             sessionId: null,
-            cwd: path.dirname(this.config.defaultPromptPath),
+            cwd: this.config.homeWorkspacePath,
             prompt: [
               "THIS IS A TASK SESSION — not a regular conversation.",
               "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
-              `This is a ${chatType} chat. Follow the Workspace Onboarding instructions in the system prompt.`,
+              `This is a ${chatType} chat. Home workspace path: ${this.config.homeWorkspacePath}`,
+              "Follow the Workspace Onboarding instructions in the system prompt.",
             ].join("\n"),
           };
           this.tasks.set(msg.chatId, newTask);
