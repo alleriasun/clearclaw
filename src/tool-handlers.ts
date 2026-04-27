@@ -25,7 +25,6 @@ export interface ToolPromptResult {
 
 export type ToolPromptHandler = (
   input: Record<string, unknown>,
-  description: string,
 ) => ToolPromptResult | null;
 
 // --- Permission Handlers ---
@@ -64,9 +63,8 @@ function handleAskUserQuestion(
 
 function handleExitPlanMode(
   input: Record<string, unknown>,
-  description: string,
 ): ToolPromptResult | null {
-  const text = formatExitPlanMode(input, description);
+  const text = formatExitPlanMode(input);
 
   return {
     text,
