@@ -13,15 +13,67 @@ import {
 type MessageParam = SDKUserMessage["message"];
 type ContentBlockParam = Extract<MessageParam["content"], unknown[]>[number];
 import log from "../logger.js";
-import { formatToolDescription } from "../format.js";
 import type {
   Attachment,
   Engine,
   EngineEvent,
   RunTurnOpts,
   SessionInfo,
+  ToolCall,
   TurnStats,
 } from "../types.js";
+
+/** Map Claude Code SDK tool call to ToolCall. */
+function toToolCall(
+  toolName: string,
+  input: Record<string, unknown>,
+  toolUseId: string,
+): ToolCall {
+  switch (toolName) {
+    case "Edit":
+      return {
+        action: "edit", toolName, toolUseId,
+        path: String(input.file_path ?? ""),
+        before: String(input.old_string ?? ""),
+        after: String(input.new_string ?? ""),
+      };
+    case "Write":
+      return {
+        action: "write", toolName, toolUseId,
+        path: String(input.file_path ?? ""),
+        content: String(input.content ?? ""),
+      };
+    case "Bash":
+      return {
+        action: "execute", toolName, toolUseId,
+        command: String(input.command ?? ""),
+      };
+    case "Read":
+    case "Glob":
+      return {
+        action: "read", toolName, toolUseId,
+        paths: [String(input.file_path ?? input.pattern ?? "")],
+      };
+    case "Grep":
+      return {
+        action: "search", toolName, toolUseId,
+        pattern: String(input.pattern ?? ""),
+        paths: input.path ? [String(input.path)] : undefined,
+      };
+    case "WebSearch":
+      return {
+        action: "search", toolName, toolUseId,
+        pattern: String(input.query ?? ""),
+      };
+    case "WebFetch":
+      return {
+        action: "fetch", toolName, toolUseId,
+        url: String(input.url ?? ""),
+      };
+    default:
+      return { action: "other", toolName, toolUseId, ...input };
+  }
+}
 
 export class ClaudeCodeEngine implements Engine {
   name = "claude-code";
@@ -75,14 +127,9 @@ export class ClaudeCodeEngine implements Engine {
         toolUseID: string;
       },
     ): Promise<PermissionResult> => {
-      const description = formatToolDescription(toolName, input);
-      const resp = await onPermissionRequest({
-        toolName,
-        input,
-        description,
-        reason: options.decisionReason,
-        toolUseId: options.toolUseID,
-      });
+      const resp = await onPermissionRequest(
+        toToolCall(toolName, input, options.toolUseID),
+      );
       if (resp.decision === "allow") {
         return { behavior: "allow", updatedInput: resp.updatedInput ?? input };
       }
@@ -166,9 +213,7 @@ export class ClaudeCodeEngine implements Engine {
               toolUseIdToName.set(toolUseId, block.name);
               yield {
                 type: "tool_use",
-                toolName: block.name,
-                input: block.input as Record<string, unknown>,
-                toolUseId,
+                tool: toToolCall(block.name, block.input as Record<string, unknown>, toolUseId),
               };
             }
           }

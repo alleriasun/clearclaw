@@ -8,6 +8,7 @@ import {
   type SessionNotification,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type ToolCallContent as AcpToolCallContent,
 } from "@agentclientprotocol/sdk";
 import log from "../logger.js";
 import { AsyncQueue } from "./async-queue.js";
@@ -18,6 +19,7 @@ import type {
   PermissionMode,
   RunTurnOpts,
   SessionInfo,
+  ToolCall,
 } from "../types.js";
 
 export class AcpEngine implements Engine {
@@ -40,6 +42,8 @@ export class AcpEngine implements Engine {
     let proc: ChildProcess | undefined;
     const queue = new AsyncQueue<EngineEvent>();
     const toolCalls: Record<string, number> = {};
+    // tool_call events carry content that requestPermission lacks — cache by ID
+    const pendingTools = new Map<string, ToolCall>();
 
     try {
       proc = spawnAgent(this.spawnConfig);
@@ -62,12 +66,12 @@ export class AcpEngine implements Engine {
         requestPermission: async (
           params: RequestPermissionRequest,
         ): Promise<RequestPermissionResponse> => {
-          return handlePermission(params, permissionMode, onPermissionRequest);
+          return handlePermission(params, permissionMode, onPermissionRequest, pendingTools);
         },
 
         sessionUpdate: async (notification: SessionNotification): Promise<void> => {
           if (!live) return; // Suppress replay events from loadSession
-          const event = mapSessionUpdate(notification, toolCalls);
+          const event = mapSessionUpdate(notification, toolCalls, pendingTools);
           if (event) queue.push(event);
         },
       };
@@ -192,6 +196,7 @@ function spawnAgent(config: SpawnConfig): ChildProcess {
 function mapSessionUpdate(
   notification: SessionNotification,
   toolCalls: Record<string, number>,
+  pendingTools: Map<string, ToolCall>,
 ): EngineEvent | null {
   const update = notification.update;
 
@@ -207,23 +212,82 @@ function mapSessionUpdate(
     case "tool_call": {
       const kind = update.kind ?? "tool";
       toolCalls[kind] = (toolCalls[kind] ?? 0) + 1;
-      return {
-        type: "tool_use",
-        toolName: update.title,
-        input: (update.rawInput as Record<string, unknown>) ?? {},
-        toolUseId: update.toolCallId,
-      };
+      const tool = acpToolCall(update.title, update.toolCallId, kind, update.locations, update.content);
+      pendingTools.set(update.toolCallId, tool);
+      return { type: "tool_use", tool };
     }
+
+    case "tool_call_update":
+      return null;
 
     default:
       return null;
   }
 }
 
+/** Map ACP tool call fields to ToolCall. */
+function acpToolCall(
+  title: string,
+  toolCallId: string,
+  kind: string,
+  locations?: Array<{ path: string; line?: number | null }> | null,
+  content?: Array<AcpToolCallContent> | null,
+): ToolCall {
+  const toolName = title;
+  const toolUseId = toolCallId;
+  const paths = locations?.map((l) => l.line ? `${l.path}:${l.line}` : l.path);
+
+  switch (kind) {
+    case "edit": {
+      const diff = findDiff(content);
+      return {
+        action: "edit", toolName, toolUseId,
+        path: diff?.path ?? paths?.[0] ?? "",
+        before: diff?.oldText ?? "",
+        after: diff?.newText ?? "",
+      };
+    }
+    case "write": {
+      const diff = findDiff(content);
+      return {
+        action: "write", toolName, toolUseId,
+        path: diff?.path ?? paths?.[0] ?? "",
+        content: diff?.newText ?? "",
+      };
+    }
+    case "read":
+      return { action: "read", toolName, toolUseId, paths: paths ?? [] };
+    case "execute":
+      return { action: "execute", toolName, toolUseId, command: title };
+    case "search":
+      return { action: "search", toolName, toolUseId, pattern: title, paths };
+    case "fetch":
+      return { action: "fetch", toolName, toolUseId, url: title };
+    default: {
+      const detail = findTextContent(content);
+      return { action: kind, toolName, toolUseId, paths, detail };
+    }
+  }
+}
+
+/** Find the first diff content block from ACP tool call content. */
+function findDiff(content?: Array<AcpToolCallContent> | null) {
+  const entry = content?.find((c) => c.type === "diff");
+  return entry?.type === "diff" ? entry : undefined;
+}
+
+/** Extract text from the first content block. */
+function findTextContent(content?: Array<AcpToolCallContent> | null): string | undefined {
+  const entry = content?.find((c) => c.type === "content");
+  if (entry?.type === "content" && entry.content.type === "text") return entry.content.text;
+  return undefined;
+}
+
 async function handlePermission(
   params: RequestPermissionRequest,
   permissionMode: PermissionMode,
   onPermissionRequest: RunTurnOpts["onPermissionRequest"],
+  pendingTools: Map<string, ToolCall>,
 ): Promise<RequestPermissionResponse> {
   const allowOption = params.options.find((o) => o.kind === "allow_once");
   const rejectOption = params.options.find((o) => o.kind === "reject_once");
@@ -237,14 +301,17 @@ async function handlePermission(
     };
   }
 
-  // Relay to ClearClaw's permission flow
+  // Use cached tool_call data (has content/locations) over the sparse permission request
   const toolCall = params.toolCall;
-  const resp = await onPermissionRequest({
-    toolName: toolCall.title ?? "Unknown tool",
-    input: (toolCall.rawInput as Record<string, unknown>) ?? {},
-    description: toolCall.title ?? "Permission requested",
-    toolUseId: toolCall.toolCallId,
-  });
+  const tool = pendingTools.get(toolCall.toolCallId)
+    ?? acpToolCall(
+      toolCall.title ?? "Unknown tool",
+      toolCall.toolCallId,
+      toolCall.kind ?? "other",
+      toolCall.locations,
+      toolCall.content,
+    );
+  const resp = await onPermissionRequest(tool);
 
   if (resp.decision === "allow" && allowOption) {
     return {

@@ -5,22 +5,9 @@
  */
 
 import { createTwoFilesPatch } from "diff";
+import { isKnownToolCall, type ToolCall } from "./types.js";
 
 const MAX_LINES = 200;
-
-// --- Tool input types ---
-
-interface EditInput {
-  file_path: string;
-  old_string: string;
-  new_string: string;
-}
-
-interface WriteInput {
-  file_path: string;
-  content: string;
-}
-
 const MAX_STATUS_LEN = 60;
 
 /**
@@ -43,106 +30,87 @@ export function formatToolCallSummary(
  * Short one-liner for the rolling tool message. Includes key detail
  * but truncated to stay compact.
  */
-export function formatToolStatusLine(
-  toolName: string,
-  input: Record<string, unknown>,
-): string {
-  const full = `🔧 ${formatToolStatus(toolName, input)}`;
+export function formatToolStatusLine(tool: ToolCall): string {
+  const full = `🔧 ${formatToolStatus(tool)}`;
   if (full.length <= MAX_STATUS_LEN) return full;
   return `${full.slice(0, MAX_STATUS_LEN - 1)}…`;
 }
 
 /**
- * Format a permission prompt for display. Returns a MarkdownV2 string.
- * Edit/Write include the diff/preview; other tools get a one-line description.
+ * Format a permission prompt for display.
+ * Switches on action type: edit shows diff, write shows preview,
+ * execute shows command, others show available detail.
  */
-export function formatPermissionPrompt(
-  toolName: string,
-  input: Record<string, unknown>,
-  description: string,
-): string {
-  if (toolName === "Edit") {
-    const edit = input as unknown as EditInput;
-    const patch = createTwoFilesPatch(
-      `a/${edit.file_path}`,
-      `b/${edit.file_path}`,
-      edit.old_string,
-      edit.new_string,
-      "", "",
-      { context: 3 },
-    );
-    const lines = patch.split("\n");
-    const start = lines.findIndex((l) => l.startsWith("---"));
-    const diffLines = start >= 0 ? lines.slice(start) : lines;
-    const body = truncateLines(diffLines, MAX_LINES);
-    return `🔐 Allow Edit? ${edit.file_path}\n\`\`\`diff\n${body}\n\`\`\``;
-  }
-
-  if (toolName === "Write") {
-    const write = input as unknown as WriteInput;
-    const lines = write.content.split("\n");
-    const body = truncateLines(lines, MAX_LINES);
-    return `🔐 Allow Write? ${write.file_path} (${lines.length} lines)\n\`\`\`\n${body}\n\`\`\``;
-  }
-
-  // Non-Edit/Write tools: emoji header + detail in code block
-  const detail = formatToolDetail(toolName, input);
-  const body = truncateLines(detail.split("\n"), MAX_LINES);
-  return `🔐 Allow ${toolName}?\n\`\`\`\n${body}\n\`\`\``;
+export function formatPermissionPrompt(tool: ToolCall): string {
+  const detail = formatToolDetail(tool);
+  if (!detail) return `🔐 Allow ${tool.toolName}?`;
+  return `🔐 Allow ${tool.toolName}?\n${detail}`;
 }
 
-function formatToolStatus(
-  toolName: string,
-  input: Record<string, unknown>,
-): string {
-  switch (toolName) {
-    case "Bash":
-      return `Bash: ${input.command ?? "(unknown)"}`;
-    case "Read":
-      return `Read: ${input.file_path ?? "(unknown)"}`;
-    case "Edit":
-      return `Edit: ${input.file_path ?? "(unknown)"}`;
-    case "Write":
-      return `Write: ${input.file_path ?? "(unknown)"}`;
-    case "Glob":
-      return `Glob: ${input.pattern ?? "(unknown)"}`;
-    case "Grep":
-      return `Grep: ${input.pattern ?? "(unknown)"}`;
-    case "WebFetch":
-      return `WebFetch: ${input.url ?? "(unknown)"}`;
-    case "WebSearch":
-      return `WebSearch: ${input.query ?? "(unknown)"}`;
-    case "Agent":
-      return `Agent: ${input.description ?? "(unknown)"}`;
-    default:
-      return toolName;
+/** Multi-line detail for permission prompts (diff, content preview, command, etc.). */
+function formatToolDetail(tool: ToolCall): string | null {
+  if (!isKnownToolCall(tool)) return formatUnknownDetail(tool);
+  switch (tool.action) {
+    case "edit": {
+      if (!tool.before && !tool.after) return tool.path;
+      const patch = createTwoFilesPatch(
+        `a/${tool.path}`, `b/${tool.path}`,
+        tool.before, tool.after, "", "",
+        { context: 3 },
+      );
+      const lines = patch.split("\n");
+      const start = lines.findIndex((l) => l.startsWith("---"));
+      const diffLines = start >= 0 ? lines.slice(start) : lines;
+      return `${tool.path}\n\`\`\`diff\n${truncateLines(diffLines, MAX_LINES)}\n\`\`\``;
+    }
+    case "write": {
+      const lines = tool.content.split("\n");
+      return `${tool.path} (${lines.length} lines)\n\`\`\`\n${truncateLines(lines, MAX_LINES)}\n\`\`\``;
+    }
+    case "execute":
+      return `\`\`\`\n${truncateLines(tool.command.split("\n"), MAX_LINES)}\n\`\`\``;
+    case "read":
+      return `\`\`\`\n${tool.paths.join("\n")}\n\`\`\``;
+    case "search":
+      return `\`\`\`\n${tool.pattern}\n\`\`\``;
+    case "fetch":
+      return `\`\`\`\n${tool.url}\n\`\`\``;
   }
 }
 
-/** Extract the key detail for a tool's permission prompt (command, query, URL, etc.). */
-function formatToolDetail(
-  toolName: string,
-  input: Record<string, unknown>,
-): string {
-  switch (toolName) {
-    case "Bash":
-      return String(input.command ?? "");
-    case "Read":
-    case "Edit":
-    case "Write":
-      return String(input.file_path ?? "");
-    case "Glob":
-    case "Grep":
-      return String(input.pattern ?? "");
-    case "WebSearch":
-      return String(input.query ?? "");
-    case "WebFetch":
-      return String(input.url ?? "");
-    case "Agent":
-      return String(input.description ?? "");
-    default:
-      return JSON.stringify(input, null, 2);
+/** One-liner summary for tool status display. */
+function formatToolStatus(tool: ToolCall): string {
+  if (!isKnownToolCall(tool)) {
+    const summary = formatUnknownSummary(tool);
+    return summary ? `${tool.toolName}: ${summary}` : tool.toolName;
   }
+  switch (tool.action) {
+    case "edit":
+    case "write":
+      return `${tool.toolName}: ${tool.path}`;
+    case "execute":
+      return `${tool.toolName}: ${tool.command}`;
+    case "read":
+      return `${tool.toolName}: ${tool.paths.join(", ")}`;
+    case "search":
+      return `${tool.toolName}: ${tool.pattern}`;
+    case "fetch":
+      return `${tool.toolName}: ${tool.url}`;
+  }
+}
+
+/** Extract displayable info from an unknown tool call's generic fields. */
+function formatUnknownSummary(tool: ToolCall): string | null {
+  const parts: string[] = [];
+  if ("paths" in tool && Array.isArray(tool.paths)) parts.push(...tool.paths);
+  if ("detail" in tool && tool.detail) parts.push(String(tool.detail));
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+function formatUnknownDetail(tool: ToolCall): string | null {
+  const summary = formatUnknownSummary(tool);
+  if (!summary) return null;
+  return `\`\`\`\n${truncateLines(summary.split("\n"), MAX_LINES)}\n\`\`\``;
 }
 
 /**
@@ -208,7 +176,6 @@ export function truncateButtonLabel(index: number, label: string): string {
  */
 export function formatExitPlanMode(
   input: Record<string, unknown>,
-  description: string,
 ): string {
   const plan = (typeof input.plan === "string" ? input.plan : null)
     || JSON.stringify(input, null, 2);
@@ -248,21 +215,3 @@ function truncateLines(lines: string[], max: number): string {
   return `${shown}\n... (${remaining} more lines)`;
 }
 
-/**
- * Human-readable one-liner for a tool invocation (used in engine's canUseTool).
- */
-export function formatToolDescription(
-  toolName: string,
-  input: Record<string, unknown>,
-): string {
-  switch (toolName) {
-    case "Bash":
-      return `Bash: ${input.command ?? "(unknown command)"}`;
-    case "Edit":
-    case "Write":
-    case "Read":
-      return `${toolName}: ${input.file_path ?? "(unknown file)"}`;
-    default:
-      return `Allow ${toolName}?`;
-  }
-}

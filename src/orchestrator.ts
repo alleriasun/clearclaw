@@ -15,6 +15,7 @@ import type {
   InboundMessage,
   PermissionMode,
   ReplyContext,
+  ToolCall,
   TurnStats,
   Workspace,
 } from "./types.js";
@@ -542,8 +543,9 @@ export class Orchestrator {
           if (behavior === "assistant") break;
 
           // Relay behavior: existing display logic
-          if (event.toolName === "TodoWrite") {
-            const text = formatTodoList(event.input);
+          const { tool } = event;
+          if (tool.toolName === "TodoWrite") {
+            const text = formatTodoList(tool as Record<string, unknown>);
             if (state.todoHandle) {
               try {
                 await this.channel.editMessage(chatId, state.todoHandle, text);
@@ -558,14 +560,14 @@ export class Orchestrator {
             break;
           }
 
-          if (event.toolName === "EnterPlanMode") {
+          if (tool.toolName === "EnterPlanMode") {
             await this.channel.sendMessage(chatId, "📋 Planning");
             break;
           }
 
-          if (displayHandledTools.has(event.toolName)) break;
+          if (displayHandledTools.has(tool.toolName)) break;
 
-          const line = formatToolStatusLine(event.toolName, event.input);
+          const line = formatToolStatusLine(tool);
           if (state.toolCallHandle) {
             try {
               await this.channel.editMessage(chatId, state.toolCallHandle, line);
@@ -691,32 +693,32 @@ export class Orchestrator {
   }
 
   private async handlePermission(
-    req: { toolName: string; input: Record<string, unknown>; description: string },
+    tool: ToolCall,
     chatId: string,
   ): Promise<{ decision: "allow" | "deny"; message?: string; updatedInput?: Record<string, unknown> }> {
     // Always auto-allow ClearClaw's own MCP tools
-    if (req.toolName.startsWith("mcp__clearclaw__")) {
-      log.info(`[perm] ${req.toolName} → auto-allow`);
+    if (tool.toolName.startsWith("mcp__clearclaw__")) {
+      log.info(`[perm] ${tool.toolName} → auto-allow`);
       return { decision: "allow" };
     }
 
-    log.info(`[perm] ${req.toolName}`);
+    log.info(`[perm] ${tool.toolName}`);
 
-    // Custom tool handler
-    const handler = permissionHandlers.get(req.toolName);
+    // Custom tool handler (Claude Code specific tools like EnterPlanMode)
+    const handler = permissionHandlers.get(tool.toolName);
     if (handler) {
-      const result = handler(req.input, req.description);
+      const result = handler(tool as Record<string, unknown>);
       if (result === null) {
-        log.info(`[perm] ${req.toolName} → auto-allow (handler)`);
+        log.info(`[perm] ${tool.toolName} → auto-allow (handler)`);
         await this.channel.sendMessage(chatId, "📋 Entering plan mode");
         return { decision: "allow" };
       }
       try {
         const resp = await this.channel.sendInteractive(chatId, result.text, result.buttons);
-        log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
+        log.info(`[perm] ${tool.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
         return result.mapResponse(resp);
       } catch (err) {
-        log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", req.toolName);
+        log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", tool.toolName);
         return { decision: "deny" as const, message: "Permission prompt could not be delivered to chat — denied automatically." };
       }
     }
@@ -724,16 +726,16 @@ export class Orchestrator {
     try {
       const resp = await this.channel.sendInteractive(
         chatId,
-        formatPermissionPrompt(req.toolName, req.input, req.description),
+        formatPermissionPrompt(tool),
         [
           [{ label: "👍 Allow", value: "allow" }, { label: "👎 Deny", value: "deny" }],
           [{ label: "📝 Deny + Note", value: "deny", requestText: true }],
         ],
       );
-      log.info(`[perm] ${req.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
+      log.info(`[perm] ${tool.toolName} → ${resp.value || "timeout"}${resp.text ? ` "${resp.text}"` : ""}`);
       return { decision: resp.value === "allow" ? "allow" : "deny", message: resp.text };
     } catch (err) {
-      log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", req.toolName);
+      log.warn({ err }, "[perm] failed to send prompt for %s, auto-denying", tool.toolName);
       return { decision: "deny" as const, message: "Permission prompt could not be delivered to chat — denied automatically." };
     }
   }

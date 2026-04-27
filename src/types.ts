@@ -83,19 +83,46 @@ export interface RunTurnOpts {
   attachments?: Attachment[];
   permissionMode: PermissionMode;
   onPermissionRequest: (
-    req: PermissionRequest,
+    req: ToolCall,
   ) => Promise<PermissionResponse>;
   appendSystemPrompt?: string;
   mcpServers?: Record<string, McpServerConfig>;
   signal?: AbortSignal;
 }
 
-export interface PermissionRequest {
+interface ToolCallBase {
   toolName: string;
-  input: Record<string, unknown>;
-  description: string;
-  reason?: string;
   toolUseId: string;
+}
+
+const ACTIONS = {
+  edit: "edit",
+  write: "write",
+  execute: "execute",
+  read: "read",
+  search: "search",
+  fetch: "fetch",
+} as const;
+
+export type KnownToolCall =
+  | (ToolCallBase & { action: typeof ACTIONS.edit; path: string; before: string; after: string })
+  | (ToolCallBase & { action: typeof ACTIONS.write; path: string; content: string })
+  | (ToolCallBase & { action: typeof ACTIONS.execute; command: string })
+  | (ToolCallBase & { action: typeof ACTIONS.read; paths: string[] })
+  | (ToolCallBase & { action: typeof ACTIONS.search; pattern: string; paths?: string[] })
+  | (ToolCallBase & { action: typeof ACTIONS.fetch; url: string });
+
+export interface UnknownToolCall extends ToolCallBase {
+  action: string;
+  [key: string]: unknown;
+}
+
+export type ToolCall = KnownToolCall | UnknownToolCall;
+
+const knownActions = new Set<string>(Object.values(ACTIONS));
+
+export function isKnownToolCall(tool: ToolCall): tool is KnownToolCall {
+  return knownActions.has(tool.action);
 }
 
 export interface PermissionResponse {
@@ -114,7 +141,7 @@ export interface TurnStats {
 export type EngineEvent =
   | { type: "text"; text: string }
   | { type: "text_chunk"; text: string }
-  | { type: "tool_use"; toolName: string; input: Record<string, unknown>; toolUseId: string }
+  | { type: "tool_use"; tool: ToolCall }
   | { type: "tool_result"; toolName: string; output: string }
   | { type: "rate_limit"; status: string; resetsAt?: number }
   | { type: "done"; sessionId: string; stats?: TurnStats }
