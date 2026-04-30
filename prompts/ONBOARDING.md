@@ -16,8 +16,10 @@ The task prompt tells you the chat type: DM or group. Use this to adapt the flow
 
 3. **Offer a git worktree** (if it's a git repo). Explain the benefit: an isolated copy on its own branch, so the main working tree isn't disturbed. If they want one, run `git worktree add <target_path> -b <branch_name>` from the repo. Use the worktree path as the workspace cwd.
 
-4. **Create the workspace.** Once you have a name and path:
-   - Call `workspace_create` with a short, descriptive name and the absolute path
+4. **Ask about the engine.** ClearClaw supports multiple AI engines. Ask which engine they want for this workspace (e.g. `claude-code`, `kiro`). Default to `claude-code` if they don't have a preference.
+
+5. **Create the workspace.** Once you have a name, path, and engine:
+   - Call `workspace_create` with a short, descriptive name, the absolute path, and the chosen engine
    - For project repos: suggest relay behavior (default)
    - For general-purpose chats: suggest assistant behavior
    - Then call `task_complete` to finish setup

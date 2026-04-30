@@ -641,9 +641,14 @@ export class Orchestrator {
           cwd: z.string().describe("Absolute path to the workspace directory"),
           behavior: z.enum(["assistant", "relay"]).optional()
             .describe("Workspace behavior mode"),
+          engine: z.string().optional()
+            .describe("Engine to use (e.g. 'claude-code', 'kiro'). Defaults to the server's configured default engine."),
         }, async (args) => {
           if (this.config.workspaceByName(args.name)) {
             throw new Error(`Workspace "${args.name}" already exists. Choose a different name.`);
+          }
+          if (args.engine && !this.engines.has(args.engine)) {
+            throw new Error(`Unknown engine "${args.engine}". Available: ${[...this.engines.keys()].join(", ")}`);
           }
           fs.mkdirSync(args.cwd, { recursive: true });
           this.config.upsertWorkspace({
@@ -652,8 +657,9 @@ export class Orchestrator {
             chat_id: chatId,
             current_session_id: null,
             behavior: args.behavior,
+            engine: args.engine,
           });
-          log.info("[tool] workspace_create: %s → %s (chat %s)", args.name, args.cwd, chatId);
+          log.info("[tool] workspace_create: %s → %s engine=%s (chat %s)", args.name, args.cwd, args.engine ?? "default", chatId);
           return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created at ${args.cwd}, linked to this chat.` }] };
         }),
         tool("task_complete", "Signal that the current task is complete", {
