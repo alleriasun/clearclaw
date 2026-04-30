@@ -58,10 +58,10 @@
 
 ## Engine Abstraction
 
-- [ ] Kiro CLI engine implementation
-- [ ] Engine selection per workspace
-- [ ] JSON-RPC session management
-- [ ] Make `defaultPromptPath` engine-agnostic — currently hardcodes `CLAUDE.md` in config, which is Claude-specific. When multi-engine support lands, the prompt filename should come from the engine, not config.
+- [x] Kiro CLI engine implementation (AcpEngine via `@agentclientprotocol/sdk`)
+- [x] Engine selection per workspace (`workspace.engine` field, `workspace_create` tool, onboarding flow)
+- [x] JSON-RPC session management (ACP protocol over ndjson stdio)
+- [x] Make `defaultPromptPath` engine-agnostic (replaced by prompt assembly: `frameworkPromptDir` + `instructionsDir`)
 
 ## Channel Support
 
