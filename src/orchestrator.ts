@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
@@ -7,7 +8,8 @@ import { saveFile } from "./files.js";
 import { assemblePrompt } from "./prompt.js";
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
-import type { Config } from "./config.js";
+import { Scheduler } from "./scheduler.js";
+import type { Config, ScheduleEntry } from "./config.js";
 import type {
   Channel,
   Engine,
@@ -70,6 +72,7 @@ export class Orchestrator {
   private config: Config;
   private chats = new Map<string, ChatState>();
   private tasks = new Map<string, TaskState>();
+  private scheduler: Scheduler | null = null;
 
   constructor(opts: OrchestratorOpts) {
     this.channel = opts.channel;
@@ -110,6 +113,9 @@ export class Orchestrator {
     await this.channel.connect();
     log.info("ClearClaw ready.");
 
+    this.scheduler = new Scheduler(this.config, (msg) => this.injectMessage(msg));
+    this.scheduler.start();
+
     const shutdown = async () => {
       await this.stop();
       process.exit(0);
@@ -119,7 +125,28 @@ export class Orchestrator {
   }
 
   async stop(): Promise<void> {
+    this.scheduler?.stop();
     await this.channel.disconnect();
+  }
+
+  /** Inject a synthetic message into the home workspace's turn pipeline. */
+  public injectMessage(injectedMessage: Pick<InboundMessage, "user" | "text">): void {
+    const ws = this.config.workspaceByName("default");
+    if (!ws) {
+      log.warn("[inject] home workspace 'default' not found");
+      return;
+    }
+
+    const msg: InboundMessage = {
+      chatId: ws.chat_id,
+      chatType: "dm",
+      ...injectedMessage,
+      injected: true,
+    };
+
+    const state = this.chat(ws.chat_id);
+    log.info("[inject] %s", injectedMessage.text.slice(0, 80));
+    this.enqueueMessage(msg, ws, state);
   }
 
   /** Effective behavior: tasks→assistant, workspace→explicit setting or home→assistant / project→relay. */
@@ -201,7 +228,8 @@ export class Orchestrator {
     const abort = new AbortController();
     state.abort = abort;
 
-    const behavior = this.effectiveBehavior(ctx);
+    const isInjected = messages.some((m) => m.injected);
+    const behavior = isInjected ? "assistant" as const : this.effectiveBehavior(ctx);
     const turnState = { staySilent: false, replyToMessageId: null as string | null };
     const sessionId = task ? task.sessionId : ws!.current_session_id;
     const cwd = task ? task.cwd : ws!.cwd;
@@ -668,6 +696,53 @@ export class Orchestrator {
           this.tasks.delete(chatId);
           log.info("[tool] task_complete: chat %s — %s", chatId, args.message ?? "done");
           return { content: [{ type: "text" as const, text: "Task completed." }] };
+        }),
+      );
+    }
+
+    // Scheduler tools — available in workspace turns (not task turns)
+    if (!this.tasks.has(chatId) && this.scheduler) {
+      const sched = this.scheduler;
+      tools.push(
+        tool("schedule_create", "Create a scheduled prompt. Accepts a cron expression for recurring, or an ISO timestamp for one-off (auto-deleted after firing). For timestamps, check current time first to ensure correctness.", {
+          cron: z.string().describe("Cron expression (e.g. '0 9 * * *') or ISO timestamp (e.g. '2026-05-03T15:00:00') for one-off. Check current time before setting timestamps."),
+          prompt: z.string().describe("The prompt text to run on schedule"),
+          timezone: z.string().optional().describe("IANA timezone (e.g. 'America/Los_Angeles'). Defaults to system timezone"),
+        }, async (args) => {
+          const entry: ScheduleEntry = {
+            id: crypto.randomUUID().slice(0, 8),
+            cron: args.cron,
+            prompt: args.prompt,
+            enabled: true,
+            timezone: args.timezone,
+            createdAt: Date.now(),
+          };
+          sched.add(entry);
+          const isDate = !isNaN(new Date(args.cron).getTime());
+          return { content: [{ type: "text" as const, text: `Schedule "${entry.id}" created: ${args.cron}${args.timezone ? ` (${args.timezone})` : ""}${isDate ? " [one-off]" : ""}` }] };
+        }),
+        tool("schedule_list", "List all scheduled prompts", {}, async () => {
+          const entries = sched.list();
+          if (entries.length === 0) {
+            return { content: [{ type: "text" as const, text: "No schedules configured." }] };
+          }
+          const lines = entries.map((e) =>
+            `• ${e.id} — ${e.enabled ? "✓" : "✗"} ${e.cron}${e.timezone ? ` (${e.timezone})` : ""}\n  ${e.prompt.slice(0, 80)}`,
+          );
+          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+        }),
+        tool("schedule_delete", "Delete a scheduled prompt", {
+          id: z.string().describe("Schedule ID to delete"),
+        }, async (args) => {
+          sched.remove(args.id);
+          return { content: [{ type: "text" as const, text: `Schedule "${args.id}" deleted.` }] };
+        }),
+        tool("schedule_toggle", "Enable or disable a scheduled prompt", {
+          id: z.string().describe("Schedule ID to toggle"),
+          enabled: z.boolean().describe("Whether to enable or disable the schedule"),
+        }, async (args) => {
+          sched.toggle(args.id, args.enabled);
+          return { content: [{ type: "text" as const, text: `Schedule "${args.id}" ${args.enabled ? "enabled" : "disabled"}.` }] };
         }),
       );
     }

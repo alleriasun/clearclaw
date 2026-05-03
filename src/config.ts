@@ -44,12 +44,22 @@ export interface EngineEntry {
   path: string;                          // resolved executable path
 }
 
+export interface ScheduleEntry {
+  id: string;
+  cron: string;
+  prompt: string;
+  enabled: boolean;
+  timezone?: string;
+  createdAt: number;
+}
+
 interface ConfigData {
   channel?: ChannelConfig;
   engines?: EngineEntry[];
   authorizedUsers: AuthorizedUser[];
   pendingPairings: PendingPairing[];
   workspaces: Workspace[];
+  schedules: ScheduleEntry[];
 }
 
 // --- Pairing constants ---
@@ -177,6 +187,7 @@ export class Config {
       authorizedUsers: (raw.authorizedUsers ?? []) as AuthorizedUser[],
       pendingPairings: (raw.pendingPairings ?? []) as PendingPairing[],
       workspaces: (raw.workspaces ?? []) as Workspace[],
+      schedules: (raw.schedules ?? []) as ScheduleEntry[],
     };
   }
 
@@ -314,6 +325,33 @@ export class Config {
     const ws = data.workspaces.find((w) => w.name === name);
     if (ws) {
       ws.behavior = behavior;
+      this.write(data);
+    }
+  }
+
+  // --- Schedules ---
+
+  listSchedules(): ScheduleEntry[] {
+    return this.read().schedules;
+  }
+
+  addSchedule(entry: ScheduleEntry): void {
+    const data = this.read();
+    data.schedules.push(entry);
+    this.write(data);
+  }
+
+  removeSchedule(id: string): void {
+    const data = this.read();
+    data.schedules = data.schedules.filter((s) => s.id !== id);
+    this.write(data);
+  }
+
+  updateSchedule(id: string, update: Partial<Pick<ScheduleEntry, "enabled" | "cron" | "prompt" | "timezone">>): void {
+    const data = this.read();
+    const entry = data.schedules.find((s) => s.id === id);
+    if (entry) {
+      Object.assign(entry, update);
       this.write(data);
     }
   }

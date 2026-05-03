@@ -74,8 +74,11 @@
 
 ## Scheduler
 
-- [ ] Scheduled tasks (cron-style)
-- [ ] Task persistence (JSON or SQLite)
+- [x] Scheduled prompts (cron-style, timezone-aware, one-shot support)
+- [x] Schedule management via MCP tools (create, list, delete, toggle)
+- [x] Bot-initiated turns (proactive prompt primitive for scheduler, housekeeping, events)
+- [ ] Idle housekeeping (auto-tidy memory/context during inactivity)
+- [ ] `/schedule` command for schedule inspection
 
 ## Agent Situational Awareness
 
