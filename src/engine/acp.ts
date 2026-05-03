@@ -114,14 +114,23 @@ export class AcpEngine implements Engine {
       const promptBlocks: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [
         { type: "text", text: textPrompt },
       ];
-      const imageAttachments = attachments?.filter((a) => a.mimeType.startsWith("image/")) ?? [];
-      if (imageAttachments.length > 0) {
-        if (supportsImages) {
-          for (const att of imageAttachments) {
-            promptBlocks.push({ type: "image", data: att.buffer.toString("base64"), mimeType: att.mimeType });
-          }
+      for (const att of attachments ?? []) {
+        const name = att.filename ?? att.mimeType;
+        const isImage = att.mimeType.startsWith("image/");
+
+        if (isImage && supportsImages) {
+          promptBlocks.push({ type: "image", data: att.buffer.toString("base64"), mimeType: att.mimeType });
+          const label = att.savedAs
+            ? `[Attachment: ${name} — saved to ${att.savedAs}. Content already included; do not re-read from disk.]`
+            : `[Attachment: ${name}]`;
+          promptBlocks.push({ type: "text", text: label });
         } else {
-          log.warn("[acp:%s] dropping %d image attachment(s) — agent does not support images", this.name, imageAttachments.length);
+          // Content not included (unsupported format or agent lacks image support)
+          const reason = isImage ? "agent does not support images" : "unsupported format";
+          const label = att.savedAs
+            ? `[Attachment: ${name} (${reason}) — saved to ${att.savedAs}]`
+            : `[Attachment: ${name} (${reason})]`;
+          promptBlocks.push({ type: "text", text: label });
         }
       }
 
