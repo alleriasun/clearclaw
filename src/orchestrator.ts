@@ -226,8 +226,13 @@ export class Orchestrator {
       const results = await Promise.allSettled(
         allAttachments.map((att) => saveFile(att, ws.name, this.config.filesPath)),
       );
-      for (const r of results) {
-        if (r.status === "rejected") log.warn({ err: r.reason }, "[turn] failed to save attachment");
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === "fulfilled") {
+          allAttachments[i].savedAs = r.value;
+        } else {
+          log.warn({ err: r.reason }, "[turn] failed to save attachment");
+        }
       }
       const saved = results.filter((r) => r.status === "fulfilled").length;
       if (saved > 0) log.info("[turn] saved %d/%d attachment(s) for workspace %s", saved, allAttachments.length, ws.name);
@@ -794,10 +799,7 @@ function buildPrompt(messages: InboundMessage[]): string {
     const sender = msg.user.handle ? `${msg.user.name} (@${msg.user.handle})` : msg.user.name;
     const msgIdPrefix = msg.messageId ? `[msg:${msg.messageId}] ` : "";
     const replyLine = formatReplyLine(msg.replyTo);
-    const attachmentNote = msg.attachments?.length
-      ? ` [${msg.attachments.length} attachment(s)]`
-      : "";
-    return `${replyLine}${msgIdPrefix}${sender}: ${msg.text}${attachmentNote}`;
+    return `${replyLine}${msgIdPrefix}${sender}: ${msg.text}`;
   }).join("\n");
 }
 

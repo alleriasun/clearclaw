@@ -308,7 +308,7 @@ function buildAttachmentPrompt(
   text: string,
   attachments: Attachment[],
 ): AsyncIterable<SDKUserMessage> {
-  const contentBlocks: ContentBlockParam[] = attachments.map(encodeAttachment);
+  const contentBlocks: ContentBlockParam[] = attachments.flatMap(encodeAttachment);
 
   // Text prompt always comes last
   if (text) {
@@ -337,38 +337,47 @@ const SUPPORTED_IMAGE_TYPES = new Set([
   "image/jpeg", "image/png", "image/gif", "image/webp",
 ]);
 
-/** Encode an attachment as an SDK content block using its in-memory buffer. */
-function encodeAttachment(att: Attachment): ContentBlockParam {
+/** Build a metadata label for an attachment. */
+function attachmentLabel(att: Attachment): ContentBlockParam {
+  const name = att.filename ?? att.mimeType;
+  if (att.savedAs) {
+    return { type: "text", text: `[Attachment: ${name} — saved to ${att.savedAs}. Content already included; do not re-read from disk.]` };
+  }
+  return { type: "text", text: `[Attachment: ${name}]` };
+}
+
+/** Encode an attachment as SDK content blocks using its in-memory buffer. */
+function encodeAttachment(att: Attachment): ContentBlockParam[] {
   const data = att.buffer.toString("base64");
+  const label = attachmentLabel(att);
 
   if (SUPPORTED_IMAGE_TYPES.has(att.mimeType)) {
-    return {
+    return [{
       type: "image",
       source: {
         type: "base64",
         media_type: att.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
         data,
       },
-    };
+    }, label];
   }
 
   if (att.mimeType === "application/pdf") {
-    return {
+    return [{
       type: "document",
       source: { type: "base64", media_type: "application/pdf", data },
-    };
+    }, label];
   }
 
   if (att.mimeType.startsWith("text/")) {
     const content = att.buffer.toString("utf-8");
-    const header = att.filename ? `--- ${att.filename} ---\n` : "";
-    return { type: "text", text: `${header}${content}` };
+    return [{ type: "text", text: content }, label];
   }
 
   // Unsupported (includes non-standard image types like svg, bmp, tiff)
   const name = att.filename ?? att.mimeType;
   log.warn("[engine] unsupported attachment type: %s", att.mimeType);
-  return { type: "text", text: `[Unsupported file: ${name}]` };
+  return [{ type: "text", text: `[Unsupported file type: ${name}]` }, label];
 }
 
 /** Pull plain text out of a tool_result content block. */

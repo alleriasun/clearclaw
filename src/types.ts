@@ -173,6 +173,8 @@ export interface Attachment {
   buffer: Buffer;
   mimeType: string;
   filename?: string;
+  /** Absolute path where the orchestrator saved this file to disk. */
+  savedAs?: string;
 }
 
 // --- Inbound message (from channel to orchestrator) ---
