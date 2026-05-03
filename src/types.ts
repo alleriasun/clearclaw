@@ -196,6 +196,7 @@ export interface InboundMessage {
   messageId?: string;
   replyTo?: ReplyContext;
   attachments?: Attachment[];
+  injected?: boolean;
 }
 
 export type { PermissionMode };
