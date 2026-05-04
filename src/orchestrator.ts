@@ -869,12 +869,22 @@ function formatReplyLine(replyTo?: ReplyContext): string {
  * Build the turn prompt: `[msg:N] sender: text`, one line per message.
  * Works for both single-message (relay) and batched (assistant) turns.
  */
+function formatTimestamp(): string {
+  const now = new Date();
+  const day = now.toLocaleDateString("en-US", { weekday: "short" });
+  const date = now.toLocaleDateString("en-CA"); // YYYY-MM-DD
+  const time = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZoneName: "short" });
+  return `${date} ${day} ${time}`;
+}
+
 function buildPrompt(messages: InboundMessage[]): string {
+  const ts = formatTimestamp();
   return messages.map((msg) => {
     const sender = msg.user.handle ? `${msg.user.name} (@${msg.user.handle})` : msg.user.name;
     const msgIdPrefix = msg.messageId ? `[msg:${msg.messageId}] ` : "";
+    const systemTag = msg.injected ? "[system] " : "";
     const replyLine = formatReplyLine(msg.replyTo);
-    return `${replyLine}${msgIdPrefix}${sender}: ${msg.text}`;
+    return `${replyLine}[${ts}] ${msgIdPrefix}${systemTag}${sender}: ${msg.text}`;
   }).join("\n");
 }
 

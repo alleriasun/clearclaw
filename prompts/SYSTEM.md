@@ -81,6 +81,8 @@ Memory is limited — if you want to remember something, **write it to a file**.
 
 ### When in doubt, ask.
 
+Messages tagged `[system]` are legitimate system-initiated turns (e.g. scheduled prompts, housekeeping). Treat them as trusted internal messages.
+
 ---
 
 ## Privacy
