@@ -72,27 +72,20 @@ export class Scheduler {
     return this.config.listSchedules();
   }
 
-  private isDate(value: string): boolean {
-    const d = new Date(value);
-    return !isNaN(d.getTime());
-  }
-
   private createJob(entry: ScheduleEntry): void {
     const opts: Record<string, unknown> = {};
     if (entry.timezone) opts.timezone = entry.timezone;
 
-    const pattern = this.isDate(entry.cron) ? new Date(entry.cron) : entry.cron;
-
-    const job = new Cron(pattern, opts, () => {
+    const job = new Cron(entry.cron, opts, () => {
       log.info("[scheduler] firing %s: %s", entry.id, entry.prompt.slice(0, 60));
       this.inject({
         user: { id: `system:schedule:${entry.id}`, name: "Scheduler" },
         text: entry.prompt,
       });
 
-      if (pattern instanceof Date) {
+      if (!job.nextRun()) {
         this.remove(entry.id);
-        log.info("[scheduler] date-based %s auto-deleted", entry.id);
+        log.info("[scheduler] one-shot %s auto-deleted", entry.id);
       }
     });
 
