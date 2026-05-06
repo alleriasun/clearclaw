@@ -1,10 +1,10 @@
 /**
  * Formatting utilities for Telegram display.
  *
- * Uses the `diff` library for unified diffs in Edit permission prompts.
+ * Uses the `diff` library for interleaved diffs in Edit permission prompts.
  */
 
-import { createTwoFilesPatch } from "diff";
+import { diffLines } from "diff";
 import { isKnownToolCall, type ToolCall } from "./types.js";
 
 const MAX_LINES = 200;
@@ -53,15 +53,8 @@ function formatToolDetail(tool: ToolCall): string | null {
   switch (tool.action) {
     case "edit": {
       if (!tool.before && !tool.after) return tool.path;
-      const patch = createTwoFilesPatch(
-        `a/${tool.path}`, `b/${tool.path}`,
-        tool.before, tool.after, "", "",
-        { context: 3 },
-      );
-      const lines = patch.split("\n");
-      const start = lines.findIndex((l) => l.startsWith("---"));
-      const diffLines = start >= 0 ? lines.slice(start) : lines;
-      return `${tool.path}\n\`\`\`diff\n${truncateLines(diffLines, MAX_LINES)}\n\`\`\``;
+      const lines = formatInterleavedDiff(tool.before, tool.after);
+      return `${tool.path}\n\`\`\`\n${truncateLines(lines, MAX_LINES)}\n\`\`\``;
     }
     case "write": {
       const lines = tool.content.split("\n");
@@ -213,5 +206,39 @@ function truncateLines(lines: string[], max: number): string {
   const shown = lines.slice(0, max).join("\n");
   const remaining = lines.length - max;
   return `${shown}\n... (${remaining} more lines)`;
+}
+
+/** Build an interleaved diff with clear separator between markers and content. */
+function formatInterleavedDiff(before: string, after: string): string[] {
+  const changes = diffLines(before, after);
+  const lines: string[] = [];
+
+  const splitValue = (value: string) => value.replace(/\n$/, "").split("\n");
+
+  for (let i = 0; i < changes.length; i++) {
+    const c = changes[i];
+    if (c.removed) {
+      const next = changes[i + 1];
+      if (next?.added) {
+        // Interleave paired removals and additions line by line
+        const remLines = splitValue(c.value);
+        const addLines = splitValue(next.value);
+        const max = Math.max(remLines.length, addLines.length);
+        for (let j = 0; j < max; j++) {
+          if (j < remLines.length) lines.push(`- │ ${remLines[j]}`);
+          if (j < addLines.length) lines.push(`+ │ ${addLines[j]}`);
+        }
+        i++; // skip the paired added chunk
+      } else {
+        for (const l of splitValue(c.value)) lines.push(`- │ ${l}`);
+      }
+    } else if (c.added) {
+      for (const l of splitValue(c.value)) lines.push(`+ │ ${l}`);
+    } else {
+      for (const l of splitValue(c.value)) lines.push(`· │ ${l}`);
+    }
+  }
+
+  return lines;
 }
 
