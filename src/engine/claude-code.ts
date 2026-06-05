@@ -81,7 +81,10 @@ export class ClaudeCodeEngine implements Engine {
   constructor(private readonly executablePath?: string) {}
 
   async listSessions(cwd: string): Promise<SessionInfo[]> {
-    const sessions = await listSessions({ dir: cwd, limit: 10 });
+    // includeWorktrees:false — SDK defaults to true, which merges sessions
+    // from all git worktrees of the same repo into one pool. We want only
+    // this cwd's own sessions.
+    const sessions = await listSessions({ dir: cwd, limit: 10, includeWorktrees: false });
     return sessions
       .sort((a, b) => b.lastModified - a.lastModified)
       .map((s) => ({
