@@ -15,6 +15,7 @@ import type {
   Engine,
   EngineEvent,
   InboundMessage,
+  MessageOrigin,
   PermissionMode,
   ReplyContext,
   ToolCall,
@@ -113,7 +114,7 @@ export class Orchestrator {
     await this.channel.connect();
     log.info("ClearClaw ready.");
 
-    this.scheduler = new Scheduler(this.config, (msg) => this.injectMessage(msg));
+    this.scheduler = new Scheduler(this.config, (msg) => this.deliverToWorkspace("default", msg.origin, msg.text));
     this.scheduler.start();
 
     const shutdown = async () => {
@@ -129,24 +130,21 @@ export class Orchestrator {
     await this.channel.disconnect();
   }
 
-  /** Inject a synthetic message into the home workspace's turn pipeline. */
-  public injectMessage(injectedMessage: Pick<InboundMessage, "user" | "text">): void {
-    const ws = this.config.workspaceByName("default");
+  /** Deliver a synthetic message to a named workspace and trigger its turn. */
+  public deliverToWorkspace(workspaceName: string, origin: MessageOrigin, text: string): boolean {
+    const ws = this.config.workspaceByName(workspaceName);
     if (!ws) {
-      log.warn("[inject] home workspace 'default' not found");
-      return;
+      log.warn("[deliver] workspace '%s' not found", workspaceName);
+      return false;
     }
-
     const msg: InboundMessage = {
       chatId: ws.chat_id,
-      chatType: "dm",
-      ...injectedMessage,
-      injected: true,
+      chatType: ws.name === "default" ? "dm" : "group",
+      text,
+      origin,
     };
-
-    const state = this.chat(ws.chat_id);
-    log.info("[inject] %s", injectedMessage.text.slice(0, 80));
-    this.enqueueMessage(msg, ws, state);
+    this.enqueueMessage(msg, ws, this.chat(ws.chat_id));
+    return true;
   }
 
   /** Effective behavior: tasks→assistant, workspace→explicit setting or home→assistant / project→relay. */
@@ -158,6 +156,7 @@ export class Orchestrator {
 
   /** Enqueue a message and drain — immediately for relay, debounced for assistant/task. */
   private enqueueMessage(msg: InboundMessage, ctx: TurnContext, state: ChatState): void {
+    log.info("[msg] %s: %s", senderLabel(msg.origin), msg.text.slice(0, 80));
     state.messageQueue.push(msg);
     if (state.busy) return;
 
@@ -228,8 +227,9 @@ export class Orchestrator {
     const abort = new AbortController();
     state.abort = abort;
 
-    const isInjected = messages.some((m) => m.injected);
-    const behavior = isInjected ? "assistant" as const : this.effectiveBehavior(ctx);
+    const behavior = messages.some((m) => m.origin.kind === "scheduler")
+      ? "assistant" as const
+      : this.effectiveBehavior(ctx);
     const turnState = { staySilent: false, replyToMessageId: null as string | null };
     const sessionId = task ? task.sessionId : ws!.current_session_id;
     const cwd = task ? task.cwd : ws!.cwd;
@@ -333,7 +333,9 @@ export class Orchestrator {
 
   private async routeMessage(msg: InboundMessage): Promise<void> {
     try {
-      log.info(`[msg] ${msg.user.name} (${msg.user.id}) ${msg.text.slice(0, 80)}`);
+      // routeMessage only handles channel-emitted messages, which are always user-originated.
+      if (msg.origin.kind !== "user") return; // unreachable; documents + type-narrows the invariant
+      const { user } = msg.origin;
 
       const state = this.chat(msg.chatId);
 
@@ -487,7 +489,7 @@ export class Orchestrator {
       }
 
       if (!ws) {
-        if (this.config.isAuthorized(msg.user.id)) {
+        if (this.config.isAuthorized(user.id)) {
           const chatType = msg.chatType === "dm" ? "DM" : "group";
           const newTask: TaskState = {
             sessionId: null,
@@ -752,6 +754,40 @@ export class Orchestrator {
       );
     }
 
+    // Cross-workspace handoff — available in workspace turns (not task turns), independent of the scheduler
+    if (!this.tasks.has(chatId)) {
+      const self = this.config.workspaceByChat(chatId);
+      const peers = this.config.listWorkspaces().filter((w) => w.name !== self?.name);
+      const peerList = peers.length ? peers.map((w) => `"${w.name}"`).join(", ") : "(none)";
+      tools.push(
+        tool(
+          "message_peer",
+          `Send a message to another of your workspaces. It is delivered as a turn there and rendered in that chat; it can reply by calling message_peer back. Reachable workspaces: ${peerList}.`,
+          {
+            workspace: z.string().describe("Target workspace name (one of the reachable workspaces)"),
+            message: z.string().describe("The message to send"),
+          },
+          async (args) => {
+            const target = this.config.workspaceByName(args.workspace);
+            if (!target) {
+              return { content: [{ type: "text" as const, text: `No workspace named "${args.workspace}". Reachable: ${peerList}.` }] };
+            }
+            if (self && target.name === self.name) {
+              return { content: [{ type: "text" as const, text: "Cannot message yourself." }] };
+            }
+            const fromName = self ? self.name : "unknown";
+            const ok = this.deliverToWorkspace(target.name, { kind: "peer", workspaceName: fromName }, args.message);
+            if (!ok) {
+              return { content: [{ type: "text" as const, text: `Failed to deliver to "${target.name}".` }] };
+            }
+            await this.channel.sendMessage(chatId, `→ sent to ${target.name}: ${args.message}`);
+            log.info("[tool] message_peer: %s → %s", fromName, target.name);
+            return { content: [{ type: "text" as const, text: `Delivered to ${target.name}.` }] };
+          },
+        ),
+      );
+    }
+
     if (behavior === "assistant") {
       tools.push(
         tool("stay_silent", "Stay silent — do not send any text response for this turn", {}, async () => {
@@ -877,14 +913,22 @@ function formatTimestamp(): string {
   return `${date} ${day} ${time}`;
 }
 
+function senderLabel(origin: MessageOrigin): string {
+  switch (origin.kind) {
+    case "user": return `[user] ${origin.user.handle ? `${origin.user.name} (@${origin.user.handle})` : origin.user.name}`;
+    case "scheduler": return `[scheduler] ${origin.scheduleId}`;
+    case "peer": return `[peer] ${origin.workspaceName}`;
+    default: { const _exhaustive: never = origin; return _exhaustive; }
+  }
+}
+
 function buildPrompt(messages: InboundMessage[]): string {
   const ts = formatTimestamp();
   return messages.map((msg) => {
-    const sender = msg.user.handle ? `${msg.user.name} (@${msg.user.handle})` : msg.user.name;
+    const sender = senderLabel(msg.origin);
     const msgIdPrefix = msg.messageId ? `[msg:${msg.messageId}] ` : "";
-    const systemTag = msg.injected ? "[system] " : "";
     const replyLine = formatReplyLine(msg.replyTo);
-    return `${replyLine}[${ts}] ${msgIdPrefix}${systemTag}${sender}: ${msg.text}`;
+    return `${replyLine}[${ts}] ${msgIdPrefix}${sender}: ${msg.text}`;
   }).join("\n");
 }
 

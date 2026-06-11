@@ -189,16 +189,20 @@ export interface ReplyContext {
 
 export type ChatType = "dm" | "group";
 
+/** Where an inbound message came from. */
+export type MessageOrigin =
+  | { kind: "user"; user: UserInfo }
+  | { kind: "scheduler"; scheduleId: string }
+  | { kind: "peer"; workspaceName: string }; // another workspace: same mind, different room
 
 export interface InboundMessage {
   chatId: string;
   chatType: ChatType;
-  user: UserInfo;
+  origin: MessageOrigin;
   text: string;
   messageId?: string;
   replyTo?: ReplyContext;
   attachments?: Attachment[];
-  injected?: boolean;
 }
 
 export type { PermissionMode };

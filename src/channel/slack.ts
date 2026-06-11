@@ -117,7 +117,7 @@ export class SlackChannel extends EventEmitter implements Channel {
       this.emit("message", {
         chatId,
         chatType,
-        user: { id: prefixedId, name: userName ?? userId },
+        origin: { kind: "user", user: { id: prefixedId, name: userName ?? userId } },
         text: msg.text ?? "",
         messageId: msg.ts,
         replyTo,
@@ -147,7 +147,7 @@ export class SlackChannel extends EventEmitter implements Channel {
       this.emit("message", {
         chatId,
         chatType,
-        user: { id: `slack:${userId}`, name: userName ?? userId },
+        origin: { kind: "user", user: { id: `slack:${userId}`, name: userName ?? userId } },
         text: `/${subcommand}`,
       });
     });
