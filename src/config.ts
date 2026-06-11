@@ -294,6 +294,10 @@ export class Config {
     return this.read().workspaces.find((ws) => ws.name === name);
   }
 
+  listWorkspaces(): Workspace[] {
+    return this.read().workspaces;
+  }
+
   upsertWorkspace(ws: Workspace): void {
     const data = this.read();
     const idx = data.workspaces.findIndex((w) => w.name === ws.name);

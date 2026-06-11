@@ -8,7 +8,7 @@ export class Scheduler {
 
   constructor(
     private config: Config,
-    private inject: (prompt: Pick<InboundMessage, "user" | "text">) => void,
+    private inject: (msg: Pick<InboundMessage, "origin" | "text">) => void,
   ) {}
 
   start(): void {
@@ -78,10 +78,7 @@ export class Scheduler {
 
     const job = new Cron(entry.cron, opts, () => {
       log.info("[scheduler] firing %s: %s", entry.id, entry.prompt.slice(0, 60));
-      this.inject({
-        user: { id: `system:schedule:${entry.id}`, name: "Scheduler" },
-        text: entry.prompt,
-      });
+      this.inject({ origin: { kind: "scheduler", scheduleId: entry.id }, text: entry.prompt });
 
       if (!job.nextRun()) {
         this.remove(entry.id);

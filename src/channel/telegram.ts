@@ -10,6 +10,7 @@ import type {
   ChatType,
   Button,
   ButtonResponse,
+  MessageOrigin,
   ReplyContext,
   SendFileOpts,
   MessageOpts,
@@ -368,7 +369,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
   }
 
   /** Extract auth-checked sender info from a grammY context. Returns null if unauthorized. */
-  private extractSender(ctx: Context): { chatId: string; chatType: ChatType; user: UserInfo } | null {
+  private extractSender(ctx: Context): { chatId: string; chatType: ChatType; origin: MessageOrigin } | null {
     const user = this.buildUserInfo(ctx);
     if (!user || !ctx.chat?.id || !this.isAuthorized(user.id)) {
       // Notify unauthorized DM senders with their user ID (for pairing)
@@ -380,7 +381,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
     return {
       chatId: `tg:${ctx.chat.id}`,
       chatType: ctx.chat.type === "private" ? "dm" : "group",
-      user,
+      origin: { kind: "user", user },
     };
   }
 
