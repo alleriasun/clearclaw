@@ -491,15 +491,24 @@ export class Orchestrator {
       if (!ws) {
         if (this.config.isAuthorized(user.id)) {
           const chatType = msg.chatType === "dm" ? "DM" : "group";
+          const promptLines = [
+            "THIS IS A TASK SESSION — not a regular conversation.",
+            "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
+            `This is a ${chatType} chat. Home workspace path: ${this.config.homeWorkspacePath}`,
+            "Follow the Workspace Onboarding instructions in the system prompt.",
+          ];
+          const spinOuts = this.config.listSpinOuts();
+          if (spinOuts.length > 0) {
+            promptLines.push(
+              "",
+              "Pending spin-outs (if this chat was created for one, offer to claim it via workspace_create's spin_out_id):",
+              ...spinOuts.map((s) => `- ${s.id}: "${s.name}" from workspace ${s.fromWorkspace}${s.suggestedCwd ? `, suggested cwd ${s.suggestedCwd}` : ""} — ${s.brief.slice(0, 200)}`),
+            );
+          }
           const newTask: TaskState = {
             sessionId: null,
             cwd: this.config.homeWorkspacePath,
-            prompt: [
-              "THIS IS A TASK SESSION — not a regular conversation.",
-              "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
-              `This is a ${chatType} chat. Home workspace path: ${this.config.homeWorkspacePath}`,
-              "Follow the Workspace Onboarding instructions in the system prompt.",
-            ].join("\n"),
+            prompt: promptLines.join("\n"),
           };
           this.tasks.set(msg.chatId, newTask);
           log.info("[task] onboarding started for chat %s", msg.chatId);
@@ -678,6 +687,8 @@ export class Orchestrator {
             .describe("Workspace behavior mode"),
           engine: z.string().optional()
             .describe("Engine to use (e.g. 'claude-code', 'kiro'). Defaults to the server's configured default engine."),
+          spin_out_id: z.string().optional()
+            .describe("Pending spin-out id to claim: after creation, its brief is delivered to this workspace as a peer message from the originating workspace"),
         }, async (args) => {
           if (this.config.workspaceByName(args.name)) {
             throw new Error(`Workspace "${args.name}" already exists. Choose a different name.`);
@@ -695,6 +706,16 @@ export class Orchestrator {
             engine: args.engine,
           });
           log.info("[tool] workspace_create: %s → %s engine=%s (chat %s)", args.name, args.cwd, args.engine ?? "default", chatId);
+          if (args.spin_out_id) {
+            const pending = this.config.listSpinOuts().find((s) => s.id === args.spin_out_id);
+            if (!pending) {
+              return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created, but no pending spin-out "${args.spin_out_id}" was found.` }] };
+            }
+            this.config.removeSpinOut(pending.id);
+            this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: pending.fromWorkspace }, pending.brief);
+            log.info("[tool] workspace_create: claimed spin-out %s from %s", pending.id, pending.fromWorkspace);
+            return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created at ${args.cwd}, linked to this chat. Spin-out brief from ${pending.fromWorkspace} will arrive after task_complete — call it now.` }] };
+          }
           return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created at ${args.cwd}, linked to this chat.` }] };
         }),
         tool("task_complete", "Signal that the current task is complete", {
