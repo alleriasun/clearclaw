@@ -80,6 +80,15 @@
 - [ ] Idle housekeeping (auto-tidy memory/context during inactivity)
 - [ ] `/schedule` command for schedule inspection
 
+## Peer Agents
+
+See `docs/specs/2026-06-07-peer-agents-and-memory.md` for the model.
+
+- [x] Phase 1: peer messaging — `message_peer` cross-workspace handoff over typed `MessageOrigin`
+- [ ] Phase 1b: spin-out — implemented on `feat/spin-out` (`docs/plans/2026-06-11-spin-out.md`), pending manual verification
+- [ ] Phase 1c: auto-worktree peers — programmatic chat surfaces via Telegram forum topics (composite `tg:{chat}:{thread}` ids), worktree provisioning, workspace archive/teardown. Plan TBD
+- [ ] Phase 2: shared memory (STM/LTM) — per spec Part 2; deferred until 1b/1c land
+
 ## Agent Situational Awareness
 
 - [ ] Wire `chatType` through Telegram and Slack channels — `chatType` is on `InboundMessage` but not yet populated by either channel
