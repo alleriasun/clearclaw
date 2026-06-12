@@ -9,7 +9,7 @@ import { assemblePrompt } from "./prompt.js";
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
 import { Scheduler } from "./scheduler.js";
-import type { Config, ScheduleEntry } from "./config.js";
+import type { Config, PendingSpinOut, ScheduleEntry } from "./config.js";
 import type {
   Channel,
   Engine,
@@ -783,6 +783,38 @@ export class Orchestrator {
             await this.channel.sendMessage(chatId, `→ sent to ${target.name}: ${args.message}`);
             log.info("[tool] message_peer: %s → %s", fromName, target.name);
             return { content: [{ type: "text" as const, text: `Delivered to ${target.name}.` }] };
+          },
+        ),
+        tool(
+          "spin_out",
+          "Propose splitting a related-but-separate strand of work into its own NEW workspace. Registers a pending brief; the user then creates a new group chat and adds the bot, and onboarding there offers to claim it. Write the brief as a distilled handoff: the goal plus the few specifics the new agent needs, not a context dump. (To hand a strand to an EXISTING workspace, use message_peer instead.)",
+          {
+            name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
+            brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
+            cwd: z.string().optional().describe("Suggested working directory, if known"),
+          },
+          async (args) => {
+            const entry: PendingSpinOut = {
+              id: crypto.randomUUID().slice(0, 8),
+              fromWorkspace: self?.name ?? "unknown",
+              name: args.name,
+              brief: args.brief,
+              suggestedCwd: args.cwd,
+              createdAt: Date.now(),
+            };
+            this.config.addSpinOut(entry);
+            await this.channel.sendMessage(chatId, `🌱 Spin-out "${args.name}" registered (${entry.id}). Create a new group, add me to it, and I'll offer to pick this up there.`);
+            log.info("[tool] spin_out: %s registered from %s", entry.id, entry.fromWorkspace);
+            return { content: [{ type: "text" as const, text: `Spin-out ${entry.id} registered. The user creates a new group chat and adds the bot; onboarding there claims the brief.` }] };
+          },
+        ),
+        tool(
+          "spin_out_cancel",
+          "Cancel a pending spin-out that has not been claimed yet.",
+          { id: z.string().describe("Pending spin-out id") },
+          async (args) => {
+            const removed = this.config.removeSpinOut(args.id);
+            return { content: [{ type: "text" as const, text: removed ? `Spin-out ${args.id} cancelled.` : `No pending spin-out "${args.id}".` }] };
           },
         ),
       );
