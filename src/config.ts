@@ -53,11 +53,21 @@ export interface ScheduleEntry {
   createdAt: number;
 }
 
+export interface PendingSpinOut {
+  id: string;             // short id, shown to the user and used to claim
+  fromWorkspace: string;  // originating workspace name (becomes the peer origin)
+  name: string;           // suggested workspace name
+  brief: string;          // distilled handoff, delivered as the new workspace's first turn
+  suggestedCwd?: string;
+  createdAt: number;      // epoch ms
+}
+
 interface ConfigData {
   channel?: ChannelConfig;
   engines?: EngineEntry[];
   authorizedUsers: AuthorizedUser[];
   pendingPairings: PendingPairing[];
+  pendingSpinOuts: PendingSpinOut[];
   workspaces: Workspace[];
   schedules: ScheduleEntry[];
 }
@@ -186,6 +196,7 @@ export class Config {
       engines: raw.engines as EngineEntry[] | undefined,
       authorizedUsers: (raw.authorizedUsers ?? []) as AuthorizedUser[],
       pendingPairings: (raw.pendingPairings ?? []) as PendingPairing[],
+      pendingSpinOuts: (raw.pendingSpinOuts ?? []) as PendingSpinOut[],
       workspaces: (raw.workspaces ?? []) as Workspace[],
       schedules: (raw.schedules ?? []) as ScheduleEntry[],
     };
@@ -331,6 +342,27 @@ export class Config {
       ws.behavior = behavior;
       this.write(data);
     }
+  }
+
+  // --- Spin-outs ---
+
+  addSpinOut(entry: PendingSpinOut): void {
+    const data = this.read();
+    data.pendingSpinOuts.push(entry);
+    this.write(data);
+  }
+
+  listSpinOuts(): PendingSpinOut[] {
+    return this.read().pendingSpinOuts;
+  }
+
+  removeSpinOut(id: string): boolean {
+    const data = this.read();
+    const idx = data.pendingSpinOuts.findIndex((s) => s.id === id);
+    if (idx < 0) return false;
+    data.pendingSpinOuts.splice(idx, 1);
+    this.write(data);
+    return true;
   }
 
   // --- Schedules ---
