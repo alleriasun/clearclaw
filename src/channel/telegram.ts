@@ -161,19 +161,20 @@ export class TelegramChannel extends EventEmitter implements Channel {
         ? { reply_parameters: { message_id: Number(opts.replyToMessageId) } }
         : {};
       if (plain) {
-        const sent = await this.bot.api.sendMessage(numId, chunk, replyParams);
+        const sent = await this.bot.api.sendMessage(numId, chunk, { ...this.threadOpts(chatId), ...replyParams });
         handles.push(String(sent.message_id));
       } else {
         const rendered = telegramifyMarkdown(chunk, "escape");
         try {
           const sent = await this.bot.api.sendMessage(numId, rendered, {
+            ...this.threadOpts(chatId),
             parse_mode: "MarkdownV2",
             ...replyParams,
           });
           handles.push(String(sent.message_id));
         } catch (err) {
           log.warn("[channel] sendMessage failed with MarkdownV2, retrying as plain text");
-          const sent = await this.bot.api.sendMessage(numId, chunk, replyParams);
+          const sent = await this.bot.api.sendMessage(numId, chunk, { ...this.threadOpts(chatId), ...replyParams });
           handles.push(String(sent.message_id));
         }
       }
@@ -215,12 +216,14 @@ export class TelegramChannel extends EventEmitter implements Channel {
     let sent;
     try {
       sent = await this.bot.api.sendMessage(numId, mdv2Text, {
+        ...this.threadOpts(chatId),
         reply_markup: keyboard,
         parse_mode: "MarkdownV2",
       });
     } catch {
       log.warn("[channel] sendInteractive failed with MarkdownV2, retrying as plain text");
       sent = await this.bot.api.sendMessage(numId, text, {
+        ...this.threadOpts(chatId),
         reply_markup: keyboard,
       });
     }
@@ -261,6 +264,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
     // If the button requests text, prompt for follow-up input
     if (pressed.requestText) {
       await this.bot.api.sendMessage(numId, "Add your feedback:", {
+        ...this.threadOpts(chatId),
         reply_markup: { force_reply: true },
         reply_parameters: { message_id: sent.message_id },
       });
@@ -343,10 +347,10 @@ export class TelegramChannel extends EventEmitter implements Channel {
       const numId = this.numericId(chatId);
       // Send immediately, then repeat every 4s
       await this.bot.api
-        .sendChatAction(numId, "typing")
+        .sendChatAction(numId, "typing", this.threadOpts(chatId))
         .catch(() => {});
       const interval = setInterval(() => {
-        this.bot.api.sendChatAction(numId, "typing").catch(() => {});
+        this.bot.api.sendChatAction(numId, "typing", this.threadOpts(chatId)).catch(() => {});
       }, 4000);
       this.typingIntervals.set(chatId, interval);
     } else {
@@ -378,8 +382,11 @@ export class TelegramChannel extends EventEmitter implements Channel {
       }
       return null;
     }
+    const topicSuffix = ctx.message?.is_topic_message && ctx.message.message_thread_id
+      ? `:${ctx.message.message_thread_id}`
+      : "";
     return {
-      chatId: `tg:${ctx.chat.id}`,
+      chatId: `tg:${ctx.chat.id}${topicSuffix}`,
       chatType: ctx.chat.type === "private" ? "dm" : "group",
       origin: { kind: "user", user },
     };
@@ -452,13 +459,13 @@ export class TelegramChannel extends EventEmitter implements Channel {
     const caption = opts?.caption;
 
     if (mimeType.startsWith("image/")) {
-      await this.bot.api.sendPhoto(id, file, { caption });
+      await this.bot.api.sendPhoto(id, file, { caption, ...this.threadOpts(chatId) });
     } else if (mimeType.startsWith("video/")) {
-      await this.bot.api.sendVideo(id, file, { caption });
+      await this.bot.api.sendVideo(id, file, { caption, ...this.threadOpts(chatId) });
     } else if (mimeType.startsWith("audio/")) {
-      await this.bot.api.sendAudio(id, file, { caption });
+      await this.bot.api.sendAudio(id, file, { caption, ...this.threadOpts(chatId) });
     } else {
-      await this.bot.api.sendDocument(id, file, { caption });
+      await this.bot.api.sendDocument(id, file, { caption, ...this.threadOpts(chatId) });
     }
   }
 
@@ -485,8 +492,15 @@ export class TelegramChannel extends EventEmitter implements Channel {
     return Buffer.from(await resp.arrayBuffer());
   }
 
+  /** "tg:123" → 123; "tg:123:45" (forum topic) → 123 */
   private numericId(chatId: string): number {
-    return Number(chatId.replace(/^tg:/, ""));
+    return Number(chatId.split(":")[1]);
+  }
+
+  /** Topic part of a composite chat id, as spreadable send options. */
+  private threadOpts(chatId: string): { message_thread_id?: number } {
+    const thread = chatId.split(":")[2];
+    return thread ? { message_thread_id: Number(thread) } : {};
   }
 }
 
