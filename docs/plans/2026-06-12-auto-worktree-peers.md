@@ -1,6 +1,6 @@
 # Auto-Worktree Peers (Phase 1c) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** `spin_out` can spawn a peer workspace fully programmatically — chat surface (forum topic), git worktree, workspace binding, brief delivery — with the human approving via buttons; `workspace_archive` tears it all down.
 
@@ -32,7 +32,7 @@
 
 Composite form: `tg:{chatId}` (unchanged) or `tg:{chatId}:{threadId}` (forum topic). Chat ids stay opaque strings everywhere else — config, orchestrator, and `workspaceByChat` need zero changes.
 
-- [ ] **Step 1:** Replace `numericId` (~line 488) — the current `replace(/^tg:/, "")` would return `NaN` for composite ids — and add `threadOpts`:
+- [x] **Step 1:** Replace `numericId` (~line 488) — the current `replace(/^tg:/, "")` would return `NaN` for composite ids — and add `threadOpts`:
 
 ```typescript
 /** "tg:123" → 123; "tg:123:45" (forum topic) → 123 */
@@ -47,13 +47,13 @@ private threadOpts(chatId: string): { message_thread_id?: number } {
 }
 ```
 
-- [ ] **Step 2:** Spread `...this.threadOpts(chatId)` into every message-creating call (message-id-addressed calls — edit, delete, pin, unpin, react — need no thread):
+- [x] **Step 2:** Spread `...this.threadOpts(chatId)` into every message-creating call (message-id-addressed calls — edit, delete, pin, unpin, react — need no thread):
   - `sendMessage` (~lines 164, 169, 176): both branches get an options object, e.g. `this.bot.api.sendMessage(numId, chunk, { ...this.threadOpts(chatId), ...replyParams })` and `{ parse_mode: "MarkdownV2", ...this.threadOpts(chatId), ...replyParams }`
   - `sendInteractive` (~lines 217, 223): both send calls; and the force-reply follow-up prompt (~line 263)
   - `setTyping` (~lines 346, 349): `sendChatAction(numId, "typing", this.threadOpts(chatId))`
   - `sendFile` (~lines 455-462): all four media branches, e.g. `sendPhoto(id, file, { caption, ...this.threadOpts(chatId) })`
 
-- [ ] **Step 3:** Inbound suffix in `extractSender` (~line 382):
+- [x] **Step 3:** Inbound suffix in `extractSender` (~line 382):
 
 ```typescript
 const topicSuffix = ctx.message?.is_topic_message && ctx.message.message_thread_id
@@ -68,15 +68,15 @@ return {
 
 (`pendingTextResolvers` is keyed by the chatId passed to `sendInteractive` and resolved by the inbound chatId — both composite now, so they stay consistent. General-topic messages have no `is_topic_message`, so existing group bindings are untouched.)
 
-- [ ] **Step 4:** Run `npm run check` — no type errors
-- [ ] **Step 5:** Smoke-test id parsing with a tsx scratch script: `numericId`/`threadOpts` are private, so test the equivalent expressions inline — `"tg:-100123:45".split(":")` → `["tg", "-100123", "45"]`, `Number("-100123")` → -100123. Delete the script after.
-- [ ] **Step 6:** Commit: `git add src/channel/telegram.ts && git commit -m "feat(telegram): composite chat ids for forum topics"`
+- [x] **Step 4:** Run `npm run check` — no type errors
+- [x] **Step 5:** Smoke-test id parsing with a tsx scratch script: `numericId`/`threadOpts` are private, so test the equivalent expressions inline — `"tg:-100123:45".split(":")` → `["tg", "-100123", "45"]`, `Number("-100123")` → -100123. Delete the script after.
+- [x] **Step 6:** Commit: `git add src/channel/telegram.ts && git commit -m "feat(telegram): composite chat ids for forum topics"`
 
 ## Task 2: Channel capabilities — createSubChat / closeSubChat
 
 **Files:** Modify `src/types.ts` (Channel interface), `src/channel/telegram.ts`
 
-- [ ] **Step 1:** Add optional methods to the `Channel` interface in `src/types.ts` (after `reactToMessage`):
+- [x] **Step 1:** Add optional methods to the `Channel` interface in `src/types.ts` (after `reactToMessage`):
 
 ```typescript
 /** Create a sub-chat under a registered anchor (Telegram: forum topic in a topics-enabled group). Returns the new chat id. Optional capability. */
@@ -85,7 +85,7 @@ createSubChat?(anchor: string, title: string): Promise<string>;
 closeSubChat?(chatId: string): Promise<void>;
 ```
 
-- [ ] **Step 2:** Implement in `TelegramChannel` (near `sendFile`). Requires the bot to be an admin with Manage Topics in the anchor group; errors propagate to the caller:
+- [x] **Step 2:** Implement in `TelegramChannel` (near `sendFile`). Requires the bot to be an admin with Manage Topics in the anchor group; errors propagate to the caller:
 
 ```typescript
 async createSubChat(anchor: string, title: string): Promise<string> {
@@ -100,14 +100,14 @@ async closeSubChat(chatId: string): Promise<void> {
 }
 ```
 
-- [ ] **Step 3:** Run `npm run check` — no type errors (Slack channel compiles unchanged: the methods are optional)
-- [ ] **Step 4:** Commit: `git add src/types.ts src/channel/telegram.ts && git commit -m "feat(channel): createSubChat/closeSubChat capability (Telegram forum topics)"`
+- [x] **Step 3:** Run `npm run check` — no type errors (Slack channel compiles unchanged: the methods are optional)
+- [x] **Step 4:** Commit: `git add src/types.ts src/channel/telegram.ts && git commit -m "feat(channel): createSubChat/closeSubChat capability (Telegram forum topics)"`
 
 ## Task 3: SpawnSurface registry in config
 
 **Files:** Modify `src/config.ts`
 
-- [ ] **Step 1:** Add the interface next to `PendingSpinOut`:
+- [x] **Step 1:** Add the interface next to `PendingSpinOut`:
 
 ```typescript
 export interface SpawnSurface {
@@ -118,9 +118,9 @@ export interface SpawnSurface {
 }
 ```
 
-- [ ] **Step 2:** Add `surfaces: SpawnSurface[]` to `ConfigData` and default it in `read()`: `surfaces: (raw.surfaces ?? []) as SpawnSurface[],`
+- [x] **Step 2:** Add `surfaces: SpawnSurface[]` to `ConfigData` and default it in `read()`: `surfaces: (raw.surfaces ?? []) as SpawnSurface[],`
 
-- [ ] **Step 3:** Add methods next to the spin-out CRUD:
+- [x] **Step 3:** Add methods next to the spin-out CRUD:
 
 ```typescript
 // --- Spawn surfaces ---
@@ -145,13 +145,13 @@ surfaceForWorkspace(workspaceName: string): SpawnSurface | undefined {
 }
 ```
 
-- [ ] **Step 4:** Run `npm run check`, then commit: `git add src/config.ts && git commit -m "feat(config): spawn surface registry"`
+- [x] **Step 4:** Run `npm run check`, then commit: `git add src/config.ts && git commit -m "feat(config): spawn surface registry"`
 
 ## Task 4: forum_register tool + onboarding branch
 
 **Files:** Modify `src/orchestrator.ts` (task-tools block, next to `workspace_create`), `prompts/ONBOARDING.md`
 
-- [ ] **Step 1:** Add the tool inside the `if (this.tasks.has(chatId))` block:
+- [x] **Step 1:** Add the tool inside the `if (this.tasks.has(chatId))` block:
 
 ```typescript
 tool("forum_register", "Register this group as a spawn surface: a topics-enabled (forum) group where ClearClaw creates a topic per spawned peer workspace. The group must have Topics enabled and the bot must be an admin with the Manage Topics right.", {
@@ -172,14 +172,14 @@ tool("forum_register", "Register this group as a spawn surface: a topics-enabled
 }),
 ```
 
-- [ ] **Step 2:** In `prompts/ONBOARDING.md`, extend the group-chat flow's step 2 ("Ask what they want to work on") with a third possibility:
+- [x] **Step 2:** In `prompts/ONBOARDING.md`, extend the group-chat flow's step 2 ("Ask what they want to work on") with a third possibility:
 
 ```markdown
 2. **Ask what they want to work on.** A specific project? A git repo? A general-purpose assistant chat? Or is this group a *spawn surface* — a topics-enabled forum where spun-out peer workspaces get their own topics?
    - For a spawn surface: confirm Topics are enabled and the bot is an admin with Manage Topics, ask which workspaces should route here (or whether it's the default catch-all), then call `forum_register` followed by `task_complete`. Skip the remaining steps.
 ```
 
-- [ ] **Step 3:** Run `npm run check`, then commit: `git add src/orchestrator.ts prompts/ONBOARDING.md && git commit -m "feat(onboarding): register forum groups as spawn surfaces"`
+- [x] **Step 3:** Run `npm run check`, then commit: `git add src/orchestrator.ts prompts/ONBOARDING.md && git commit -m "feat(onboarding): register forum groups as spawn surfaces"`
 
 ## Task 5: Worktree helpers
 
