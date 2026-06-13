@@ -326,6 +326,15 @@ export class Config {
     this.write(data);
   }
 
+  removeWorkspace(name: string): Workspace | undefined {
+    const data = this.read();
+    const idx = data.workspaces.findIndex((w) => w.name === name);
+    if (idx < 0) return undefined;
+    const [removed] = data.workspaces.splice(idx, 1);
+    this.write(data);
+    return removed;
+  }
+
   setSession(name: string, sessionId: string): void {
     const data = this.read();
     const ws = data.workspaces.find((w) => w.name === name);

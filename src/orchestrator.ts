@@ -903,6 +903,38 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: removed ? `Spin-out ${args.id} cancelled.` : `No pending spin-out "${args.id}".` }] };
           },
         ),
+        tool("workspace_archive", "Archive a workspace: unbind it from its chat, close its topic (if it was spawned into a forum), and remove its git worktree (if under .worktrees). The directory contents and git branch otherwise survive. Cannot archive 'default'.", {
+          name: z.string().describe("Workspace to archive"),
+        }, async (args) => {
+          if (args.name === "default") {
+            return { content: [{ type: "text" as const, text: "Cannot archive the home workspace." }] };
+          }
+          const target = this.config.workspaceByName(args.name);
+          if (!target) {
+            return { content: [{ type: "text" as const, text: `No workspace named "${args.name}".` }] };
+          }
+          const resp = await this.channel.sendInteractive(
+            chatId,
+            `Archive workspace "${args.name}" (${target.cwd})?`,
+            [[{ label: "Archive", value: "yes" }, { label: "Cancel", value: "no" }]],
+          );
+          if (resp.value !== "yes") {
+            return { content: [{ type: "text" as const, text: "Archive cancelled by the user." }] };
+          }
+          this.config.removeWorkspace(args.name);
+          const closeSubChat = this.channel.closeSubChat?.bind(this.channel);
+          if (closeSubChat && target.chat_id.split(":").length > 2) {
+            await closeSubChat(target.chat_id).catch((err) =>
+              log.warn("[tool] workspace_archive: failed to close topic: %s", err instanceof Error ? err.message : String(err)));
+          }
+          if (target.cwd.includes(`${path.sep}.worktrees${path.sep}`)) {
+            try { removeWorktree(target.cwd); } catch (err) {
+              log.warn("[tool] workspace_archive: worktree removal failed, leaving directory: %s", err instanceof Error ? err.message : String(err));
+            }
+          }
+          log.info("[tool] workspace_archive: %s", args.name);
+          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" archived.` }] };
+        }),
       );
     }
 
