@@ -62,6 +62,13 @@ export interface PendingSpinOut {
   createdAt: number;      // epoch ms
 }
 
+export interface SpawnSurface {
+  name: string;          // registry key, e.g. "dev-forum"
+  chat_id: string;       // anchor chat (Telegram forum group)
+  workspaces?: string[]; // workspaces whose spin-outs route here
+  default?: boolean;     // catch-all when no workspace-bound surface matches
+}
+
 interface ConfigData {
   channel?: ChannelConfig;
   engines?: EngineEntry[];
@@ -70,6 +77,7 @@ interface ConfigData {
   pendingSpinOuts: PendingSpinOut[];
   workspaces: Workspace[];
   schedules: ScheduleEntry[];
+  surfaces: SpawnSurface[];
 }
 
 // --- Pairing constants ---
@@ -199,6 +207,7 @@ export class Config {
       pendingSpinOuts: (raw.pendingSpinOuts ?? []) as PendingSpinOut[],
       workspaces: (raw.workspaces ?? []) as Workspace[],
       schedules: (raw.schedules ?? []) as ScheduleEntry[],
+      surfaces: (raw.surfaces ?? []) as SpawnSurface[],
     };
   }
 
@@ -363,6 +372,27 @@ export class Config {
     data.pendingSpinOuts.splice(idx, 1);
     this.write(data);
     return true;
+  }
+
+  // --- Spawn surfaces ---
+
+  addSurface(surface: SpawnSurface): void {
+    const data = this.read();
+    const idx = data.surfaces.findIndex((s) => s.name === surface.name);
+    if (idx >= 0) data.surfaces[idx] = surface;
+    else data.surfaces.push(surface);
+    this.write(data);
+  }
+
+  listSurfaces(): SpawnSurface[] {
+    return this.read().surfaces;
+  }
+
+  /** Bound surface for a workspace, else the default surface, else undefined. */
+  surfaceForWorkspace(workspaceName: string): SpawnSurface | undefined {
+    const surfaces = this.read().surfaces;
+    return surfaces.find((s) => s.workspaces?.includes(workspaceName))
+      ?? surfaces.find((s) => s.default);
   }
 
   // --- Schedules ---
