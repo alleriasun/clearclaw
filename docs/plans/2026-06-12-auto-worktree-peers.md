@@ -185,7 +185,7 @@ tool("forum_register", "Register this group as a spawn surface: a topics-enabled
 
 **Files:** Create `src/worktree.ts`
 
-- [ ] **Step 1:** Create the module. Sync `execFileSync` is acceptable: worktree operations are sub-second and rare.
+- [x] **Step 1:** Create the module. Sync `execFileSync` is acceptable: worktree operations are sub-second and rare.
 
 ```typescript
 import { execFileSync } from "node:child_process";
@@ -215,8 +215,8 @@ export function removeWorktree(wtPath: string): void {
 }
 ```
 
-- [ ] **Step 2:** Smoke-test via tsx scratch script against a throwaway git repo in /tmp (init, commit, createWorktree, removeWorktree, assert directory gone). Delete the script after.
-- [ ] **Step 3:** Run `npm run check`, then commit: `git add src/worktree.ts && git commit -m "feat(worktree): git worktree helpers for peer spawning"`
+- [x] **Step 2:** Smoke-test via tsx scratch script against a throwaway git repo in /tmp (init, commit, createWorktree, removeWorktree, assert directory gone). Delete the script after.
+- [x] **Step 3:** Run `npm run check`, then commit: `git add src/worktree.ts && git commit -m "feat(worktree): git worktree helpers for peer spawning"`
 
 ## Task 6: Spawn path in spin_out
 
@@ -224,7 +224,7 @@ export function removeWorktree(wtPath: string): void {
 
 When a surface serves the originating workspace and the channel can create sub-chats, offer to spawn immediately; the buttons are the human approval gate (spec: "the human approves"). Manual and cancel paths preserve 1b behavior.
 
-- [ ] **Step 1:** Rewrite the `spin_out` handler body:
+- [x] **Step 1:** Rewrite the `spin_out` handler body:
 
 ```typescript
 async (args) => {
@@ -292,14 +292,14 @@ async (args) => {
 
 Worktree default: no explicit `cwd` + originator is a git repo → same-repo parallelism, worktree on branch `peer/{name}`. Explicit `cwd` → used as-is (different-repo strand). Non-repo originator → shares the originator's cwd.
 
-- [ ] **Step 2:** Update the `spin_out` tool description to cover both paths: `"Propose splitting a related-but-separate strand of work into its own NEW workspace. If a spawn surface is registered, the user is offered one-tap spawning (forum topic + git worktree for same-repo strands); otherwise registers a pending brief the user claims by creating a group. Write the brief as a distilled handoff: the goal plus the few specifics the new agent needs, not a context dump. (To hand a strand to an EXISTING workspace, use message_peer instead.)"`
-- [ ] **Step 3:** Run `npm run check`, then commit: `git add src/orchestrator.ts && git commit -m "feat(orchestrator): one-tap peer spawning via spawn surfaces"`
+- [x] **Step 2:** Update the `spin_out` tool description to cover both paths: `"Propose splitting a related-but-separate strand of work into its own NEW workspace. If a spawn surface is registered, the user is offered one-tap spawning (forum topic + git worktree for same-repo strands); otherwise registers a pending brief the user claims by creating a group. Write the brief as a distilled handoff: the goal plus the few specifics the new agent needs, not a context dump. (To hand a strand to an EXISTING workspace, use message_peer instead.)"`
+- [x] **Step 3:** Run `npm run check`, then commit: `git add src/orchestrator.ts && git commit -m "feat(orchestrator): one-tap peer spawning via spawn surfaces"`
 
 ## Task 7: workspace_archive teardown
 
 **Files:** Modify `src/config.ts` (removeWorkspace), `src/orchestrator.ts` (tool in workspace-turn block). Import `removeWorktree` from `./worktree.js`; `path` is already imported.
 
-- [ ] **Step 1:** Add `removeWorkspace` to config next to `upsertWorkspace`:
+- [x] **Step 1:** Add `removeWorkspace` to config next to `upsertWorkspace`:
 
 ```typescript
 removeWorkspace(name: string): Workspace | undefined {
@@ -312,7 +312,7 @@ removeWorkspace(name: string): Workspace | undefined {
 }
 ```
 
-- [ ] **Step 2:** Add the tool after `spin_out_cancel`:
+- [x] **Step 2:** Add the tool after `spin_out_cancel`:
 
 ```typescript
 tool("workspace_archive", "Archive a workspace: unbind it from its chat, close its topic (if it was spawned into a forum), and remove its git worktree (if under .worktrees). The directory contents and git branch otherwise survive. Cannot archive 'default'.", {
@@ -348,7 +348,7 @@ tool("workspace_archive", "Archive a workspace: unbind it from its chat, close i
 }),
 ```
 
-- [ ] **Step 3:** Run `npm run check`, then commit: `git add src/config.ts src/orchestrator.ts && git commit -m "feat(orchestrator): workspace_archive teardown for spawned peers"`
+- [x] **Step 3:** Run `npm run check`, then commit: `git add src/config.ts src/orchestrator.ts && git commit -m "feat(orchestrator): workspace_archive teardown for spawned peers"`
 
 ## Task 8: Manual end-to-end verification
 
