@@ -725,6 +725,22 @@ export class Orchestrator {
           log.info("[tool] task_complete: chat %s — %s", chatId, args.message ?? "done");
           return { content: [{ type: "text" as const, text: "Task completed." }] };
         }),
+        tool("forum_register", "Register this group as a spawn surface: a topics-enabled (forum) group where ClearClaw creates a topic per spawned peer workspace. The group must have Topics enabled and the bot must be an admin with the Manage Topics right.", {
+          name: z.string().describe("Surface name (short, e.g. 'dev-forum')"),
+          workspaces: z.array(z.string()).optional()
+            .describe("Workspace names whose spin-outs route here"),
+          is_default: z.boolean().optional()
+            .describe("Use as the catch-all surface when no workspace-bound surface matches"),
+        }, async (args) => {
+          this.config.addSurface({
+            name: args.name,
+            chat_id: chatId,
+            workspaces: args.workspaces,
+            default: args.is_default,
+          });
+          log.info("[tool] forum_register: %s → %s", args.name, chatId);
+          return { content: [{ type: "text" as const, text: `Spawn surface "${args.name}" registered for this group. Call task_complete.` }] };
+        }),
       );
     }
 

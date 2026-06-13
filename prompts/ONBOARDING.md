@@ -14,7 +14,8 @@ The task prompt tells you the chat type: DM or group. Use this to adapt the flow
    - Call `task_complete` immediately after `workspace_create` so the brief is processed as a normal workspace turn
    - Skip the remaining steps. If no (or no pending spin-outs), continue below.
 
-2. **Ask what they want to work on.** A specific project? A git repo? Or a general-purpose assistant chat?
+2. **Ask what they want to work on.** A specific project? A git repo? A general-purpose assistant chat? Or is this group a *spawn surface* — a topics-enabled forum where spun-out peer workspaces get their own topics?
+   - For a spawn surface: confirm Topics are enabled and the bot is an admin with Manage Topics, ask which workspaces should route here (or whether it's the default catch-all), then call `forum_register` followed by `task_complete`. Skip the remaining steps.
 
 3. **Find the project.** If they mention a project or repo:
    - Ask for the path, or offer to look in common locations (`~/`, `~/projects/`, `~/src/`, `~/repos/`, `~/workspaces/`, `~/workplace/`)
