@@ -6,6 +6,7 @@ import { z } from "zod";
 import log from "./logger.js";
 import { saveFile } from "./files.js";
 import { assemblePrompt } from "./prompt.js";
+import { repoRootOf, createWorktree, removeWorktree } from "./worktree.js";
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
 import { Scheduler } from "./scheduler.js";
@@ -824,16 +825,64 @@ export class Orchestrator {
         ),
         tool(
           "spin_out",
-          "Propose splitting a related-but-separate strand of work into its own NEW workspace. Registers a pending brief; the user then creates a new group chat and adds the bot, and onboarding there offers to claim it. Write the brief as a distilled handoff: the goal plus the few specifics the new agent needs, not a context dump. (To hand a strand to an EXISTING workspace, use message_peer instead.)",
+          "Propose splitting a related-but-separate strand of work into its own NEW workspace. If a spawn surface is registered, the user is offered one-tap spawning (forum topic + git worktree for same-repo strands); otherwise registers a pending brief the user claims by creating a group. Write the brief as a distilled handoff: the goal plus the few specifics the new agent needs, not a context dump. (To hand a strand to an EXISTING workspace, use message_peer instead.)",
           {
             name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
             brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
             cwd: z.string().optional().describe("Suggested working directory, if known"),
           },
           async (args) => {
+            const fromName = self?.name ?? "unknown";
+            const surface = self ? this.config.surfaceForWorkspace(self.name) : undefined;
+            const createSubChat = this.channel.createSubChat?.bind(this.channel);
+
+            if (surface && createSubChat) {
+              const resp = await this.channel.sendInteractive(
+                chatId,
+                `🌱 Spin out "${args.name}"?\n\n${args.brief.slice(0, 300)}`,
+                [[
+                  { label: `Spawn in ${surface.name}`, value: "spawn" },
+                  { label: "Manual group", value: "manual" },
+                  { label: "Cancel", value: "cancel" },
+                ]],
+              );
+              if (resp.value === "cancel") {
+                return { content: [{ type: "text" as const, text: "Spin-out cancelled by the user." }] };
+              }
+              if (resp.value === "spawn") {
+                if (this.config.workspaceByName(args.name)) {
+                  return { content: [{ type: "text" as const, text: `Workspace "${args.name}" already exists. Pick another name.` }] };
+                }
+                try {
+                  let cwd = args.cwd;
+                  if (!cwd && self) {
+                    const repoRoot = repoRootOf(self.cwd);
+                    cwd = repoRoot ? createWorktree(repoRoot, args.name) : self.cwd;
+                  }
+                  const newChatId = await createSubChat(surface.chat_id, args.name);
+                  this.config.upsertWorkspace({
+                    name: args.name,
+                    cwd: cwd ?? this.config.homeWorkspacePath,
+                    chat_id: newChatId,
+                    current_session_id: null,
+                    behavior: self?.behavior,
+                    engine: self?.engine,
+                  });
+                  this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: fromName }, args.brief);
+                  await this.channel.sendMessage(chatId, `🌱 Spawned "${args.name}" as a topic in ${surface.name}.`);
+                  log.info("[tool] spin_out: spawned %s (cwd %s) in surface %s", args.name, cwd, surface.name);
+                  return { content: [{ type: "text" as const, text: `Spawned workspace "${args.name}" at ${cwd}; brief delivered.` }] };
+                } catch (err) {
+                  const detail = err instanceof Error ? err.message : String(err);
+                  return { content: [{ type: "text" as const, text: `Spawn failed: ${detail}. You can retry with a different name, or register the brief for a manual group instead.` }] };
+                }
+              }
+              // resp.value === "manual" falls through to the pending-brief path below
+            }
+
             const entry: PendingSpinOut = {
               id: crypto.randomUUID().slice(0, 8),
-              fromWorkspace: self?.name ?? "unknown",
+              fromWorkspace: fromName,
               name: args.name,
               brief: args.brief,
               suggestedCwd: args.cwd,
@@ -841,7 +890,7 @@ export class Orchestrator {
             };
             this.config.addSpinOut(entry);
             await this.channel.sendMessage(chatId, `🌱 Spin-out "${args.name}" registered (${entry.id}). Create a new group, add me to it, and I'll offer to pick this up there.`);
-            log.info("[tool] spin_out: %s registered from %s", entry.id, entry.fromWorkspace);
+            log.info("[tool] spin_out: %s registered from %s", entry.id, fromName);
             return { content: [{ type: "text" as const, text: `Spin-out ${entry.id} registered. The user creates a new group chat and adds the bot; onboarding there claims the brief.` }] };
           },
         ),
