@@ -86,7 +86,7 @@ See `docs/specs/2026-06-07-peer-agents-and-memory.md` for the model.
 
 - [x] Phase 1: peer messaging — `message_peer` cross-workspace handoff over typed `MessageOrigin`
 - [x] Phase 1b: spin-out — implemented + verified end-to-end on `feat/spin-out` (`docs/plans/2026-06-11-spin-out.md`): `spin_out` registration, onboarding claim, brief delivery, and `message_peer` round-trip all confirmed 2026-06-13. Pending merge to main.
-- [ ] Phase 1c: auto-worktree peers — implemented on `feat/spin-out` (composite `tg:{chat}:{thread}` ids, `createChat`/`closeChat` channel capability, **Project** registry + `register_project`, worktree helpers, one-tap `spin_out` spawn, `workspace_archive` teardown via `spawnedFrom`), type-checks clean; **pending build + live Telegram verification**. Spec: `docs/specs/2026-06-13-projects-and-peer-spawning.md`; plan: `docs/plans/2026-06-12-auto-worktree-peers.md`
+- [ ] Phase 1c: auto-worktree peers — implemented on `feat/spin-out` (composite `tg:{chat}:{thread}` ids, `createChat`/`closeChat` channel capability, universal **Project** model `{ name, description, main_workspace }` with per-workspace `project`/`spawnedFrom`, worktree helpers, one-tap `spin_out` with `into` targeting, `workspace_archive` teardown), type-checks clean; **pending build + live Telegram verification**. Spec: `docs/specs/2026-06-13-projects-and-peer-spawning.md`; plan: `docs/plans/2026-06-12-auto-worktree-peers.md`
 - [ ] Slack `createSubChat`/`closeSubChat` — `conversations.create`/`archive` with `groups:write` scope; no container tier needed (follow-on to 1c)
 - [ ] Phase 2: shared memory (STM/LTM) — per spec Part 2; deferred until 1b/1c land
 

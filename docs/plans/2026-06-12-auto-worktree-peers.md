@@ -1,6 +1,6 @@
 # Auto-Worktree Peers (Phase 1c) Implementation Plan
 
-> **Naming note (post-implementation):** the vocabulary was finalized after a design pass — `SpawnSurface`→`Project`, its `chat_id`→`anchor`, `forum_register`→`register_project`, `createSubChat`/`closeSubChat`→`createChat`/`closeChat`, plus a `Workspace.spawnedFrom` marker driving archive. Canonical terms live in `docs/specs/2026-06-13-projects-and-peer-spawning.md`. Code blocks below still use the original names.
+> **Model + naming note (post-implementation):** the data model was reworked after a design pass. `Project` is now `{ name, description, main_workspace }` (a context entity, not spawn-routing); every workspace carries `project` + `spawnedFrom`; `createSubChat`/`closeSubChat`→`createChat`/`closeChat`; `register_project` is gone (folded into `workspace_create`); `spin_out` targets a project via `into`. See `docs/specs/2026-06-13-projects-and-peer-spawning.md` for the canonical model. The code blocks below predate this and use the original `SpawnSurface`/`forum_register`/`anchor` names; treat the spec as truth.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
