@@ -844,11 +844,13 @@ export class Orchestrator {
                 if (this.config.workspaceByName(args.name)) {
                   return { content: [{ type: "text" as const, text: `Workspace "${args.name}" already exists. Pick another name.` }] };
                 }
+                let createdWorktree: string | undefined;
                 try {
                   let cwd = args.cwd;
                   if (!cwd) {
                     const repoRoot = repoRootOf(mainWs.cwd);
-                    cwd = repoRoot ? createWorktree(repoRoot, args.name) : mainWs.cwd;
+                    if (repoRoot) { cwd = createWorktree(repoRoot, args.name); createdWorktree = cwd; }
+                    else cwd = mainWs.cwd;
                   }
                   const newChatId = await createChat(mainWs.chat_id, args.name);
                   this.config.upsertWorkspace({
@@ -856,9 +858,10 @@ export class Orchestrator {
                     cwd: cwd ?? this.config.homeWorkspacePath,
                     chat_id: newChatId,
                     current_session_id: null,
-                    behavior: self?.behavior,
-                    engine: self?.engine,
+                    behavior: mainWs.behavior,
+                    engine: mainWs.engine,
                     project: project.name,
+                    about: args.brief,
                     spawnedFrom: fromName,
                   });
                   this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: fromName }, args.brief);
@@ -866,6 +869,8 @@ export class Orchestrator {
                   log.info("[tool] spin_out: spawned %s (cwd %s) in project %s", args.name, cwd, project.name);
                   return { content: [{ type: "text" as const, text: `Spawned workspace "${args.name}" at ${cwd}; brief delivered.` }] };
                 } catch (err) {
+                  // Roll back the worktree (and its clean branch) if we created one before failing.
+                  if (createdWorktree) { try { removeWorktree(createdWorktree); } catch { /* best effort */ } }
                   const detail = err instanceof Error ? err.message : String(err);
                   return { content: [{ type: "text" as const, text: `Spawn failed: ${detail}. You can retry with a different name, or register the brief for a manual group instead.` }] };
                 }
@@ -933,6 +938,48 @@ export class Orchestrator {
           }
           log.info("[tool] workspace_archive: %s", args.name);
           return { content: [{ type: "text" as const, text: `Workspace "${args.name}" archived.` }] };
+        }),
+        tool("project_update", "Update a project's shared context: its description, or reassign its main workspace.", {
+          name: z.string().describe("Project name to update"),
+          description: z.string().optional().describe("New description (what the project is about)"),
+          main_workspace: z.string().optional().describe("Reassign the project's main workspace"),
+        }, async (args) => {
+          const proj = this.config.projectByName(args.name);
+          if (!proj) {
+            return { content: [{ type: "text" as const, text: `No project named "${args.name}".` }] };
+          }
+          if (args.main_workspace && !this.config.workspaceByName(args.main_workspace)) {
+            return { content: [{ type: "text" as const, text: `No workspace named "${args.main_workspace}".` }] };
+          }
+          this.config.addProject({
+            name: proj.name,
+            description: args.description ?? proj.description,
+            main_workspace: args.main_workspace ?? proj.main_workspace,
+          });
+          log.info("[tool] project_update: %s", args.name);
+          return { content: [{ type: "text" as const, text: `Project "${args.name}" updated.` }] };
+        }),
+        tool("workspace_update", "Update a workspace: what it's working on (about), or its behavior/engine.", {
+          name: z.string().describe("Workspace to update"),
+          about: z.string().optional().describe("What this workspace is currently working on"),
+          behavior: z.enum(["assistant", "relay"]).optional().describe("Workspace behavior mode"),
+          engine: z.string().optional().describe("Engine (e.g. 'claude-code', 'kiro')"),
+        }, async (args) => {
+          const ws = this.config.workspaceByName(args.name);
+          if (!ws) {
+            return { content: [{ type: "text" as const, text: `No workspace named "${args.name}".` }] };
+          }
+          if (args.engine && !this.engines.has(args.engine)) {
+            return { content: [{ type: "text" as const, text: `Unknown engine "${args.engine}". Available: ${[...this.engines.keys()].join(", ")}` }] };
+          }
+          this.config.upsertWorkspace({
+            ...ws,
+            about: args.about ?? ws.about,
+            behavior: args.behavior ?? ws.behavior,
+            engine: args.engine ?? ws.engine,
+          });
+          log.info("[tool] workspace_update: %s", args.name);
+          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" updated.` }] };
         }),
       );
     }

@@ -17,9 +17,16 @@ export function createWorktree(repoRoot: string, name: string): string {
   return wtPath;
 }
 
-/** Remove a worktree by path; resolves the main repo via --git-common-dir so it works from anywhere. */
+/** Remove a worktree by path and safe-delete its peer/<name> branch if fully merged. Resolves the main repo via --git-common-dir so it works from anywhere. */
 export function removeWorktree(wtPath: string): void {
   const commonDir = execFileSync("git", ["-C", wtPath, "rev-parse", "--git-common-dir"], { encoding: "utf-8" }).trim();
   const mainRoot = path.dirname(commonDir);
+  const branch = `peer/${path.basename(wtPath)}`;
   execFileSync("git", ["-C", mainRoot, "worktree", "remove", "--force", wtPath], { encoding: "utf-8" });
+  // Safe-delete the peer branch: removed only if fully merged (no unique work); kept otherwise.
+  try {
+    execFileSync("git", ["-C", mainRoot, "branch", "-d", branch], { encoding: "utf-8" });
+  } catch {
+    /* branch has unmerged work (or doesn't exist) — leave it */
+  }
 }
