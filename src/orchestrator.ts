@@ -681,9 +681,10 @@ export class Orchestrator {
     // Task tools — only available during task turns
     if (this.tasks.has(chatId)) {
       tools.push(
-        tool("workspace_create", "Create a new workspace and link it to the current chat", {
-          name: z.string().describe("Workspace name (unique, e.g. 'myproject')"),
+        tool("workspace_create", "Create a new workspace and its project, and link it to the current chat. Every workspace belongs to a project; this creates the project with the new workspace as its main.", {
+          name: z.string().describe("Workspace name (unique, e.g. 'myproject'); also used as the project name"),
           cwd: z.string().describe("Absolute path to the workspace directory"),
+          description: z.string().describe("What this project is about — a short shared-context summary"),
           behavior: z.enum(["assistant", "relay"]).optional()
             .describe("Workspace behavior mode"),
           engine: z.string().optional()
@@ -705,7 +706,9 @@ export class Orchestrator {
             current_session_id: null,
             behavior: args.behavior,
             engine: args.engine,
+            project: args.name,
           });
+          this.config.addProject({ name: args.name, description: args.description, main_workspace: args.name });
           log.info("[tool] workspace_create: %s → %s engine=%s (chat %s)", args.name, args.cwd, args.engine ?? "default", chatId);
           if (args.spin_out_id) {
             const pending = this.config.listSpinOuts().find((s) => s.id === args.spin_out_id);
@@ -725,22 +728,6 @@ export class Orchestrator {
           this.tasks.delete(chatId);
           log.info("[tool] task_complete: chat %s — %s", chatId, args.message ?? "done");
           return { content: [{ type: "text" as const, text: "Task completed." }] };
-        }),
-        tool("register_project", "Register the current group as a project: the place where this project's peer workspaces get spawned. Each spun-out peer becomes its own chat here (Telegram: a topic in this forum group — the group must have Topics enabled and the bot must be an admin with the Manage Topics right; Slack later: a new channel). Optionally scope it to specific workspaces or mark it as the default.", {
-          name: z.string().describe("Project name (short, e.g. 'clearclaw')"),
-          workspaces: z.array(z.string()).optional()
-            .describe("Workspace names whose spin-outs route to this project"),
-          is_default: z.boolean().optional()
-            .describe("Use as the catch-all project when no workspace-bound project matches"),
-        }, async (args) => {
-          this.config.addProject({
-            name: args.name,
-            anchor: chatId,
-            workspaces: args.workspaces,
-            default: args.is_default,
-          });
-          log.info("[tool] register_project: %s → %s", args.name, chatId);
-          return { content: [{ type: "text" as const, text: `Project "${args.name}" registered for this group. Call task_complete.` }] };
         }),
       );
     }
@@ -797,6 +784,7 @@ export class Orchestrator {
       const self = this.config.workspaceByChat(chatId);
       const peers = this.config.listWorkspaces().filter((w) => w.name !== self?.name);
       const peerList = peers.length ? peers.map((w) => `"${w.name}"`).join(", ") : "(none)";
+      const projectNames = this.config.listProjects().map((p) => `"${p.name}"`).join(", ") || "(none)";
       tools.push(
         tool(
           "message_peer",
@@ -825,21 +813,24 @@ export class Orchestrator {
         ),
         tool(
           "spin_out",
-          "Propose splitting a related-but-separate strand of work into its own NEW workspace. If a spawn surface is registered, the user is offered one-tap spawning (forum topic + git worktree for same-repo strands); otherwise registers a pending brief the user claims by creating a group. Write the brief as a distilled handoff: the goal plus the few specifics the new agent needs, not a context dump. (To hand a strand to an EXISTING workspace, use message_peer instead.)",
+          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. If the target project's main chat is a forum, the user is offered one-tap spawning (a new topic + git worktree); otherwise it registers a pending brief the user claims by creating a group. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: the goal plus the few specifics the new agent needs, not a context dump. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
           {
             name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
             brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
             cwd: z.string().optional().describe("Suggested working directory, if known"),
+            into: z.string().optional().describe("Target project name to spawn into; defaults to your own project"),
           },
           async (args) => {
             const fromName = self?.name ?? "unknown";
-            const project = self ? this.config.projectForWorkspace(self.name) : undefined;
+            const targetName = args.into ?? self?.project;
+            const project = targetName ? this.config.projectByName(targetName) : undefined;
+            const mainWs = project ? this.config.workspaceByName(project.main_workspace) : undefined;
             const createChat = this.channel.createChat?.bind(this.channel);
 
-            if (project && createChat) {
+            if (project && mainWs && createChat) {
               const resp = await this.channel.sendInteractive(
                 chatId,
-                `🌱 Spin out "${args.name}"?\n\n${args.brief.slice(0, 300)}`,
+                `🌱 Spin out "${args.name}" into ${project.name}?\n\n${args.brief.slice(0, 300)}`,
                 [[
                   { label: `Spawn in ${project.name}`, value: "spawn" },
                   { label: "Manual group", value: "manual" },
@@ -855,11 +846,11 @@ export class Orchestrator {
                 }
                 try {
                   let cwd = args.cwd;
-                  if (!cwd && self) {
-                    const repoRoot = repoRootOf(self.cwd);
-                    cwd = repoRoot ? createWorktree(repoRoot, args.name) : self.cwd;
+                  if (!cwd) {
+                    const repoRoot = repoRootOf(mainWs.cwd);
+                    cwd = repoRoot ? createWorktree(repoRoot, args.name) : mainWs.cwd;
                   }
-                  const newChatId = await createChat(project.anchor, args.name);
+                  const newChatId = await createChat(mainWs.chat_id, args.name);
                   this.config.upsertWorkspace({
                     name: args.name,
                     cwd: cwd ?? this.config.homeWorkspacePath,
@@ -867,6 +858,7 @@ export class Orchestrator {
                     current_session_id: null,
                     behavior: self?.behavior,
                     engine: self?.engine,
+                    project: project.name,
                     spawnedFrom: fromName,
                   });
                   this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: fromName }, args.brief);
@@ -923,6 +915,10 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: "Archive cancelled by the user." }] };
           }
           this.config.removeWorkspace(args.name);
+          if (target.project) {
+            const proj = this.config.projectByName(target.project);
+            if (proj && proj.main_workspace === args.name) this.config.removeProject(proj.name);
+          }
           if (target.spawnedFrom) {
             const closeChat = this.channel.closeChat?.bind(this.channel);
             if (closeChat) {

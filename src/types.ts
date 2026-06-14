@@ -160,7 +160,8 @@ export interface Workspace {
   current_session_id: string | null;
   behavior?: "assistant" | "relay";
   engine?: string;         // "claude-code" (default) | "kiro" | other ACP agent
-  spawnedFrom?: string;    // origin workspace if spawned via spin_out; drives archive teardown
+  project: string;         // the project this workspace belongs to (every workspace has one)
+  spawnedFrom?: string;    // origin workspace if spawned via spin_out (a peer); absent = the project's main
 }
 
 // --- User identity (populated by channel from platform data) ---

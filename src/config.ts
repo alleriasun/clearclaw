@@ -63,10 +63,9 @@ export interface PendingSpinOut {
 }
 
 export interface Project {
-  name: string;          // registry key, e.g. "clearclaw"
-  anchor: string;        // the chat this project is anchored to (Telegram forum group; Slack lead channel)
-  workspaces?: string[]; // workspaces whose spin-outs route here
-  default?: boolean;     // catch-all when no workspace-bound project matches
+  name: string;           // registry key (matches its main workspace's name)
+  description: string;    // what the project is about — shared context across its workspaces
+  main_workspace: string; // the trunk workspace; its chat is the spawn container, its cwd the repo root
 }
 
 interface ConfigData {
@@ -397,11 +396,20 @@ export class Config {
     return this.read().projects;
   }
 
-  /** Bound project for a workspace, else the default project, else undefined. */
+  projectByName(name: string): Project | undefined {
+    return this.read().projects.find((p) => p.name === name);
+  }
+
+  removeProject(name: string): void {
+    const data = this.read();
+    data.projects = data.projects.filter((p) => p.name !== name);
+    this.write(data);
+  }
+
+  /** The project a workspace belongs to (via its `project` field), if any. */
   projectForWorkspace(workspaceName: string): Project | undefined {
-    const projects = this.read().projects;
-    return projects.find((p) => p.workspaces?.includes(workspaceName))
-      ?? projects.find((p) => p.default);
+    const ws = this.read().workspaces.find((w) => w.name === workspaceName);
+    return ws?.project ? this.projectByName(ws.project) : undefined;
   }
 
   // --- Schedules ---
