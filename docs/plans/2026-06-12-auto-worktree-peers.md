@@ -354,14 +354,14 @@ tool("workspace_archive", "Archive a workspace: unbind it from its chat, close i
 
 ## Task 8: Manual end-to-end verification
 
-- [ ] **Step 1:** `npm run build` (explicit; restarts dev:relay)
-- [ ] **Step 2:** Regression: existing chats (DM + project groups) send/receive normally — composite-id parsing must not disturb plain ids
-- [ ] **Step 3:** Create a Telegram group, enable Topics, add the bot as admin with Manage Topics; onboarding → register as spawn surface (e.g. `dev-forum`, default)
-- [ ] **Step 4:** From the `clearclaw` workspace chat: ask the agent to spin out a strand. Expect buttons; tap "Spawn in dev-forum" → topic appears, worktree under `.worktrees/`, brief lands as `[from clearclaw]: ...`, peer responds in the topic under its own permission mode
-- [ ] **Step 5:** Converse in the topic; verify status pin, tool messages, and `message_peer` back to the originator
-- [ ] **Step 6:** `workspace_archive` the peer → confirm buttons → topic closes, worktree removed, config entry gone
-- [ ] **Step 7:** Fallback paths: "Manual group" button registers a pending brief (1b flow); spin_out with no surface registered goes straight to the pending-brief path
-- [ ] **Step 8:** Fix and commit; update TASKS.md (tick 1c, add Slack createSubChat follow-on)
+- [x] **Step 1:** `npm run build` (explicit; restarts dev:relay)
+- [x] **Step 2:** Regression: existing chats (DM + project groups) send/receive normally — composite-id parsing must not disturb plain ids
+- [x] **Step 3:** Create a Telegram group, enable Topics, add the bot as admin with Manage Topics; onboarding → register as spawn surface (e.g. `dev-forum`, default)
+- [x] **Step 4:** From the `clearclaw` workspace chat: ask the agent to spin out a strand. Expect buttons; tap "Spawn in dev-forum" → topic appears, worktree under `.worktrees/`, brief lands as `[from clearclaw]: ...`, peer responds in the topic under its own permission mode
+- [x] **Step 5:** Converse in the topic; verify status pin, tool messages, and `message_peer` back to the originator
+- [x] **Step 6:** `workspace_archive` the peer → confirm buttons → topic closes, worktree removed, config entry gone
+- [x] **Step 7:** Fallback paths: "Manual group" button registers a pending brief (1b flow); spin_out with no surface registered goes straight to the pending-brief path
+- [x] **Step 8:** Fix and commit; update TASKS.md (tick 1c, add Slack createSubChat follow-on)
 
 ## Self-review notes
 

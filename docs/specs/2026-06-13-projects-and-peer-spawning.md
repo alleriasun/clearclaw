@@ -9,7 +9,7 @@ Phase 1b shipped `spin_out`: an agent proposes splitting a strand into a new wor
 ## Terminology
 
 **Workspace** — an agent bound to one chat; runs turns, holds a session. Every workspace belongs to a project.
-`{ name, cwd, chat_id, current_session_id, behavior?, engine?, project, spawnedFrom? }`
+`{ name, cwd, chat_id, current_session_id, behavior?, engine?, project, about?, spawnedFrom? }`
 
 **Project** — a named body of work and its shared context: what a set of workspaces is collectively about. Not an agent; holds no session.
 `{ name, description, main_workspace }`
@@ -35,6 +35,10 @@ Phase 1b shipped `spin_out`: an agent proposes splitting a strand into a new wor
 
 **Archive by marker.** `workspace_archive` tears a peer down by `spawnedFrom` (delegating "what closing means" to `closeChat`, which no-ops when there's nothing to close, plus worktree removal). Archiving a main also drops its project. This avoids the orchestrator sniffing chat_id shape and protects human-created groups.
 
+**Transactional spawn + safe branch lifecycle.** Spawn rolls back: if topic creation fails after a worktree was made, the worktree (and its still-clean branch) is removed, so a failed spawn leaves nothing behind. Archive removes the worktree and `git branch -d`s the peer branch only when it is fully merged; a branch with real unmerged work is kept. A spawned peer inherits `behavior` / `engine` from its project's main, not from whoever spawned it.
+
+**Editable context (the P2 seam).** `Project.description` and `Workspace.about` are the editable context pair — what the project, and a given workspace, are about. Set at creation/spawn (a peer's `about` is its brief) and changed via `project_update` / `workspace_update`. This is the context layer Phase 2's shared memory builds on.
+
 ## Cross-platform mapping
 
 - **Telegram:** main chat = a forum group's General; peer = a topic (`createForumTopic`) giving `tg:{group}:{topic}`; close = `closeForumTopic`. Requires Topics enabled and the bot admin with Manage Topics.
@@ -49,4 +53,4 @@ Phase 1b shipped `spin_out`: an agent proposes splitting a strand into a new wor
 
 ## Status
 
-Reworked and type-checked on `feat/spin-out`. Pending build + live Telegram verification (plan Task 8).
+Built and verified end to end on `feat/spin-out`: spawn → worktree → forum topic → brief delivery → peer `message_peer` round-trip → archive, plus the error paths (permission failure, branch collision) failing cleanly with rollback. Ready to merge to main.
