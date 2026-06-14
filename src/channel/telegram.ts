@@ -482,12 +482,12 @@ export class TelegramChannel extends EventEmitter implements Channel {
     }
   }
 
-  async createSubChat(anchor: string, title: string): Promise<string> {
+  async createChat(anchor: string, title: string): Promise<string> {
     const topic = await this.bot.api.createForumTopic(this.numericId(anchor), title);
     return `${anchor}:${topic.message_thread_id}`;
   }
 
-  async closeSubChat(chatId: string): Promise<void> {
+  async closeChat(chatId: string): Promise<void> {
     const thread = chatId.split(":")[2];
     if (!thread) return;
     await this.bot.api.closeForumTopic(this.numericId(chatId), Number(thread));

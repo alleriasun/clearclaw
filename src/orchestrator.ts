@@ -726,21 +726,21 @@ export class Orchestrator {
           log.info("[tool] task_complete: chat %s — %s", chatId, args.message ?? "done");
           return { content: [{ type: "text" as const, text: "Task completed." }] };
         }),
-        tool("forum_register", "Register this group as a spawn surface: a topics-enabled (forum) group where ClearClaw creates a topic per spawned peer workspace. The group must have Topics enabled and the bot must be an admin with the Manage Topics right.", {
-          name: z.string().describe("Surface name (short, e.g. 'dev-forum')"),
+        tool("register_project", "Register the current group as a project: the place where this project's peer workspaces get spawned. Each spun-out peer becomes its own chat here (Telegram: a topic in this forum group — the group must have Topics enabled and the bot must be an admin with the Manage Topics right; Slack later: a new channel). Optionally scope it to specific workspaces or mark it as the default.", {
+          name: z.string().describe("Project name (short, e.g. 'clearclaw')"),
           workspaces: z.array(z.string()).optional()
-            .describe("Workspace names whose spin-outs route here"),
+            .describe("Workspace names whose spin-outs route to this project"),
           is_default: z.boolean().optional()
-            .describe("Use as the catch-all surface when no workspace-bound surface matches"),
+            .describe("Use as the catch-all project when no workspace-bound project matches"),
         }, async (args) => {
-          this.config.addSurface({
+          this.config.addProject({
             name: args.name,
-            chat_id: chatId,
+            anchor: chatId,
             workspaces: args.workspaces,
             default: args.is_default,
           });
-          log.info("[tool] forum_register: %s → %s", args.name, chatId);
-          return { content: [{ type: "text" as const, text: `Spawn surface "${args.name}" registered for this group. Call task_complete.` }] };
+          log.info("[tool] register_project: %s → %s", args.name, chatId);
+          return { content: [{ type: "text" as const, text: `Project "${args.name}" registered for this group. Call task_complete.` }] };
         }),
       );
     }
@@ -833,15 +833,15 @@ export class Orchestrator {
           },
           async (args) => {
             const fromName = self?.name ?? "unknown";
-            const surface = self ? this.config.surfaceForWorkspace(self.name) : undefined;
-            const createSubChat = this.channel.createSubChat?.bind(this.channel);
+            const project = self ? this.config.projectForWorkspace(self.name) : undefined;
+            const createChat = this.channel.createChat?.bind(this.channel);
 
-            if (surface && createSubChat) {
+            if (project && createChat) {
               const resp = await this.channel.sendInteractive(
                 chatId,
                 `🌱 Spin out "${args.name}"?\n\n${args.brief.slice(0, 300)}`,
                 [[
-                  { label: `Spawn in ${surface.name}`, value: "spawn" },
+                  { label: `Spawn in ${project.name}`, value: "spawn" },
                   { label: "Manual group", value: "manual" },
                   { label: "Cancel", value: "cancel" },
                 ]],
@@ -859,7 +859,7 @@ export class Orchestrator {
                     const repoRoot = repoRootOf(self.cwd);
                     cwd = repoRoot ? createWorktree(repoRoot, args.name) : self.cwd;
                   }
-                  const newChatId = await createSubChat(surface.chat_id, args.name);
+                  const newChatId = await createChat(project.anchor, args.name);
                   this.config.upsertWorkspace({
                     name: args.name,
                     cwd: cwd ?? this.config.homeWorkspacePath,
@@ -867,10 +867,11 @@ export class Orchestrator {
                     current_session_id: null,
                     behavior: self?.behavior,
                     engine: self?.engine,
+                    spawnedFrom: fromName,
                   });
                   this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: fromName }, args.brief);
-                  await this.channel.sendMessage(chatId, `🌱 Spawned "${args.name}" as a topic in ${surface.name}.`);
-                  log.info("[tool] spin_out: spawned %s (cwd %s) in surface %s", args.name, cwd, surface.name);
+                  await this.channel.sendMessage(chatId, `🌱 Spawned "${args.name}" in ${project.name}.`);
+                  log.info("[tool] spin_out: spawned %s (cwd %s) in project %s", args.name, cwd, project.name);
                   return { content: [{ type: "text" as const, text: `Spawned workspace "${args.name}" at ${cwd}; brief delivered.` }] };
                 } catch (err) {
                   const detail = err instanceof Error ? err.message : String(err);
@@ -903,7 +904,7 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: removed ? `Spin-out ${args.id} cancelled.` : `No pending spin-out "${args.id}".` }] };
           },
         ),
-        tool("workspace_archive", "Archive a workspace: unbind it from its chat, close its topic (if it was spawned into a forum), and remove its git worktree (if under .worktrees). The directory contents and git branch otherwise survive. Cannot archive 'default'.", {
+        tool("workspace_archive", "Archive a workspace: unbind it from its chat, and if it was spawned via spin_out, close its chat and remove its git worktree. The directory contents and git branch otherwise survive. Cannot archive 'default'.", {
           name: z.string().describe("Workspace to archive"),
         }, async (args) => {
           if (args.name === "default") {
@@ -922,14 +923,16 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: "Archive cancelled by the user." }] };
           }
           this.config.removeWorkspace(args.name);
-          const closeSubChat = this.channel.closeSubChat?.bind(this.channel);
-          if (closeSubChat && target.chat_id.split(":").length > 2) {
-            await closeSubChat(target.chat_id).catch((err) =>
-              log.warn("[tool] workspace_archive: failed to close topic: %s", err instanceof Error ? err.message : String(err)));
-          }
-          if (target.cwd.includes(`${path.sep}.worktrees${path.sep}`)) {
-            try { removeWorktree(target.cwd); } catch (err) {
-              log.warn("[tool] workspace_archive: worktree removal failed, leaving directory: %s", err instanceof Error ? err.message : String(err));
+          if (target.spawnedFrom) {
+            const closeChat = this.channel.closeChat?.bind(this.channel);
+            if (closeChat) {
+              await closeChat(target.chat_id).catch((err) =>
+                log.warn("[tool] workspace_archive: failed to close chat: %s", err instanceof Error ? err.message : String(err)));
+            }
+            if (target.cwd.includes(`${path.sep}.worktrees${path.sep}`)) {
+              try { removeWorktree(target.cwd); } catch (err) {
+                log.warn("[tool] workspace_archive: worktree removal failed, leaving directory: %s", err instanceof Error ? err.message : String(err));
+              }
             }
           }
           log.info("[tool] workspace_archive: %s", args.name);

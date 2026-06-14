@@ -62,11 +62,11 @@ export interface PendingSpinOut {
   createdAt: number;      // epoch ms
 }
 
-export interface SpawnSurface {
-  name: string;          // registry key, e.g. "dev-forum"
-  chat_id: string;       // anchor chat (Telegram forum group)
+export interface Project {
+  name: string;          // registry key, e.g. "clearclaw"
+  anchor: string;        // the chat this project is anchored to (Telegram forum group; Slack lead channel)
   workspaces?: string[]; // workspaces whose spin-outs route here
-  default?: boolean;     // catch-all when no workspace-bound surface matches
+  default?: boolean;     // catch-all when no workspace-bound project matches
 }
 
 interface ConfigData {
@@ -77,7 +77,7 @@ interface ConfigData {
   pendingSpinOuts: PendingSpinOut[];
   workspaces: Workspace[];
   schedules: ScheduleEntry[];
-  surfaces: SpawnSurface[];
+  projects: Project[];
 }
 
 // --- Pairing constants ---
@@ -207,7 +207,7 @@ export class Config {
       pendingSpinOuts: (raw.pendingSpinOuts ?? []) as PendingSpinOut[],
       workspaces: (raw.workspaces ?? []) as Workspace[],
       schedules: (raw.schedules ?? []) as ScheduleEntry[],
-      surfaces: (raw.surfaces ?? []) as SpawnSurface[],
+      projects: (raw.projects ?? []) as Project[],
     };
   }
 
@@ -383,25 +383,25 @@ export class Config {
     return true;
   }
 
-  // --- Spawn surfaces ---
+  // --- Projects ---
 
-  addSurface(surface: SpawnSurface): void {
+  addProject(project: Project): void {
     const data = this.read();
-    const idx = data.surfaces.findIndex((s) => s.name === surface.name);
-    if (idx >= 0) data.surfaces[idx] = surface;
-    else data.surfaces.push(surface);
+    const idx = data.projects.findIndex((p) => p.name === project.name);
+    if (idx >= 0) data.projects[idx] = project;
+    else data.projects.push(project);
     this.write(data);
   }
 
-  listSurfaces(): SpawnSurface[] {
-    return this.read().surfaces;
+  listProjects(): Project[] {
+    return this.read().projects;
   }
 
-  /** Bound surface for a workspace, else the default surface, else undefined. */
-  surfaceForWorkspace(workspaceName: string): SpawnSurface | undefined {
-    const surfaces = this.read().surfaces;
-    return surfaces.find((s) => s.workspaces?.includes(workspaceName))
-      ?? surfaces.find((s) => s.default);
+  /** Bound project for a workspace, else the default project, else undefined. */
+  projectForWorkspace(workspaceName: string): Project | undefined {
+    const projects = this.read().projects;
+    return projects.find((p) => p.workspaces?.includes(workspaceName))
+      ?? projects.find((p) => p.default);
   }
 
   // --- Schedules ---
