@@ -406,12 +406,6 @@ export class Config {
     this.write(data);
   }
 
-  /** The project a workspace belongs to (via its `project` field), if any. */
-  projectForWorkspace(workspaceName: string): Project | undefined {
-    const ws = this.read().workspaces.find((w) => w.name === workspaceName);
-    return ws?.project ? this.projectByName(ws.project) : undefined;
-  }
-
   // --- Schedules ---
 
   listSchedules(): ScheduleEntry[] {
