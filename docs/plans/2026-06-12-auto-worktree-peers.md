@@ -1,5 +1,7 @@
 # Auto-Worktree Peers (Phase 1c) Implementation Plan
 
+> **Naming note (post-implementation):** the vocabulary was finalized after a design pass — `SpawnSurface`→`Project`, its `chat_id`→`anchor`, `forum_register`→`register_project`, `createSubChat`/`closeSubChat`→`createChat`/`closeChat`, plus a `Workspace.spawnedFrom` marker driving archive. Canonical terms live in `docs/specs/2026-06-13-projects-and-peer-spawning.md`. Code blocks below still use the original names.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** `spin_out` can spawn a peer workspace fully programmatically — chat surface (forum topic), git worktree, workspace binding, brief delivery — with the human approving via buttons; `workspace_archive` tears it all down.
