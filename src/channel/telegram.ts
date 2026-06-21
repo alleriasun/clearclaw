@@ -325,8 +325,12 @@ export class TelegramChannel extends EventEmitter implements Channel {
         }
       }
     }
-    // No existing handle, or edit failed — create new pinned message
-    try { await this.unpinAllMessages(chatId); } catch { /* not admin */ }
+    // No existing handle, or edit failed — (re)create the pinned status. Unpin only the previous
+    // status message (stays topic-scoped, since the topic travels with the message id); a chat-wide
+    // unpinAll would clobber every other forum topic's pinned status, so peers stop showing a pin.
+    if (existing) {
+      try { await this.bot.api.unpinChatMessage(this.numericId(chatId), Number(existing)); } catch { /* already gone / not admin */ }
+    }
     const handles = await this.sendMessage(chatId, text);
     const handle = handles[0];
     this.statusHandles.set(chatId, handle);
