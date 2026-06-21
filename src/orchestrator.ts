@@ -164,10 +164,16 @@ export class Orchestrator {
     let createdChatId: string | undefined;
     try {
       let cwd = args.cwd;
-      if (!cwd) {
+      if (!cwd || !fs.existsSync(cwd)) {
         const repoRoot = repoRootOf(mainWs.cwd);
-        if (repoRoot) { cwd = createWorktree(repoRoot, args.name); createdWorktree = cwd; }
-        else cwd = mainWs.cwd;
+        if (repoRoot) {
+          // Create the worktree at the explicit cwd if given (honoring .worktrees/<name>), else the default path.
+          cwd = createWorktree(repoRoot, args.name, cwd);
+          createdWorktree = cwd;
+        } else {
+          cwd = cwd ?? mainWs.cwd;
+          fs.mkdirSync(cwd, { recursive: true });
+        }
       }
       createdChatId = await createChat(mainWs.chat_id, args.name);
       this.config.upsertWorkspace({
@@ -292,6 +298,13 @@ export class Orchestrator {
   ): Promise<void> {
     const task = isTask(ctx) ? ctx : undefined;
     const ws = isTask(ctx) ? undefined : ctx;
+
+    const turnCwd = task ? task.cwd : ws!.cwd;
+    if (!fs.existsSync(turnCwd)) {
+      log.warn("[turn] aborting: cwd does not exist: %s", turnCwd);
+      await this.channel.sendMessage(chatId, `⚠️ Can't start: this workspace's directory doesn't exist:\n${turnCwd}\nLikely an un-created worktree. Create it (e.g. \`git worktree add "${turnCwd}" -b <branch>\`) or fix the workspace cwd, then retry.`).catch(() => {});
+      return;
+    }
 
     state.busy = true;
     const abort = new AbortController();
@@ -887,7 +900,7 @@ export class Orchestrator {
           {
             name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
             brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
-            cwd: z.string().optional().describe("Suggested working directory, if known"),
+            cwd: z.string().optional().describe("Working directory for the peer. If it doesn't exist yet, a git worktree is created there (default: <project repo>/.worktrees/<name>); pass an existing dir to use it as-is."),
             into: z.string().optional().describe("Target project name to spawn into; defaults to your own project"),
           },
           async (args) => {

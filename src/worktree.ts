@@ -10,11 +10,11 @@ export function repoRootOf(cwd: string): string | null {
   }
 }
 
-/** Create a worktree at <repoRoot>/.worktrees/<name> on new branch peer/<name>. Returns its path. */
-export function createWorktree(repoRoot: string, name: string): string {
-  const wtPath = path.join(repoRoot, ".worktrees", name);
-  execFileSync("git", ["-C", repoRoot, "worktree", "add", wtPath, "-b", `peer/${name}`], { encoding: "utf-8" });
-  return wtPath;
+/** Create a worktree for repoRoot at the given path (default <repoRoot>/.worktrees/<name>) on new branch peer/<basename>. Returns its path. */
+export function createWorktree(repoRoot: string, name: string, wtPath?: string): string {
+  const target = wtPath ?? path.join(repoRoot, ".worktrees", name);
+  execFileSync("git", ["-C", repoRoot, "worktree", "add", target, "-b", `peer/${path.basename(target)}`], { encoding: "utf-8" });
+  return target;
 }
 
 /** Remove a worktree by path and safe-delete its peer/<name> branch if fully merged. Resolves the main repo via --git-common-dir so it works from anywhere. */
