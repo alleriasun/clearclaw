@@ -155,7 +155,7 @@ export class Orchestrator {
     project: Project,
     mainWs: Workspace,
     createChat: (anchor: string, title: string) => Promise<string>,
-    args: { name: string; brief: string; cwd?: string },
+    args: { name: string; brief: string; cwd?: string; branch?: string },
   ) {
     if (this.config.workspaceByName(args.name)) {
       return { content: [{ type: "text" as const, text: `Workspace "${args.name}" already exists. Pick another name.` }] };
@@ -168,7 +168,7 @@ export class Orchestrator {
         const repoRoot = repoRootOf(mainWs.cwd);
         if (repoRoot) {
           // Create the worktree at the explicit cwd if given (honoring .worktrees/<name>), else the default path.
-          cwd = createWorktree(repoRoot, args.name, cwd);
+          cwd = createWorktree(repoRoot, args.name, cwd, args.branch);
           createdWorktree = cwd;
         } else {
           cwd = cwd ?? mainWs.cwd;
@@ -901,6 +901,7 @@ export class Orchestrator {
             name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
             brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
             cwd: z.string().optional().describe("Working directory for the peer. If it doesn't exist yet, a git worktree is created there (default: <project repo>/.worktrees/<name>); pass an existing dir to use it as-is."),
+            branch: z.string().optional().describe("Git branch for the peer's worktree, conventional (e.g. 'feat/x', 'fix/y', 'chore/z') per the work. Defaults to 'feat/<name>'."),
             into: z.string().optional().describe("Target project name to spawn into; defaults to your own project"),
           },
           async (args) => {
