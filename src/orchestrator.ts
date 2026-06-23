@@ -896,7 +896,7 @@ export class Orchestrator {
         ),
         tool(
           "spin_out",
-          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. If the target project's main chat is a forum, the user is offered one-tap spawning (a new topic + git worktree); otherwise it registers a pending brief the user claims by creating a group. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: the goal plus the few specifics the new agent needs, not a context dump. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
+          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. If the target project's main chat is a forum, the user is offered one-tap spawning (a new topic + git worktree); otherwise it registers a pending brief the user claims by creating a group. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
           {
             name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
             brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
