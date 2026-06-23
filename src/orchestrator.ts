@@ -246,7 +246,7 @@ export class Orchestrator {
       ? (assembledPrompt ? `${assembledPrompt}\n\n${task.prompt}` : task.prompt)
       : assembledPrompt;
 
-    const prompt = buildPrompt(messages);
+    const prompt = slashCommandPrompt(messages) ?? buildPrompt(messages);
 
     // Save attachments for workspace turns
     const allAttachments = messages.flatMap((m) => m.attachments ?? []);
@@ -920,6 +920,27 @@ function senderLabel(origin: MessageOrigin): string {
     case "peer": return `[peer] ${origin.workspaceName}`;
     default: { const _exhaustive: never = origin; return _exhaustive; }
   }
+}
+
+/**
+ * A lone slash-command message (built-in like `/compact`, `/context`, or a
+ * custom `.claude/commands/<name>`) must reach the engine verbatim: the CLI
+ * only intercepts a slash command when it sits at position 0 of the prompt.
+ * buildPrompt's `[ts] sender:` framing would push it off position 0, so the
+ * command would be sent to the model as plain text instead of executed.
+ *
+ * ClearClaw's own commands (/new, /resume, /behavior, …) are handled and
+ * returned before the turn starts, so any leading-slash message that reaches
+ * here is a pass-through command. Restricted to single, user-typed messages —
+ * a slash buried in a batch, or in a scheduler/peer prompt, is not a command.
+ * Returns the bare command text, or null to fall back to buildPrompt.
+ */
+function slashCommandPrompt(messages: InboundMessage[]): string | null {
+  if (messages.length !== 1) return null;
+  const msg = messages[0];
+  if (msg.origin.kind !== "user") return null;
+  const text = msg.text.trim();
+  return text.startsWith("/") ? text : null;
 }
 
 function buildPrompt(messages: InboundMessage[]): string {
