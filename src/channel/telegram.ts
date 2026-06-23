@@ -36,6 +36,10 @@ export class TelegramChannel extends EventEmitter implements Channel {
   // Pending text input: chatId → resolve function (for requestText follow-ups)
   private pendingTextResolvers = new Map<string, (text: string) => void>();
 
+  // Our bot's @username, captured at connect. Used to strip the `@bot` suffix
+  // Telegram appends to commands in group chats.
+  private botUsername?: string;
+
   constructor(
     botToken: string,
     isAuthorized: (userId: string) => boolean,
@@ -46,6 +50,21 @@ export class TelegramChannel extends EventEmitter implements Channel {
     this.isAuthorized = isAuthorized;
     this.onUnauthorizedDM = onUnauthorizedDM;
     this.bot = new Bot(botToken);
+  }
+
+  /**
+   * Strip the `@<botUsername>` suffix Telegram appends to commands in group
+   * chats (`/context@mybot args` → `/context args`), so downstream command
+   * handling — ClearClaw's own `/new` etc. and slash-command pass-through —
+   * sees the bare `/command`. No-op for non-command text and in DMs (no suffix).
+   * Telegram usernames are `[A-Za-z0-9_]`, so they need no regex escaping.
+   */
+  private stripCommandMention(text: string): string {
+    if (!this.botUsername || !text.startsWith("/")) return text;
+    return text.replace(
+      new RegExp(`^(/[^\\s@]+)@${this.botUsername}(?=\\s|$)`, "i"),
+      "$1",
+    );
   }
 
   async connect(): Promise<void> {
@@ -63,7 +82,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
 
       this.emit("message", {
         ...sender,
-        text: ctx.message.text,
+        text: this.stripCommandMention(ctx.message.text),
         messageId: String(ctx.message.message_id),
         replyTo: this.extractReplyContext(ctx.message),
       });
@@ -126,6 +145,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
     await new Promise<void>((resolve) => {
       this.bot.start({
         onStart: (botInfo) => {
+          this.botUsername = botInfo.username;
           log.info(`[channel] Telegram bot: @${botInfo.username}`);
           resolve();
         },
