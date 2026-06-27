@@ -10,6 +10,7 @@ export interface SpawnConfig {
 /** Known ACP agent spawn configurations. */
 const KNOWN_ACP_AGENTS: Record<string, SpawnConfig> = {
   kiro: { command: "kiro-cli", args: ["acp"] },
+  codex: { command: "npx", args: ["-y", "@agentclientprotocol/codex-acp"] },
 };
 
 /** All known engine names (for validation / setup prompts). */
