@@ -41,6 +41,8 @@ interface ChatState {
   // Rolling text message: streaming engines (text_chunk) accumulate here
   textHandle: string | null;
   textBuffer: string;
+  textPublishedLength: number;
+  textReplySent: boolean;
   engineName: string | null; // engine name for status display when model is null
   // Per-chat message queue: relay drains immediately, assistant debounces
   messageQueue: InboundMessage[];
@@ -66,6 +68,9 @@ const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
   { label: "Bypass", value: "bypassPermissions" },
 ];
 
+const STREAM_EDIT_LIMIT = 3000;
+const STREAM_INITIAL_EDIT_MIN = 96;
+const STREAM_EDIT_DELTA = 160;
 
 export class Orchestrator {
   private channel: Channel;
@@ -87,6 +92,8 @@ export class Orchestrator {
       s = {
         busy: false, abort: null, permissionMode: null, stats: null, lastStatusText: null,
         toolCallHandle: null, todoHandle: null, textHandle: null, textBuffer: "",
+        textPublishedLength: 0,
+        textReplySent: false,
         engineName: null,
         messageQueue: [], debounceTimer: null,
       };
@@ -304,14 +311,11 @@ export class Orchestrator {
           }
           state.toolCallHandle = null;
           state.todoHandle = null;
-          // Final formatted edit for any pending streaming text
-          if (state.textHandle && state.textBuffer) {
-            try {
-              await this.channel.editMessage(chatId, state.textHandle, state.textBuffer);
-            } catch { /* best effort */ }
-          }
+          await this.flushTextSegment(chatId, state, turnState);
           state.textHandle = null;
           state.textBuffer = "";
+          state.textPublishedLength = 0;
+          state.textReplySent = false;
           await this.updateStatusMessage(chatId, state);
           break;
         }
@@ -542,37 +546,16 @@ export class Orchestrator {
 
         case "text_chunk": {
           if (turnState.staySilent) break;
-          state.textBuffer += event.text;
-          const plainOpts = { format: "plain" as const };
-          if (state.textHandle) {
-            try {
-              await this.channel.editMessage(chatId, state.textHandle, state.textBuffer, plainOpts);
-            } catch {
-              const handles = await this.channel.sendMessage(chatId, state.textBuffer, {
-                ...plainOpts,
-                replyToMessageId: turnState.replyToMessageId ?? undefined,
-              });
-              state.textHandle = handles[0];
-            }
-          } else {
-            const handles = await this.channel.sendMessage(chatId, state.textBuffer, {
-              ...plainOpts,
-              replyToMessageId: turnState.replyToMessageId ?? undefined,
-            });
-            state.textHandle = handles[0];
-          }
+          await this.routeTextChunk(chatId, event.text, state, turnState);
           break;
         }
 
         case "tool_use": {
           // Flush streaming text — final edit with markdown formatting
-          if (state.textHandle && state.textBuffer) {
-            try {
-              await this.channel.editMessage(chatId, state.textHandle, state.textBuffer);
-            } catch { /* best effort */ }
-          }
+          await this.flushTextSegment(chatId, state, turnState);
           state.textHandle = null;
           state.textBuffer = "";
+          state.textPublishedLength = 0;
 
           // In assistant behavior, all tool status is suppressed (no rolling status, no plan mode notifications)
           if (behavior === "assistant") break;
@@ -643,6 +626,88 @@ export class Orchestrator {
       // killing the SDK session and losing the session ID.
       log.warn({ err }, "[route] failed to relay %s event to channel", event.type);
     }
+  }
+
+  private async routeTextChunk(
+    chatId: string,
+    text: string,
+    state: ChatState,
+    turnState: { staySilent: boolean; replyToMessageId: string | null },
+  ): Promise<void> {
+    state.textBuffer += text;
+
+    while (state.textBuffer.length > STREAM_EDIT_LIMIT) {
+      const splitAt = streamSplitPoint(state.textBuffer, STREAM_EDIT_LIMIT);
+      const segment = state.textBuffer.slice(0, splitAt);
+      state.textBuffer = state.textBuffer.slice(
+        state.textBuffer.charAt(splitAt) === "\n" ? splitAt + 1 : splitAt,
+      );
+      await this.publishTextSegment(chatId, segment, state, turnState, true);
+      state.textHandle = null;
+      state.textPublishedLength = 0;
+    }
+
+    if (
+      state.textBuffer.length > 0
+      && (
+        state.textHandle
+          ? state.textBuffer.length - state.textPublishedLength >= STREAM_EDIT_DELTA
+          : state.textBuffer.length >= STREAM_INITIAL_EDIT_MIN
+      )
+    ) {
+      await this.publishTextSegment(chatId, state.textBuffer, state, turnState, false);
+    }
+  }
+
+  private async publishTextSegment(
+    chatId: string,
+    text: string,
+    state: ChatState,
+    turnState: { replyToMessageId: string | null },
+    final: boolean,
+  ): Promise<void> {
+    const plainOpts = { format: "plain" as const };
+    if (state.textHandle) {
+      try {
+        await this.channel.editMessage(chatId, state.textHandle, text, final ? undefined : plainOpts);
+        state.textPublishedLength = text.length;
+        return;
+      } catch (err) {
+        if (isUnchangedMessageError(err)) {
+          state.textPublishedLength = text.length;
+          return;
+        }
+        if (isTransientChannelError(err)) return;
+        state.textHandle = null;
+        state.textPublishedLength = 0;
+      }
+    }
+
+    const handles = await this.channel.sendMessage(chatId, text, {
+      ...(final ? {} : plainOpts),
+      replyToMessageId: !state.textReplySent ? (turnState.replyToMessageId ?? undefined) : undefined,
+    });
+    state.textHandle = handles[0] ?? null;
+    state.textPublishedLength = text.length;
+    state.textReplySent = true;
+  }
+
+  private async flushTextSegment(
+    chatId: string,
+    state: ChatState,
+    turnState: { replyToMessageId: string | null },
+  ): Promise<void> {
+    if (!state.textBuffer) return;
+    if (!state.textHandle) {
+      try {
+        await this.publishTextSegment(chatId, state.textBuffer, state, turnState, true);
+      } catch { /* best effort */ }
+      return;
+    }
+    try {
+      await this.channel.editMessage(chatId, state.textHandle, state.textBuffer);
+      state.textPublishedLength = state.textBuffer.length;
+    } catch { /* best effort */ }
   }
 
   private buildMcpTools(
@@ -943,6 +1008,22 @@ function slashCommandPrompt(messages: InboundMessage[]): string | null {
   return text.startsWith("/") ? text : null;
 }
 
+function streamSplitPoint(text: string, limit: number): number {
+  if (text.length <= limit) return text.length;
+  const newlineAt = text.lastIndexOf("\n", limit);
+  return newlineAt > 0 ? newlineAt : limit;
+}
+
+function isTransientChannelError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("Too Many Requests") || message.includes("429:");
+}
+
+function isUnchangedMessageError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("message is not modified");
+}
+
 function buildPrompt(messages: InboundMessage[]): string {
   const ts = formatTimestamp();
   return messages.map((msg) => {
@@ -952,4 +1033,3 @@ function buildPrompt(messages: InboundMessage[]): string {
     return `${replyLine}[${ts}] ${msgIdPrefix}${sender}: ${msg.text}`;
   }).join("\n");
 }
-

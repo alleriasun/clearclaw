@@ -67,6 +67,18 @@ export class TelegramChannel extends EventEmitter implements Channel {
     );
   }
 
+  private async telegramCall<T>(call: () => Promise<T>, label: string): Promise<T> {
+    try {
+      return await call();
+    } catch (err) {
+      const retryAfter = telegramRetryAfterSeconds(err);
+      if (retryAfter === null) throw err;
+      log.warn("[channel] Telegram rate limited during %s, retrying after %ss", label, retryAfter);
+      await sleep((retryAfter + 1) * 1000);
+      return await call();
+    }
+  }
+
   async connect(): Promise<void> {
     this.bot.on("message:text", (ctx) => {
       const sender = this.extractSender(ctx);
@@ -181,19 +193,28 @@ export class TelegramChannel extends EventEmitter implements Channel {
         ? { reply_parameters: { message_id: Number(opts.replyToMessageId) } }
         : {};
       if (plain) {
-        const sent = await this.bot.api.sendMessage(numId, chunk, replyParams);
+        const sent = await this.telegramCall(
+          () => this.bot.api.sendMessage(numId, chunk, replyParams),
+          "sendMessage",
+        );
         handles.push(String(sent.message_id));
       } else {
         const rendered = telegramifyMarkdown(chunk, "escape");
         try {
-          const sent = await this.bot.api.sendMessage(numId, rendered, {
-            parse_mode: "MarkdownV2",
-            ...replyParams,
-          });
+          const sent = await this.telegramCall(
+            () => this.bot.api.sendMessage(numId, rendered, {
+              parse_mode: "MarkdownV2",
+              ...replyParams,
+            }),
+            "sendMessage",
+          );
           handles.push(String(sent.message_id));
         } catch (err) {
           log.warn("[channel] sendMessage failed with MarkdownV2, retrying as plain text");
-          const sent = await this.bot.api.sendMessage(numId, chunk, replyParams);
+          const sent = await this.telegramCall(
+            () => this.bot.api.sendMessage(numId, chunk, replyParams),
+            "sendMessage",
+          );
           handles.push(String(sent.message_id));
         }
       }
@@ -234,15 +255,21 @@ export class TelegramChannel extends EventEmitter implements Channel {
     const mdv2Text = telegramifyMarkdown(text, "escape");
     let sent;
     try {
-      sent = await this.bot.api.sendMessage(numId, mdv2Text, {
-        reply_markup: keyboard,
-        parse_mode: "MarkdownV2",
-      });
+      sent = await this.telegramCall(
+        () => this.bot.api.sendMessage(numId, mdv2Text, {
+          reply_markup: keyboard,
+          parse_mode: "MarkdownV2",
+        }),
+        "sendInteractive",
+      );
     } catch {
       log.warn("[channel] sendInteractive failed with MarkdownV2, retrying as plain text");
-      sent = await this.bot.api.sendMessage(numId, text, {
-        reply_markup: keyboard,
-      });
+      sent = await this.telegramCall(
+        () => this.bot.api.sendMessage(numId, text, {
+          reply_markup: keyboard,
+        }),
+        "sendInteractive",
+      );
     }
 
     const cleanupAll = () => {
@@ -273,17 +300,23 @@ export class TelegramChannel extends EventEmitter implements Channel {
       feedbackKeyboard.row();
     }
     try {
-      await this.bot.api.editMessageReplyMarkup(numId, sent.message_id, {
-        reply_markup: feedbackKeyboard,
-      });
+      await this.telegramCall(
+        () => this.bot.api.editMessageReplyMarkup(numId, sent.message_id, {
+          reply_markup: feedbackKeyboard,
+        }),
+        "editMessageReplyMarkup",
+      );
     } catch { /* best-effort */ }
 
     // If the button requests text, prompt for follow-up input
     if (pressed.requestText) {
-      await this.bot.api.sendMessage(numId, "Add your feedback:", {
-        reply_markup: { force_reply: true },
-        reply_parameters: { message_id: sent.message_id },
-      });
+      await this.telegramCall(
+        () => this.bot.api.sendMessage(numId, "Add your feedback:", {
+          reply_markup: { force_reply: true },
+          reply_parameters: { message_id: sent.message_id },
+        }),
+        "sendInteractiveFollowUp",
+      );
       const followUpText = await new Promise<string>((resolve) => {
         this.pendingTextResolvers.set(chatId, resolve);
       });
@@ -296,13 +329,22 @@ export class TelegramChannel extends EventEmitter implements Channel {
   async editMessage(chatId: string, handle: string, text: string, opts?: MessageOpts): Promise<void> {
     const numId = this.numericId(chatId);
     if (opts?.format === "plain") {
-      await this.bot.api.editMessageText(numId, Number(handle), text);
+      await this.telegramCall(
+        () => this.bot.api.editMessageText(numId, Number(handle), text),
+        "editMessage",
+      );
     } else {
       const rendered = telegramifyMarkdown(text, "escape");
       try {
-        await this.bot.api.editMessageText(numId, Number(handle), rendered, { parse_mode: "MarkdownV2" });
+        await this.telegramCall(
+          () => this.bot.api.editMessageText(numId, Number(handle), rendered, { parse_mode: "MarkdownV2" }),
+          "editMessage",
+        );
       } catch {
-        await this.bot.api.editMessageText(numId, Number(handle), text);
+        await this.telegramCall(
+          () => this.bot.api.editMessageText(numId, Number(handle), text),
+          "editMessage",
+        );
       }
     }
   }
@@ -314,9 +356,12 @@ export class TelegramChannel extends EventEmitter implements Channel {
 
   async pinMessage(chatId: string, handle: string): Promise<void> {
     const numId = this.numericId(chatId);
-    await this.bot.api.pinChatMessage(numId, Number(handle), {
-      disable_notification: true,
-    });
+    await this.telegramCall(
+      () => this.bot.api.pinChatMessage(numId, Number(handle), {
+        disable_notification: true,
+      }),
+      "pinMessage",
+    );
   }
 
   async unpinAllMessages(chatId: string): Promise<void> {
@@ -534,4 +579,19 @@ function splitMessage(text: string): string[] {
 
   if (remaining) chunks.push(remaining);
   return chunks;
+}
+
+function telegramRetryAfterSeconds(err: unknown): number | null {
+  const candidate = err as { parameters?: { retry_after?: unknown } };
+  const retryAfter = candidate?.parameters?.retry_after;
+  if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) return retryAfter;
+
+  const message = err instanceof Error ? err.message : String(err);
+  const match = message.match(/retry after (\d+)/i);
+  if (!match) return null;
+  return Number(match[1]);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
