@@ -46,7 +46,7 @@ export class AcpEngine implements Engine {
     const pendingTools = new Map<string, ToolCall>();
 
     try {
-      proc = spawnAgent(this.spawnConfig);
+      proc = spawnAgent(this.spawnConfig, opts);
 
       // Log stderr for debugging
       proc.stderr?.on("data", (chunk: Buffer) => {
@@ -186,9 +186,11 @@ export class AcpEngine implements Engine {
 
 // --- Helpers ---
 
-function spawnAgent(config: SpawnConfig): ChildProcess {
+function spawnAgent(config: SpawnConfig, opts: RunTurnOpts): ChildProcess {
+  const extraEnv = typeof config.env === "function" ? config.env(opts) : config.env;
   const proc = spawn(config.command, config.args, {
     stdio: ["pipe", "pipe", "pipe"],
+    env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
   });
 
   proc.on("error", (err) => {
