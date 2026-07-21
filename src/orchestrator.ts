@@ -292,16 +292,21 @@ export class Orchestrator {
         mcpServers: { clearclaw: mcpServer },
         signal: abort.signal,
         onPermissionRequest: (req) => this.handlePermission(req, chatId),
+        model: ws?.model,
       })) {
+        // Persist session (+ resolved model) as soon as the engine reports it —
+        // so cancelling mid-turn doesn't lose it.
+        if (event.type === "session") {
+          this.persistSessionId(chatId, task, ws, event.sessionId, event.model);
+          continue;
+        }
         // Handle done event inline — task vs workspace need different session storage
         if (event.type === "done") {
           log.info("%s done session=%s", logPrefix, event.sessionId);
-          if (task) {
-            const currentTask = this.tasks.get(chatId);
-            if (currentTask) currentTask.sessionId = event.sessionId;
-          } else {
-            this.config.setSession(ws!.name, event.sessionId);
-          }
+          // Model already persisted from the early "session" event above —
+          // writing it again here from this (possibly stale, if /model ran
+          // mid-turn) turn's resolved model would race and clobber it.
+          this.persistSessionId(chatId, task, ws, event.sessionId);
           if (event.stats) state.stats = event.stats;
           if (behavior === "relay" && state.toolCallHandle && event.stats) {
             const summary = formatToolCallSummary(event.stats.toolCalls);
@@ -332,6 +337,22 @@ export class Orchestrator {
       if (cancelled && !task) {
         await this.channel.sendMessage(chatId, "Turn cancelled.");
       }
+    }
+  }
+
+  /** Task turns keep the session ID in memory; workspace turns persist it (+ resolved model) to config. */
+  private persistSessionId(
+    chatId: string,
+    task: TaskState | undefined,
+    ws: Workspace | undefined,
+    sessionId: string,
+    model?: string,
+  ): void {
+    if (task) {
+      const currentTask = this.tasks.get(chatId);
+      if (currentTask) currentTask.sessionId = sessionId;
+    } else {
+      this.config.setSession(ws!.name, sessionId, model);
     }
   }
 
@@ -489,6 +510,31 @@ export class Orchestrator {
           await this.updateStatusMessage(msg.chatId, this.chat(msg.chatId));
           log.info("[cmd] workspace %s behavior → %s", ws.name, resp.value);
         }
+        return;
+      }
+
+      // /model [name] — show or set the per-workspace model override
+      const modelMatch = msg.text.match(/^\/model(?:\s+(\S+))?$/);
+      if (modelMatch) {
+        if (!ws) {
+          await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.");
+          return;
+        }
+        const requested = modelMatch[1];
+        if (!requested) {
+          await this.channel.sendMessage(
+            msg.chatId,
+            ws.model ? `Current model: ${ws.model}` : "No model override set — using the engine's default.",
+          );
+          return;
+        }
+        if (this.engineFor(ws).name !== "claude-code") {
+          await this.channel.sendMessage(msg.chatId, `Model override isn't supported for the "${this.engineFor(ws).name}" engine.`);
+          return;
+        }
+        this.config.setModel(ws.name, requested);
+        await this.channel.sendMessage(msg.chatId, `Model set to ${requested}.`);
+        log.info("[cmd] workspace %s model → %s", ws.name, requested);
         return;
       }
 

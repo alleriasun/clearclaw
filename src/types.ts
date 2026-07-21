@@ -88,6 +88,7 @@ export interface RunTurnOpts {
   appendSystemPrompt?: string;
   mcpServers?: Record<string, McpServerConfig>;
   signal?: AbortSignal;
+  model?: string; // per-workspace model override; omitted = engine's own default
 }
 
 interface ToolCallBase {
@@ -144,6 +145,9 @@ export type EngineEvent =
   | { type: "tool_use"; tool: ToolCall }
   | { type: "tool_result"; toolName: string; output: string }
   | { type: "rate_limit"; status: string; resetsAt?: number }
+  // Fires as soon as the engine reports a session ID (before the turn finishes),
+  // so a cancelled turn still gets its session (and resolved model) persisted.
+  | { type: "session"; sessionId: string; model?: string }
   | { type: "done"; sessionId: string; stats?: TurnStats }
   | { type: "error"; message: string };
 
@@ -156,6 +160,7 @@ export interface Workspace {
   current_session_id: string | null;
   behavior?: "assistant" | "relay";
   engine?: string;         // "claude-code" (default) | "kiro" | other ACP agent
+  model?: string;          // per-workspace model override; unset = engine's own default
 }
 
 // --- User identity (populated by channel from platform data) ---

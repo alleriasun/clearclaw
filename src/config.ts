@@ -306,11 +306,13 @@ export class Config {
     this.write(data);
   }
 
-  setSession(name: string, sessionId: string): void {
+  /** Persists the session ID and, when known, the model resolved for it — same write, so a fix for one is never a fix for the other. */
+  setSession(name: string, sessionId: string, model?: string): void {
     const data = this.read();
     const ws = data.workspaces.find((w) => w.name === name);
     if (ws) {
       ws.current_session_id = sessionId;
+      if (model) ws.model = model;
       this.write(data);
     }
   }
@@ -320,6 +322,15 @@ export class Config {
     const ws = data.workspaces.find((w) => w.name === name);
     if (ws) {
       ws.current_session_id = null;
+      this.write(data);
+    }
+  }
+
+  setModel(name: string, model: string): void {
+    const data = this.read();
+    const ws = data.workspaces.find((w) => w.name === name);
+    if (ws) {
+      ws.model = model;
       this.write(data);
     }
   }
