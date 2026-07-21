@@ -5,6 +5,7 @@ import {
   type SDKRateLimitEvent,
   type SDKResultMessage,
   type SDKLocalCommandOutputMessage,
+  type SDKSystemMessage,
   type SDKUserMessage,
   type PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -106,6 +107,7 @@ export class ClaudeCodeEngine implements Engine {
       appendSystemPrompt,
       mcpServers,
       signal,
+      model,
     } = opts;
 
     const abortController = new AbortController();
@@ -164,6 +166,7 @@ export class ClaudeCodeEngine implements Engine {
         ...sessionOpts,
         cwd,
         permissionMode,
+        ...(model ? { model } : {}),
         ...(this.executablePath ? { pathToClaudeCodeExecutable: this.executablePath } : {}),
         allowDangerouslySkipPermissions:
           permissionMode === "bypassPermissions" ? true : undefined,
@@ -193,6 +196,13 @@ export class ClaudeCodeEngine implements Engine {
         if (msg.type !== "assistant") {
           const sub = msg.type === "result" ? ` (${(msg as SDKResultMessage).subtype})` : "";
           log.info(`[sdk] ${msg.type}${sub}`);
+        }
+
+        // Session ID (and resolved model) are known from the very first message —
+        // persist right away so a cancelled turn doesn't lose them.
+        if (msg.type === "system" && (msg as SDKSystemMessage).subtype === "init") {
+          const init = msg as SDKSystemMessage;
+          yield { type: "session", sessionId: init.session_id, model: init.model };
         }
 
         // Extract text and tool_use from assistant messages

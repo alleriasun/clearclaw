@@ -101,6 +101,10 @@ export class AcpEngine implements Engine {
         acpSessionId = newSession.sessionId;
       }
 
+      // Session ID is known before the turn even starts — persist right away
+      // so a cancelled turn doesn't lose it (ACP has no model concept to report).
+      queue.push({ type: "session", sessionId: acpSessionId });
+
       // Now start accepting live events
       live = true;
 

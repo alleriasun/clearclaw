@@ -147,6 +147,7 @@ Claude Code stores sessions at `~/.claude/projects/{encoded-cwd-path}/sessions/`
 
 - **Terminal-mobile handoff:** A terminal session and a mobile session for the same CWD share the same session store. Start in the terminal, continue via Telegram, pick it back up in the terminal.
 - **Session commands:** `/new` clears the stored session ID. Default behavior is resume.
+- **Model:** `/model <name>` sets a per-workspace model override, persisted in workspace config; `/model` alone shows the current one. Unset means the engine picks its own default. The session ID and resolved model are captured from the engine's first message, not its last, so cancelling mid-turn doesn't lose either.
 - **Turn isolation:** One message at a time per workspace. Concurrent turns across different workspaces are allowed.
 
 ## User Identity
