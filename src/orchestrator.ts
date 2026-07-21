@@ -295,29 +295,18 @@ export class Orchestrator {
         model: ws?.model,
       })) {
         // Persist session (+ resolved model) as soon as the engine reports it —
-        // so cancelling mid-turn doesn't lose it. "done" persists again at the
-        // end, which is a harmless repeat of the same write.
+        // so cancelling mid-turn doesn't lose it.
         if (event.type === "session") {
-          if (task) {
-            const currentTask = this.tasks.get(chatId);
-            if (currentTask) currentTask.sessionId = event.sessionId;
-          } else {
-            this.config.setSession(ws!.name, event.sessionId, event.model);
-          }
+          this.persistSessionId(chatId, task, ws, event.sessionId, event.model);
           continue;
         }
         // Handle done event inline — task vs workspace need different session storage
         if (event.type === "done") {
           log.info("%s done session=%s", logPrefix, event.sessionId);
-          if (task) {
-            const currentTask = this.tasks.get(chatId);
-            if (currentTask) currentTask.sessionId = event.sessionId;
-          } else {
-            // Model already persisted from the early "session" event above —
-            // writing it again here from this (possibly stale, if /model ran
-            // mid-turn) turn's resolved model would race and clobber it.
-            this.config.setSession(ws!.name, event.sessionId);
-          }
+          // Model already persisted from the early "session" event above —
+          // writing it again here from this (possibly stale, if /model ran
+          // mid-turn) turn's resolved model would race and clobber it.
+          this.persistSessionId(chatId, task, ws, event.sessionId);
           if (event.stats) state.stats = event.stats;
           if (behavior === "relay" && state.toolCallHandle && event.stats) {
             const summary = formatToolCallSummary(event.stats.toolCalls);
@@ -348,6 +337,22 @@ export class Orchestrator {
       if (cancelled && !task) {
         await this.channel.sendMessage(chatId, "Turn cancelled.");
       }
+    }
+  }
+
+  /** Task turns keep the session ID in memory; workspace turns persist it (+ resolved model) to config. */
+  private persistSessionId(
+    chatId: string,
+    task: TaskState | undefined,
+    ws: Workspace | undefined,
+    sessionId: string,
+    model?: string,
+  ): void {
+    if (task) {
+      const currentTask = this.tasks.get(chatId);
+      if (currentTask) currentTask.sessionId = sessionId;
+    } else {
+      this.config.setSession(ws!.name, sessionId, model);
     }
   }
 
