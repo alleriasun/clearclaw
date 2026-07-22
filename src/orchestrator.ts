@@ -6,10 +6,11 @@ import { z } from "zod";
 import log from "./logger.js";
 import { saveFile } from "./files.js";
 import { assemblePrompt } from "./prompt.js";
+import { repoRootOf, createWorktree, removeWorktree } from "./worktree.js";
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
 import { Scheduler } from "./scheduler.js";
-import type { Config, ScheduleEntry } from "./config.js";
+import type { Config, PendingSpinOut, Project, ScheduleEntry } from "./config.js";
 import type {
   Channel,
   Engine,
@@ -154,6 +155,81 @@ export class Orchestrator {
     return true;
   }
 
+  /** Spawn a peer workspace into a project: worktree (if the project's repo is git) + a new chat + brief delivery. Best-effort rollback on failure. */
+  private async spawnPeer(
+    chatId: string,
+    fromName: string,
+    project: Project,
+    mainWs: Workspace,
+    createChat: (anchor: string, title: string) => Promise<string>,
+    args: { name: string; brief: string; cwd?: string; branch?: string },
+  ) {
+    if (this.config.workspaceByName(args.name)) {
+      return { content: [{ type: "text" as const, text: `Workspace "${args.name}" already exists. Pick another name.` }] };
+    }
+    let createdWorktree: string | undefined;
+    let createdChatId: string | undefined;
+    try {
+      let cwd = args.cwd;
+      if (!cwd || !fs.existsSync(cwd)) {
+        const repoRoot = repoRootOf(mainWs.cwd);
+        if (repoRoot) {
+          // Create the worktree at the explicit cwd if given (honoring .worktrees/<name>), else the default path.
+          cwd = createWorktree(repoRoot, args.name, cwd, args.branch);
+          createdWorktree = cwd;
+        } else {
+          cwd = cwd ?? mainWs.cwd;
+          fs.mkdirSync(cwd, { recursive: true });
+        }
+      }
+      createdChatId = await createChat(mainWs.chat_id, args.name);
+      this.config.upsertWorkspace({
+        name: args.name,
+        cwd,
+        chat_id: createdChatId,
+        current_session_id: null,
+        behavior: mainWs.behavior,
+        engine: mainWs.engine,
+        project: project.name,
+        description: args.brief,
+        spawnedFrom: fromName,
+      });
+      this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: fromName }, args.brief);
+      await this.channel.sendMessage(chatId, `🌱 Spawned "${args.name}" in ${project.name}.`);
+      log.info("[tool] spin_out: spawned %s (cwd %s) in project %s", args.name, cwd, project.name);
+      return { content: [{ type: "text" as const, text: `Spawned workspace "${args.name}" at ${cwd}; brief delivered.` }] };
+    } catch (err) {
+      // Best-effort rollback so a failed spawn leaves nothing behind.
+      if (createdChatId) {
+        const closeChat = this.channel.closeChat?.bind(this.channel);
+        if (closeChat) await closeChat(createdChatId).catch(() => { /* best effort */ });
+      }
+      if (createdWorktree) { try { removeWorktree(createdWorktree); } catch { /* best effort */ } }
+      const detail = err instanceof Error ? err.message : String(err);
+      return { content: [{ type: "text" as const, text: `Spawn failed: ${detail}. You can retry with a different name, or register the brief for a manual group instead.` }] };
+    }
+  }
+
+  /** Register a pending spin-out brief (1b fallback) for the user to claim by creating a new group. */
+  private async registerSpinOutBrief(
+    chatId: string,
+    fromName: string,
+    args: { name: string; brief: string; cwd?: string },
+  ) {
+    const entry: PendingSpinOut = {
+      id: crypto.randomUUID().slice(0, 8),
+      fromWorkspace: fromName,
+      name: args.name,
+      brief: args.brief,
+      suggestedCwd: args.cwd,
+      createdAt: Date.now(),
+    };
+    this.config.addSpinOut(entry);
+    await this.channel.sendMessage(chatId, `🌱 Spin-out "${args.name}" registered (${entry.id}). Create a new group, add me to it, and I'll offer to pick this up there.`);
+    log.info("[tool] spin_out: %s registered from %s", entry.id, fromName);
+    return { content: [{ type: "text" as const, text: `Spin-out ${entry.id} registered. The user creates a new group chat and adds the bot; onboarding there claims the brief.` }] };
+  }
+
   /** Effective behavior: tasks→assistant, workspace→explicit setting or home→assistant / project→relay. */
   private effectiveBehavior(ctx: TurnContext): "assistant" | "relay" {
     if (isTask(ctx)) return "assistant";
@@ -229,6 +305,13 @@ export class Orchestrator {
   ): Promise<void> {
     const task = isTask(ctx) ? ctx : undefined;
     const ws = isTask(ctx) ? undefined : ctx;
+
+    const turnCwd = task ? task.cwd : ws!.cwd;
+    if (!fs.existsSync(turnCwd)) {
+      log.warn("[turn] aborting: cwd does not exist: %s", turnCwd);
+      await this.channel.sendMessage(chatId, `⚠️ Can't start: this workspace's directory doesn't exist:\n${turnCwd}\nLikely an un-created worktree. Create it (e.g. \`git worktree add "${turnCwd}" -b <branch>\`) or fix the workspace cwd, then retry.`).catch(() => {});
+      return;
+    }
 
     state.busy = true;
     const abort = new AbortController();
@@ -541,15 +624,24 @@ export class Orchestrator {
       if (!ws) {
         if (this.config.isAuthorized(user.id)) {
           const chatType = msg.chatType === "dm" ? "DM" : "group";
+          const promptLines = [
+            "THIS IS A TASK SESSION — not a regular conversation.",
+            "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
+            `This is a ${chatType} chat. Home workspace path: ${this.config.homeWorkspacePath}`,
+            "Follow the Workspace Onboarding instructions in the system prompt.",
+          ];
+          const spinOuts = this.config.listSpinOuts();
+          if (spinOuts.length > 0) {
+            promptLines.push(
+              "",
+              "Pending spin-outs (if this chat was created for one, offer to claim it via workspace_create's spin_out_id):",
+              ...spinOuts.map((s) => `- ${s.id}: "${s.name}" from workspace ${s.fromWorkspace}${s.suggestedCwd ? `, suggested cwd ${s.suggestedCwd}` : ""} — ${s.brief.slice(0, 200)}`),
+            );
+          }
           const newTask: TaskState = {
             sessionId: null,
             cwd: this.config.homeWorkspacePath,
-            prompt: [
-              "THIS IS A TASK SESSION — not a regular conversation.",
-              "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
-              `This is a ${chatType} chat. Home workspace path: ${this.config.homeWorkspacePath}`,
-              "Follow the Workspace Onboarding instructions in the system prompt.",
-            ].join("\n"),
+            prompt: promptLines.join("\n"),
           };
           this.tasks.set(msg.chatId, newTask);
           log.info("[task] onboarding started for chat %s", msg.chatId);
@@ -782,13 +874,16 @@ export class Orchestrator {
     // Task tools — only available during task turns
     if (this.tasks.has(chatId)) {
       tools.push(
-        tool("workspace_create", "Create a new workspace and link it to the current chat", {
-          name: z.string().describe("Workspace name (unique, e.g. 'myproject')"),
+        tool("workspace_create", "Create a new workspace and its project, and link it to the current chat. Every workspace belongs to a project; this creates the project with the new workspace as its main.", {
+          name: z.string().describe("Workspace name (unique, e.g. 'myproject'); also used as the project name"),
           cwd: z.string().describe("Absolute path to the workspace directory"),
+          description: z.string().describe("What this project is about — a short shared-context summary"),
           behavior: z.enum(["assistant", "relay"]).optional()
             .describe("Workspace behavior mode"),
           engine: z.string().optional()
             .describe("Engine to use (e.g. 'claude-code', 'kiro'). Defaults to the server's configured default engine."),
+          spin_out_id: z.string().optional()
+            .describe("Pending spin-out id to claim: after creation, its brief is delivered to this workspace as a peer message from the originating workspace"),
         }, async (args) => {
           if (this.config.workspaceByName(args.name)) {
             throw new Error(`Workspace "${args.name}" already exists. Choose a different name.`);
@@ -804,8 +899,21 @@ export class Orchestrator {
             current_session_id: null,
             behavior: args.behavior,
             engine: args.engine,
+            project: args.name,
+            description: args.description,
           });
+          this.config.addProject({ name: args.name, description: args.description, main_workspace: args.name });
           log.info("[tool] workspace_create: %s → %s engine=%s (chat %s)", args.name, args.cwd, args.engine ?? "default", chatId);
+          if (args.spin_out_id) {
+            const pending = this.config.listSpinOuts().find((s) => s.id === args.spin_out_id);
+            if (!pending) {
+              return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created, but no pending spin-out "${args.spin_out_id}" was found.` }] };
+            }
+            this.config.removeSpinOut(pending.id);
+            this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: pending.fromWorkspace }, pending.brief);
+            log.info("[tool] workspace_create: claimed spin-out %s from %s", pending.id, pending.fromWorkspace);
+            return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created at ${args.cwd}, linked to this chat. Spin-out brief from ${pending.fromWorkspace} will arrive after task_complete — call it now.` }] };
+          }
           return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created at ${args.cwd}, linked to this chat.` }] };
         }),
         tool("task_complete", "Signal that the current task is complete", {
@@ -870,6 +978,7 @@ export class Orchestrator {
       const self = this.config.workspaceByChat(chatId);
       const peers = this.config.listWorkspaces().filter((w) => w.name !== self?.name);
       const peerList = peers.length ? peers.map((w) => `"${w.name}"`).join(", ") : "(none)";
+      const projectNames = this.config.listProjects().map((p) => `"${p.name}"`).join(", ") || "(none)";
       tools.push(
         tool(
           "message_peer",
@@ -896,6 +1005,142 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: `Delivered to ${target.name}.` }] };
           },
         ),
+        tool(
+          "spin_out",
+          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. If the target project's main chat is a forum, the user is offered one-tap spawning (a new topic + git worktree); otherwise it registers a pending brief the user claims by creating a group. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
+          {
+            name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
+            brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
+            cwd: z.string().optional().describe("Working directory for the peer. If it doesn't exist yet, a git worktree is created there (default: <project repo>/.worktrees/<name>); pass an existing dir to use it as-is."),
+            branch: z.string().optional().describe("Git branch for the peer's worktree, conventional (e.g. 'feat/x', 'fix/y', 'chore/z') per the work. Defaults to 'feat/<name>'."),
+            into: z.string().optional().describe("Target project name to spawn into; defaults to your own project"),
+          },
+          async (args) => {
+            const fromName = self?.name ?? "unknown";
+            const targetName = args.into ?? self?.project;
+            const project = targetName ? this.config.projectByName(targetName) : undefined;
+            const mainWs = project ? this.config.workspaceByName(project.main_workspace) : undefined;
+            const createChat = this.channel.createChat?.bind(this.channel);
+
+            if (project && mainWs && createChat) {
+              const resp = await this.channel.sendInteractive(
+                chatId,
+                `🌱 Spin out "${args.name}" into ${project.name}?\n\n${args.brief.slice(0, 300)}`,
+                [[
+                  { label: `Spawn in ${project.name}`, value: "spawn" },
+                  { label: "Manual group", value: "manual" },
+                  { label: "Cancel", value: "cancel" },
+                ]],
+              );
+              if (resp.value === "cancel") {
+                return { content: [{ type: "text" as const, text: "Spin-out cancelled by the user." }] };
+              }
+              if (resp.value === "spawn") {
+                return this.spawnPeer(chatId, fromName, project, mainWs, createChat, args);
+              }
+              // "manual" falls through to the pending-brief path
+            }
+            return this.registerSpinOutBrief(chatId, fromName, args);
+          },
+        ),
+        tool(
+          "spin_out_cancel",
+          "Cancel a pending spin-out that has not been claimed yet.",
+          { id: z.string().describe("Pending spin-out id") },
+          async (args) => {
+            const removed = this.config.removeSpinOut(args.id);
+            return { content: [{ type: "text" as const, text: removed ? `Spin-out ${args.id} cancelled.` : `No pending spin-out "${args.id}".` }] };
+          },
+        ),
+        tool("workspace_archive", "Archive a workspace: unbind it from its chat, and if it was spawned via spin_out, close its chat and remove its git worktree. The directory contents and git branch otherwise survive. Cannot archive 'default'.", {
+          name: z.string().describe("Workspace to archive"),
+        }, async (args) => {
+          if (args.name === "default") {
+            return { content: [{ type: "text" as const, text: "Cannot archive the home workspace." }] };
+          }
+          const target = this.config.workspaceByName(args.name);
+          if (!target) {
+            return { content: [{ type: "text" as const, text: `No workspace named "${args.name}".` }] };
+          }
+          if (target.project) {
+            const proj = this.config.projectByName(target.project);
+            if (proj && proj.main_workspace === args.name) {
+              const peers = this.config.listWorkspaces().filter((w) => w.project === proj.name && w.name !== args.name);
+              if (peers.length > 0) {
+                return { content: [{ type: "text" as const, text: `Cannot archive "${args.name}": it's the main of project "${proj.name}", which still has peers (${peers.map((p) => `"${p.name}"`).join(", ")}). Archive those first, or reassign the main via project_update.` }] };
+              }
+            }
+          }
+          const resp = await this.channel.sendInteractive(
+            chatId,
+            `Archive workspace "${args.name}" (${target.cwd})?`,
+            [[{ label: "Archive", value: "yes" }, { label: "Cancel", value: "no" }]],
+          );
+          if (resp.value !== "yes") {
+            return { content: [{ type: "text" as const, text: "Archive cancelled by the user." }] };
+          }
+          this.config.removeWorkspace(args.name);
+          if (target.project) {
+            const proj = this.config.projectByName(target.project);
+            if (proj && proj.main_workspace === args.name) this.config.removeProject(proj.name);
+          }
+          if (target.spawnedFrom) {
+            const closeChat = this.channel.closeChat?.bind(this.channel);
+            if (closeChat) {
+              await closeChat(target.chat_id).catch((err) =>
+                log.warn("[tool] workspace_archive: failed to close chat: %s", err instanceof Error ? err.message : String(err)));
+            }
+            if (target.cwd.includes(`${path.sep}.worktrees${path.sep}`)) {
+              try { removeWorktree(target.cwd); } catch (err) {
+                log.warn("[tool] workspace_archive: worktree removal failed, leaving directory: %s", err instanceof Error ? err.message : String(err));
+              }
+            }
+          }
+          log.info("[tool] workspace_archive: %s", args.name);
+          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" archived.` }] };
+        }),
+        tool("project_update", "Update a project's shared context: its description, or reassign its main workspace.", {
+          name: z.string().describe("Project name to update"),
+          description: z.string().optional().describe("New description (what the project is about)"),
+          main_workspace: z.string().optional().describe("Reassign the project's main workspace"),
+        }, async (args) => {
+          const proj = this.config.projectByName(args.name);
+          if (!proj) {
+            return { content: [{ type: "text" as const, text: `No project named "${args.name}".` }] };
+          }
+          if (args.main_workspace && !this.config.workspaceByName(args.main_workspace)) {
+            return { content: [{ type: "text" as const, text: `No workspace named "${args.main_workspace}".` }] };
+          }
+          this.config.addProject({
+            name: proj.name,
+            description: args.description ?? proj.description,
+            main_workspace: args.main_workspace ?? proj.main_workspace,
+          });
+          log.info("[tool] project_update: %s", args.name);
+          return { content: [{ type: "text" as const, text: `Project "${args.name}" updated.` }] };
+        }),
+        tool("workspace_update", "Update a workspace: what it's working on (its description), or its behavior/engine.", {
+          name: z.string().describe("Workspace to update"),
+          description: z.string().optional().describe("What this workspace is currently working on"),
+          behavior: z.enum(["assistant", "relay"]).optional().describe("Workspace behavior mode"),
+          engine: z.string().optional().describe("Engine (e.g. 'claude-code', 'kiro')"),
+        }, async (args) => {
+          const ws = this.config.workspaceByName(args.name);
+          if (!ws) {
+            return { content: [{ type: "text" as const, text: `No workspace named "${args.name}".` }] };
+          }
+          if (args.engine && !this.engines.has(args.engine)) {
+            return { content: [{ type: "text" as const, text: `Unknown engine "${args.engine}". Available: ${[...this.engines.keys()].join(", ")}` }] };
+          }
+          this.config.upsertWorkspace({
+            ...ws,
+            description: args.description ?? ws.description,
+            behavior: args.behavior ?? ws.behavior,
+            engine: args.engine ?? ws.engine,
+          });
+          log.info("[tool] workspace_update: %s", args.name);
+          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" updated.` }] };
+        }),
       );
     }
 
