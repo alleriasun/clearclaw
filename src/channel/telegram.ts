@@ -194,7 +194,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
         : {};
       if (plain) {
         const sent = await this.telegramCall(
-          () => this.bot.api.sendMessage(numId, chunk, replyParams),
+          () => this.bot.api.sendMessage(numId, chunk, { ...this.threadOpts(chatId), ...replyParams }),
           "sendMessage",
         );
         handles.push(String(sent.message_id));
@@ -203,6 +203,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
         try {
           const sent = await this.telegramCall(
             () => this.bot.api.sendMessage(numId, rendered, {
+              ...this.threadOpts(chatId),
               parse_mode: "MarkdownV2",
               ...replyParams,
             }),
@@ -212,7 +213,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
         } catch (err) {
           log.warn("[channel] sendMessage failed with MarkdownV2, retrying as plain text");
           const sent = await this.telegramCall(
-            () => this.bot.api.sendMessage(numId, chunk, replyParams),
+            () => this.bot.api.sendMessage(numId, chunk, { ...this.threadOpts(chatId), ...replyParams }),
             "sendMessage",
           );
           handles.push(String(sent.message_id));
@@ -257,6 +258,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
     try {
       sent = await this.telegramCall(
         () => this.bot.api.sendMessage(numId, mdv2Text, {
+          ...this.threadOpts(chatId),
           reply_markup: keyboard,
           parse_mode: "MarkdownV2",
         }),
@@ -266,6 +268,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
       log.warn("[channel] sendInteractive failed with MarkdownV2, retrying as plain text");
       sent = await this.telegramCall(
         () => this.bot.api.sendMessage(numId, text, {
+          ...this.threadOpts(chatId),
           reply_markup: keyboard,
         }),
         "sendInteractive",
@@ -312,6 +315,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
     if (pressed.requestText) {
       await this.telegramCall(
         () => this.bot.api.sendMessage(numId, "Add your feedback:", {
+          ...this.threadOpts(chatId),
           reply_markup: { force_reply: true },
           reply_parameters: { message_id: sent.message_id },
         }),
@@ -386,8 +390,12 @@ export class TelegramChannel extends EventEmitter implements Channel {
         }
       }
     }
-    // No existing handle, or edit failed — create new pinned message
-    try { await this.unpinAllMessages(chatId); } catch { /* not admin */ }
+    // No existing handle, or edit failed — (re)create the pinned status. Unpin only the previous
+    // status message (stays topic-scoped, since the topic travels with the message id); a chat-wide
+    // unpinAll would clobber every other forum topic's pinned status, so peers stop showing a pin.
+    if (existing) {
+      try { await this.bot.api.unpinChatMessage(this.numericId(chatId), Number(existing)); } catch { /* already gone / not admin */ }
+    }
     const handles = await this.sendMessage(chatId, text);
     const handle = handles[0];
     this.statusHandles.set(chatId, handle);
@@ -408,10 +416,10 @@ export class TelegramChannel extends EventEmitter implements Channel {
       const numId = this.numericId(chatId);
       // Send immediately, then repeat every 4s
       await this.bot.api
-        .sendChatAction(numId, "typing")
+        .sendChatAction(numId, "typing", this.threadOpts(chatId))
         .catch(() => {});
       const interval = setInterval(() => {
-        this.bot.api.sendChatAction(numId, "typing").catch(() => {});
+        this.bot.api.sendChatAction(numId, "typing", this.threadOpts(chatId)).catch(() => {});
       }, 4000);
       this.typingIntervals.set(chatId, interval);
     } else {
@@ -443,8 +451,11 @@ export class TelegramChannel extends EventEmitter implements Channel {
       }
       return null;
     }
+    const topicSuffix = ctx.message?.is_topic_message && ctx.message.message_thread_id
+      ? `:${ctx.message.message_thread_id}`
+      : "";
     return {
-      chatId: `tg:${ctx.chat.id}`,
+      chatId: `tg:${ctx.chat.id}${topicSuffix}`,
       chatType: ctx.chat.type === "private" ? "dm" : "group",
       origin: { kind: "user", user },
     };
@@ -517,13 +528,13 @@ export class TelegramChannel extends EventEmitter implements Channel {
     const caption = opts?.caption;
 
     if (mimeType.startsWith("image/")) {
-      await this.bot.api.sendPhoto(id, file, { caption });
+      await this.bot.api.sendPhoto(id, file, { caption, ...this.threadOpts(chatId) });
     } else if (mimeType.startsWith("video/")) {
-      await this.bot.api.sendVideo(id, file, { caption });
+      await this.bot.api.sendVideo(id, file, { caption, ...this.threadOpts(chatId) });
     } else if (mimeType.startsWith("audio/")) {
-      await this.bot.api.sendAudio(id, file, { caption });
+      await this.bot.api.sendAudio(id, file, { caption, ...this.threadOpts(chatId) });
     } else {
-      await this.bot.api.sendDocument(id, file, { caption });
+      await this.bot.api.sendDocument(id, file, { caption, ...this.threadOpts(chatId) });
     }
   }
 
@@ -540,6 +551,17 @@ export class TelegramChannel extends EventEmitter implements Channel {
     }
   }
 
+  async createChat(anchor: string, title: string): Promise<string> {
+    const topic = await this.bot.api.createForumTopic(this.numericId(anchor), title);
+    return `${anchor}:${topic.message_thread_id}`;
+  }
+
+  async closeChat(chatId: string): Promise<void> {
+    const thread = chatId.split(":")[2];
+    if (!thread) return;
+    await this.bot.api.closeForumTopic(this.numericId(chatId), Number(thread));
+  }
+
   /** Download a Telegram file by file_id, returning the raw buffer. */
   private async downloadFile(fileId: string): Promise<Buffer> {
     const file = await this.bot.api.getFile(fileId);
@@ -550,8 +572,15 @@ export class TelegramChannel extends EventEmitter implements Channel {
     return Buffer.from(await resp.arrayBuffer());
   }
 
+  /** "tg:123" → 123; "tg:123:45" (forum topic) → 123 */
   private numericId(chatId: string): number {
-    return Number(chatId.replace(/^tg:/, ""));
+    return Number(chatId.split(":")[1]);
+  }
+
+  /** Topic part of a composite chat id, as spreadable send options. */
+  private threadOpts(chatId: string): { message_thread_id?: number } {
+    const thread = chatId.split(":")[2];
+    return thread ? { message_thread_id: Number(thread) } : {};
   }
 }
 
