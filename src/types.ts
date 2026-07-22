@@ -165,6 +165,9 @@ export interface Workspace {
   behavior?: "assistant" | "relay";
   engine?: string;         // "claude-code" (default) | "kiro" | other ACP agent
   model?: string;          // per-workspace model override; unset = engine's own default
+  project?: string;        // the project this workspace belongs to, if any (set at onboarding; absent for legacy/non-forum workspaces)
+  description?: string;    // what this workspace is currently working on (its focus / peer brief)
+  spawnedFrom?: string;    // origin workspace if spawned via spin_out (a peer); absent = the project's main
 }
 
 // --- User identity (populated by channel from platform data) ---

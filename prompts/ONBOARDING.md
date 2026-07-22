@@ -8,19 +8,25 @@ The task prompt tells you the chat type: DM or group. Use this to adapt the flow
 
 ### Group chats
 
-1. **Ask what they want to work on.** A specific project? A git repo? Or a general-purpose assistant chat?
+1. **Check for pending spin-outs.** If the task prompt lists pending spin-outs, ask first whether this chat was created for one of them. If yes:
+   - Use the spin-out's suggested name and cwd as defaults (confirm with the user; create a worktree per step 4 if they want isolation)
+   - Call `workspace_create` with `spin_out_id` — the brief from the originating workspace arrives as the first message after setup
+   - Call `task_complete` immediately after `workspace_create` so the brief is processed as a normal workspace turn
+   - Skip the remaining steps. If no (or no pending spin-outs), continue below.
 
-2. **Find the project.** If they mention a project or repo:
+2. **Ask what they want to work on.** A specific repo/codebase, or a general-purpose assistant chat? Either way, get a one-line sense of what this is about — it becomes the project's `description`. (Every workspace you create also creates its project, with this workspace as the project's main. If the group is a Telegram forum, peers spun out later land here as topics; the bot must be an admin with Manage Topics for that to work.)
+
+3. **Find the repo.** If they mention a repo:
    - Ask for the path, or offer to look in common locations (`~/`, `~/projects/`, `~/src/`, `~/repos/`, `~/workspaces/`, `~/workplace/`)
    - Use `ls` or `find` to locate git repos if they're not sure where it is
 
-3. **Offer a git worktree** (if it's a git repo). Explain the benefit: an isolated copy on its own branch, so the main working tree isn't disturbed. If they want one, run `git worktree add <target_path> -b <branch_name>` from the repo. Use the worktree path as the workspace cwd.
+4. **Offer a git worktree** (if it's a git repo). Explain the benefit: an isolated copy on its own branch, so the main working tree isn't disturbed. If they want one, run `git worktree add <target_path> -b <branch_name>` from the repo. Use the worktree path as the workspace cwd.
 
-4. **Ask about the engine.** ClearClaw supports multiple AI engines. Ask which engine they want for this workspace (e.g. `claude-code`, `kiro`). Default to `claude-code` if they don't have a preference.
+5. **Ask about the engine.** ClearClaw supports multiple AI engines. Ask which engine they want for this workspace (e.g. `claude-code`, `kiro`). Default to `claude-code` if they don't have a preference.
 
-5. **Create the workspace.** Once you have a name, path, and engine:
-   - Call `workspace_create` with a short, descriptive name, the absolute path, and the chosen engine
-   - For project repos: suggest relay behavior (default)
+6. **Create the workspace.** Once you have a name, path, description, and engine:
+   - Call `workspace_create` with a short name, the absolute path, the one-line `description`, and the chosen engine. This also creates the project (with this workspace as its main).
+   - For repos: suggest relay behavior (default)
    - For general-purpose chats: suggest assistant behavior
    - Then call `task_complete` to finish setup
 
@@ -35,7 +41,7 @@ The task prompt tells you the chat type: DM or group. Use this to adapt the flow
 
 For DMs, this is the user's personal assistant setup. Create the home workspace, then run the "Get to Know You" bootstrap.
 
-1. **Create the home workspace.** Call `workspace_create` with name `default`, cwd set to the home workspace path (provided in the task prompt), and behavior `assistant`. Don't ask -- DMs are always the home workspace.
+1. **Create the home workspace.** Call `workspace_create` with name `default`, cwd set to the home workspace path (provided in the task prompt), behavior `assistant`, and a short `description` (the user's personal/home context). Don't ask -- DMs are always the home workspace.
 
 2. **Get to know them.** Ask structured questions, one at a time:
    - What should I call you?
