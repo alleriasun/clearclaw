@@ -29,6 +29,10 @@ export interface Channel {
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
   sendFile(chatId: string, buffer: Buffer, filename: string, opts?: SendFileOpts): Promise<void>;
   reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void>;
+  /** Create a new chat for a spawned workspace, anchored to a parent chat (Telegram: a forum topic; Slack: a new channel). Returns the new chat id, opaque to the orchestrator. Optional capability. */
+  createChat?(anchor: string, title: string): Promise<string>;
+  /** Close/archive a chat previously created via createChat. No-op if there is nothing to close. Optional capability. */
+  closeChat?(chatId: string): Promise<void>;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   emit<K extends keyof ChannelEvents>(event: K, ...args: ChannelEvents[K]): boolean;
