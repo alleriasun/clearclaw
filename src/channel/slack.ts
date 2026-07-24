@@ -2,7 +2,6 @@ import { EventEmitter } from "node:events";
 import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
 import type { MessageElement } from "@slack/web-api/dist/types/response/ConversationsHistoryResponse.js";
-import { slackifyMarkdown } from "slackify-markdown";
 import log from "../logger.js";
 import type { Attachment, Channel, ChatType, Button, ButtonResponse, ReplyContext, SendFileOpts, MessageOpts, UserInfo } from "../types.js";
 
@@ -202,7 +201,7 @@ export class SlackChannel extends EventEmitter implements Channel {
         const r = await this.app.client.chat.postMessage({ channel, text: chunk, ...extra });
         return r.ts as string | undefined;
       }
-      const blocks = mrkdwnBlocks(chunk);
+      const blocks = markdownBlock(chunk);
       try {
         const r = await this.app.client.chat.postMessage({ channel, text: chunk, blocks, ...extra });
         return r.ts as string | undefined;
@@ -228,7 +227,7 @@ export class SlackChannel extends EventEmitter implements Channel {
           if (ts) handles.push(ts);
         }
       } else {
-        const blocks = mrkdwnBlocks(firstChunk);
+        const blocks = markdownBlock(firstChunk);
         try {
           await this.app.client.chat.update({
             channel, ts: typingTs, text: firstChunk, blocks,
@@ -266,7 +265,7 @@ export class SlackChannel extends EventEmitter implements Channel {
     }
 
     const blocks: KnownBlock[] = [
-      mrkdwnBlocks(splitMessage(text)[0])[0],
+      markdownBlock(splitMessage(text)[0])[0],
       {
         type: "actions",
         elements: actionEntries.map(({ btn, actionId }) => ({
@@ -375,7 +374,7 @@ export class SlackChannel extends EventEmitter implements Channel {
         channel: this.slackId(chatId),
         ts: handle,
         text: chunk,
-        blocks: mrkdwnBlocks(chunk),
+        blocks: markdownBlock(chunk),
       });
     }
   }
@@ -520,20 +519,15 @@ export class SlackChannel extends EventEmitter implements Channel {
   }
 }
 
-function mrkdwnBlocks(text: string): KnownBlock[] {
-  let rendered: string;
-  try {
-    rendered = slackifyMarkdown(text);
-  } catch (err) {
-    log.warn({ err }, "[channel] slackifyMarkdown failed, sending raw text");
-    rendered = text;
-  }
-  return [{ type: "section", text: { type: "mrkdwn", text: rendered } }];
+// Slack's markdown block renders standard markdown (headers, lists, tables) natively:
+// Slack owns the translation, so we hand it the raw markdown with no pre-conversion.
+function markdownBlock(text: string): KnownBlock[] {
+  return [{ type: "markdown", text }];
 }
 
-// Block Kit section.text has a 3000 char limit — the tightest Slack constraint.
-// We split at this limit so each chunk fits both the text fallback and the block.
-const MAX_TEXT = 3000;
+// The markdown block caps at 12,000 chars. We split at this limit so each chunk
+// fits the block; the text fallback (notification preview) can safely be longer.
+const MAX_TEXT = 12000;
 
 function splitMessage(text: string): string[] {
   if (text.length <= MAX_TEXT) return [text];
