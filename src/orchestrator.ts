@@ -513,6 +513,32 @@ export class Orchestrator {
         return;
       }
 
+      // /engine — switch the workspace's engine. Handled natively (not via the
+      // workspace_update tool) so it still works when the current engine is broken.
+      if (msg.text === "/engine") {
+        if (!ws) {
+          await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.");
+          return;
+        }
+        const current = ws.engine ?? this.config.defaultEngine;
+        const names = [...this.engines.keys()];
+        const resp = await this.channel.sendInteractive(
+          msg.chatId,
+          `Current engine: ${current}`,
+          [names.map((n) => ({ label: n === current ? `✓ ${n}` : n, value: n }))],
+        );
+        if (resp.value && resp.value !== current) {
+          this.config.upsertWorkspace({ ...ws, engine: resp.value });
+          // Session IDs are engine-private — a Claude session ID means nothing to Kiro.
+          this.config.clearSession(ws.name);
+          state.stats = null;
+          await this.updateStatusMessage(msg.chatId, state);
+          log.info("[cmd] workspace %s engine → %s (session cleared)", ws.name, resp.value);
+          await this.channel.sendMessage(msg.chatId, `Engine set to ${resp.value}. Session cleared.`);
+        }
+        return;
+      }
+
       // /model [name] — show or set the per-workspace model override
       const modelMatch = msg.text.match(/^\/model(?:\s+(\S+))?$/);
       if (modelMatch) {
