@@ -1132,14 +1132,19 @@ export class Orchestrator {
           if (args.engine && !this.engines.has(args.engine)) {
             return { content: [{ type: "text" as const, text: `Unknown engine "${args.engine}". Available: ${[...this.engines.keys()].join(", ")}` }] };
           }
+          // Switching engines must reset the session: a stored session id belongs to the old
+          // engine and the new one can't resume it (codex can't load a claude session id).
+          const engineChanged = args.engine !== undefined && args.engine !== (ws.engine ?? this.config.defaultEngine);
           this.config.upsertWorkspace({
             ...ws,
             description: args.description ?? ws.description,
             behavior: args.behavior ?? ws.behavior,
             engine: args.engine ?? ws.engine,
+            current_session_id: engineChanged ? null : ws.current_session_id,
           });
-          log.info("[tool] workspace_update: %s", args.name);
-          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" updated.` }] };
+          log.info("[tool] workspace_update: %s%s", args.name, engineChanged ? ` (engine → ${args.engine}, session reset)` : "");
+          const resetNote = engineChanged ? ` Engine set to "${args.engine}"; session reset.` : "";
+          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" updated.${resetNote}` }] };
         }),
       );
     }
