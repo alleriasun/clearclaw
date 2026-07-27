@@ -15,10 +15,12 @@ export class SlackChannel extends EventEmitter implements Channel {
     "🙏": "pray", "💪": "muscle", "⚡": "zap", "🌟": "star2",
   };
 
-  private app: App;
+  private app!: App;
   private botToken: string;
+  private appToken: string;
   private botUserId: string | undefined;
   private isAuthorized: (userId: string) => boolean;
+  private authorizedUserIds: () => string[];
   private onUnauthorizedDM?: (chatId: string, user: UserInfo) => void;
   private pendingButtonCallbacks = new Map<string, (triggerId: string) => void>(); // actionId → resolve
   private pendingModalCallbacks = new Map<string, (text: string) => void>(); // modal callbackId → resolve
@@ -30,17 +32,20 @@ export class SlackChannel extends EventEmitter implements Channel {
     appToken: string,
     isAuthorized: (userId: string) => boolean,
     onUnauthorizedDM?: (chatId: string, user: UserInfo) => void,
+    authorizedUserIds: () => string[] = () => [],
   ) {
     super();
     this.botToken = botToken;
+    this.appToken = appToken;
     this.isAuthorized = isAuthorized;
+    this.authorizedUserIds = authorizedUserIds;
     this.onUnauthorizedDM = onUnauthorizedDM;
-    this.app = new App({
-      token: botToken, appToken, socketMode: true, logLevel: LogLevel.ERROR,
-    });
   }
 
   async connect(): Promise<void> {
+    this.app = new App({
+      token: this.botToken, appToken: this.appToken, socketMode: true, logLevel: LogLevel.ERROR,
+    });
     this.app.event("message", async ({ event }) => {
       const subtype = (event as { subtype?: string }).subtype;
 
@@ -183,6 +188,52 @@ export class SlackChannel extends EventEmitter implements Channel {
     await this.app.stop();
   }
   ownsId(chatId: string): boolean { return chatId.startsWith("slack:"); }
+
+  async createChat(_anchor: string, title: string): Promise<string> {
+    const users = [...new Set(
+      this.authorizedUserIds()
+        .filter((id) => id.startsWith("slack:"))
+        .map((id) => id.slice("slack:".length))
+        .filter(Boolean),
+    )];
+    if (users.length === 0) {
+      throw new Error("Cannot create Slack peer: no authorized Slack users to invite");
+    }
+
+    const result = await this.app.client.conversations.create({
+      name: slackChannelName(title),
+      is_private: true,
+    });
+    const channel = result.channel?.id;
+    if (!channel) throw new Error("Slack created a peer channel without returning its ID");
+
+    try {
+      await this.app.client.conversations.invite({
+        channel,
+        users: users.join(","),
+      });
+    } catch (err) {
+      await this.app.client.conversations.archive({ channel }).catch((archiveErr) => {
+        log.warn({ err: archiveErr }, "[channel] failed to archive Slack peer after invite failure");
+      });
+      throw err;
+    }
+
+    return `slack:${channel}`;
+  }
+
+  async closeChat(chatId: string): Promise<void> {
+    try {
+      await this.app.client.conversations.archive({
+        channel: this.slackId(chatId),
+      });
+    } catch (err) {
+      const code = slackErrorCode(err);
+      if (code === "already_archived" || code === "channel_not_found") return;
+      throw err;
+    }
+  }
+
   async sendMessage(
     chatId: string,
     text: string,
@@ -528,6 +579,27 @@ function markdownBlock(text: string): KnownBlock[] {
 // The markdown block caps at 12,000 chars. We split at this limit so each chunk
 // fits the block; the text fallback (notification preview) can safely be longer.
 const MAX_TEXT = 12000;
+
+function slackChannelName(title: string): string {
+  const name = title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, 80)
+    .replace(/[-_]+$/g, "");
+  if (!name) throw new Error(`Cannot derive a valid Slack channel name from "${title}"`);
+  return name;
+}
+
+function slackErrorCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null || !("data" in err)) return undefined;
+  const data = (err as { data?: unknown }).data;
+  if (typeof data !== "object" || data === null || !("error" in data)) return undefined;
+  const code = (data as { error?: unknown }).error;
+  return typeof code === "string" ? code : undefined;
+}
 
 function splitMessage(text: string): string[] {
   if (text.length <= MAX_TEXT) return [text];

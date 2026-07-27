@@ -251,6 +251,14 @@ export class Config {
     return this.read().authorizedUsers;
   }
 
+  /** All authorized IDs, including environment-configured and pairing-approved users. */
+  listAuthorizedUserIds(): string[] {
+    return [...new Set([
+      ...this.envUserIds,
+      ...this.listUsers().map((user) => user.id),
+    ])];
+  }
+
   /** env var IDs (in-memory) + pairing-approved users (hot-reload from disk) */
   isAuthorized(userId: string): boolean {
     return this.envUserIds.has(userId) || this.hasUser(userId);
