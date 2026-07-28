@@ -168,6 +168,7 @@ export interface Workspace {
   project?: string;        // the project this workspace belongs to, if any (set at onboarding; absent for legacy/non-forum workspaces)
   description?: string;    // what this workspace is currently working on (its focus / peer brief)
   spawnedFrom?: string;    // origin workspace if spawned via spin_out (a peer); absent = the project's main
+  owns_worktree?: boolean; // true = ClearClaw-created; false = caller-owned; absent = no worktree or legacy ownership unknown
 }
 
 // --- User identity (populated by channel from platform data) ---

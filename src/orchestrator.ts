@@ -167,19 +167,26 @@ export class Orchestrator {
     if (this.config.workspaceByName(args.name)) {
       return { content: [{ type: "text" as const, text: `Workspace "${args.name}" already exists. Pick another name.` }] };
     }
-    let createdWorktree: string | undefined;
+    const hasExplicitCwd = args.cwd !== undefined;
+    if (hasExplicitCwd && (!fs.existsSync(args.cwd!) || !fs.statSync(args.cwd!).isDirectory())) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Spawn failed: explicit cwd "${args.cwd}" must be an existing directory. ClearClaw will not create it; prepare it with your own tooling, then retry.`,
+        }],
+      };
+    }
+    let cwd = args.cwd;
+    let ownsWorktree: boolean | undefined = hasExplicitCwd ? false : undefined;
     let createdChatId: string | undefined;
     try {
-      let cwd = args.cwd;
-      if (!cwd || !fs.existsSync(cwd)) {
+      if (!cwd) {
         const repoRoot = repoRootOf(mainWs.cwd);
         if (repoRoot) {
-          // Create the worktree at the explicit cwd if given (honoring .worktrees/<name>), else the default path.
-          cwd = createWorktree(repoRoot, args.name, cwd, args.branch);
-          createdWorktree = cwd;
+          cwd = createWorktree(repoRoot, args.name, undefined, args.branch);
+          ownsWorktree = true;
         } else {
-          cwd = cwd ?? mainWs.cwd;
-          fs.mkdirSync(cwd, { recursive: true });
+          cwd = mainWs.cwd;
         }
       }
       createdChatId = await createChat(mainWs.chat_id, args.name);
@@ -193,6 +200,7 @@ export class Orchestrator {
         project: project.name,
         description: args.brief,
         spawnedFrom: fromName,
+        owns_worktree: ownsWorktree,
       });
       this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: fromName }, args.brief);
       await this.channel.sendMessage(chatId, `🌱 Spawned "${args.name}" in ${project.name}.`);
@@ -204,7 +212,9 @@ export class Orchestrator {
         const closeChat = this.channel.closeChat?.bind(this.channel);
         if (closeChat) await closeChat(createdChatId).catch(() => { /* best effort */ });
       }
-      if (createdWorktree) { try { removeWorktree(createdWorktree); } catch { /* best effort */ } }
+      if (ownsWorktree && cwd) {
+        try { removeWorktree(cwd); } catch { /* best effort */ }
+      }
       const detail = err instanceof Error ? err.message : String(err);
       return { content: [{ type: "text" as const, text: `Spawn failed: ${detail}. You can retry with a different name, or register the brief for a manual group instead.` }] };
     }
@@ -215,6 +225,7 @@ export class Orchestrator {
     chatId: string,
     fromName: string,
     args: { name: string; brief: string; cwd?: string },
+    fallbackReason: string,
   ) {
     const entry: PendingSpinOut = {
       id: crypto.randomUUID().slice(0, 8),
@@ -225,9 +236,9 @@ export class Orchestrator {
       createdAt: Date.now(),
     };
     this.config.addSpinOut(entry);
-    await this.channel.sendMessage(chatId, `🌱 Spin-out "${args.name}" registered (${entry.id}). Create a new group, add me to it, and I'll offer to pick this up there.`);
-    log.info("[tool] spin_out: %s registered from %s", entry.id, fromName);
-    return { content: [{ type: "text" as const, text: `Spin-out ${entry.id} registered. The user creates a new group chat and adds the bot; onboarding there claims the brief.` }] };
+    log.info("[tool] spin_out: %s registered from %s; pending-brief fallback because %s", entry.id, fromName, fallbackReason);
+    await this.channel.sendMessage(chatId, `🌱 Spin-out "${args.name}" registered (${entry.id}) because ${fallbackReason}. Create a new group, add me to it, and I'll offer to pick this up there.`);
+    return { content: [{ type: "text" as const, text: `Spin-out ${entry.id} registered because ${fallbackReason}. The user creates a new group chat and adds the bot; onboarding there claims the brief.` }] };
   }
 
   /** Effective behavior: tasks→assistant, workspace→explicit setting or home→assistant / project→relay. */
@@ -1033,12 +1044,12 @@ export class Orchestrator {
         ),
         tool(
           "spin_out",
-          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. If the target project's main chat is a forum, the user is offered one-tap spawning (a new topic + git worktree); otherwise it registers a pending brief the user claims by creating a group. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
+          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. One-tap spawning is available when the target project resolves, its main workspace exists, and the channel supports createChat; otherwise this registers a pending brief the user claims by creating a group. Pass an existing cwd when external tooling prepared the worktree: the path must already exist, and ClearClaw will never create or remove it. Omit cwd to let ClearClaw create and own a standard git worktree for plain git repos. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
           {
             name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
             brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
-            cwd: z.string().optional().describe("Working directory for the peer. If it doesn't exist yet, a git worktree is created there (default: <project repo>/.worktrees/<name>); pass an existing dir to use it as-is."),
-            branch: z.string().optional().describe("Git branch for the peer's worktree, conventional (e.g. 'feat/x', 'fix/y', 'chore/z') per the work. Defaults to 'feat/<name>'."),
+            cwd: z.string().min(1).optional().describe("Existing working directory prepared by the caller. It must already exist; ClearClaw never creates or removes an explicitly provided path. Omit to let ClearClaw create and manage a standard git worktree when possible."),
+            branch: z.string().optional().describe("Git branch used only when ClearClaw creates the worktree (cwd omitted). Conventional name (e.g. 'feat/x', 'fix/y', 'chore/z'); defaults to 'feat/<name>'."),
             into: z.string().optional().describe("Target project name to spawn into; defaults to your own project"),
           },
           async (args) => {
@@ -1047,6 +1058,7 @@ export class Orchestrator {
             const project = targetName ? this.config.projectByName(targetName) : undefined;
             const mainWs = project ? this.config.workspaceByName(project.main_workspace) : undefined;
             const createChat = this.channel.createChat?.bind(this.channel);
+            let fallbackReason: string;
 
             if (project && mainWs && createChat) {
               const resp = await this.channel.sendInteractive(
@@ -1064,9 +1076,19 @@ export class Orchestrator {
               if (resp.value === "spawn") {
                 return this.spawnPeer(chatId, fromName, project, mainWs, createChat, args);
               }
-              // "manual" falls through to the pending-brief path
+              fallbackReason = resp.value === "manual"
+                ? "the user selected a manual group"
+                : "one-tap spawning was not selected";
+            } else if (!project) {
+              fallbackReason = args.into
+                ? `no project "${args.into}" resolved for workspace "${fromName}"`
+                : `no project resolved for workspace "${fromName}"`;
+            } else if (!mainWs) {
+              fallbackReason = `project "${project.name}" has no main workspace "${project.main_workspace}"`;
+            } else {
+              fallbackReason = `channel "${this.channel.name}" lacks createChat capability`;
             }
-            return this.registerSpinOutBrief(chatId, fromName, args);
+            return this.registerSpinOutBrief(chatId, fromName, args, fallbackReason);
           },
         ),
         tool(
@@ -1078,7 +1100,7 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: removed ? `Spin-out ${args.id} cancelled.` : `No pending spin-out "${args.id}".` }] };
           },
         ),
-        tool("workspace_archive", "Archive a workspace: unbind it from its chat, and if it was spawned via spin_out, close its chat and remove its git worktree. The directory contents and git branch otherwise survive. Cannot archive 'default'.", {
+        tool("workspace_archive", "Archive a workspace: unbind it from its chat and close a spawned chat. Removes a git worktree only when ClearClaw created and owns it; externally managed worktrees stay in place. Cannot archive 'default'.", {
           name: z.string().describe("Workspace to archive"),
         }, async (args) => {
           if (args.name === "default") {
@@ -1110,20 +1132,25 @@ export class Orchestrator {
             const proj = this.config.projectByName(target.project);
             if (proj && proj.main_workspace === args.name) this.config.removeProject(proj.name);
           }
+          let archiveNote = "";
           if (target.spawnedFrom) {
             const closeChat = this.channel.closeChat?.bind(this.channel);
             if (closeChat) {
               await closeChat(target.chat_id).catch((err) =>
                 log.warn("[tool] workspace_archive: failed to close chat: %s", err instanceof Error ? err.message : String(err)));
             }
-            if (target.cwd.includes(`${path.sep}.worktrees${path.sep}`)) {
+            if (target.owns_worktree === true) {
               try { removeWorktree(target.cwd); } catch (err) {
                 log.warn("[tool] workspace_archive: worktree removal failed, leaving directory: %s", err instanceof Error ? err.message : String(err));
               }
+            } else if (target.owns_worktree === false) {
+              archiveNote = " External worktree left in place; clean up with your own tooling.";
+            } else {
+              archiveNote = " Workspace directory left in place because ClearClaw does not own it.";
             }
           }
           log.info("[tool] workspace_archive: %s", args.name);
-          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" archived.` }] };
+          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" archived.${archiveNote}` }] };
         }),
         tool("project_update", "Update a project's shared context: its description, or reassign its main workspace.", {
           name: z.string().describe("Project name to update"),
