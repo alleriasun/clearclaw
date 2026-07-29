@@ -46,7 +46,10 @@ Optional: `PERMISSION_MODE` (`default` | `acceptEdits` | `bypassPermissions` | `
 For Slack, set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and Slack-prefixed
 `ALLOWED_USER_IDS` (for example, `slack:U12345`). Private peer-channel spawning
 also requires the `groups:write` bot-token scope; reinstall the app after adding
-the scope.
+the scope. Shared project sidebar sections require a paid Slack plan, the
+`usergroups:read` and `usergroups:write` bot-token scopes, and workspace User
+Group permissions set to allow everyone to manage them. Reinstall the app after
+changing scopes.
 
 ## Architecture
 

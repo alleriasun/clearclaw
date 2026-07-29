@@ -33,6 +33,8 @@ Phase 1b shipped `spin_out`: an agent proposes splitting a strand into a new wor
 
 **Each platform spawns its best full-fledged surface; no forced threads.** A Telegram topic is a full-fledged conversation from a UX view, so its honest analog on Slack/Discord is a new channel, not a thread. `createChat(anchor, title)` / `closeChat(chatId)` return/accept an opaque chat_id; each channel picks the mechanism. (Rejected: mapping topic to thread everywhere, which would cram Slack/Discord users into one-thread-per-session.)
 
+**Project sections are a channel capability, not a Project field.** Slack mirrors each Project into one shared sidebar section backed by a User Group. The display name is the Project name, the mention handle is `cc-<project-slug>` with a stable hash fallback on collision, members are authorized Slack users, and default channels are the Project main plus every live peer. ClearClaw marks groups it owns and never updates or disables an unmarked group. The orchestrator exposes only optional section sync/remove capabilities; Slack-specific User Group details stay in the Slack adapter. Sync is best-effort and reconciles at startup, spawn, workspace creation, and archive, so sidebar failures never roll back workspace lifecycle.
+
 **Spawn target is the project's main chat; no override.** `spin_out(name, brief, cwd?, into?)` resolves the target project as `into ?? self.project`, then spawns into `target.main_workspace`'s chat. One-tap spawning requires that project to resolve, its main workspace to exist, and the active channel to implement `createChat`; otherwise it falls back to the 1b pending-brief flow and reports why. There is no separate spawn-surface field and no default catch-all.
 
 **Archive by marker and ownership.** `workspace_archive` identifies a peer by `spawnedFrom`, delegates chat teardown to `closeChat`, and removes its worktree only when `owns_worktree` is true. Caller-owned and legacy-unknown directories stay in place. Archiving a main also drops its project — but is **refused while that project still has live peers** (archive those first, or reassign the main via `project_update`), so peers are never left pointing at a dropped project. This avoids the orchestrator sniffing chat_id shape and protects human-created groups and worktrees.
@@ -44,7 +46,7 @@ Phase 1b shipped `spin_out`: an agent proposes splitting a strand into a new wor
 ## Cross-platform mapping
 
 - **Telegram:** main chat = a forum group's General; peer = a topic (`createForumTopic`) giving `tg:{group}:{topic}`; close = `closeForumTopic`. Requires Topics enabled and the bot admin with Manage Topics.
-- **Slack:** main chat = a channel; peer = a new private channel (`conversations.create`) giving `slack:{channel}`; close = `conversations.archive`.
+- **Slack:** main chat = a channel; peer = a new private channel (`conversations.create`) giving `slack:{channel}`; close = `conversations.archive`; Project grouping = a shared sidebar section backed by a `cc-<project-slug>` User Group.
 - **Discord (future):** channel + channel/thread; same opaque-id shape.
 
 ## Flows

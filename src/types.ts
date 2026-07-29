@@ -33,6 +33,10 @@ export interface Channel {
   createChat?(anchor: string, title: string): Promise<string>;
   /** Close/archive a chat previously created via createChat. No-op if there is nothing to close. Optional capability. */
   closeChat?(chatId: string): Promise<void>;
+  /** Mirror a project's live chats into a platform-native shared section. Optional capability. */
+  syncProjectSection?(projectName: string, chatIds: string[]): Promise<void>;
+  /** Remove a platform-native shared section when its project is archived. Optional capability. */
+  removeProjectSection?(projectName: string): Promise<void>;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   emit<K extends keyof ChannelEvents>(event: K, ...args: ChannelEvents[K]): boolean;

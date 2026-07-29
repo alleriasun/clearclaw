@@ -1,9 +1,17 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
 import type { MessageElement } from "@slack/web-api/dist/types/response/ConversationsHistoryResponse.js";
 import log from "../logger.js";
 import type { Attachment, Channel, ChatType, Button, ButtonResponse, ReplyContext, SendFileOpts, MessageOpts, UserInfo } from "../types.js";
+
+interface SlackUserGroup {
+  id?: string;
+  description?: string;
+  handle?: string;
+  date_delete?: number;
+}
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
@@ -26,6 +34,7 @@ export class SlackChannel extends EventEmitter implements Channel {
   private pendingModalCallbacks = new Map<string, (text: string) => void>(); // modal callbackId → resolve
   private typingMessageTs = new Map<string, string>(); // chatId → ts of bot's "typing…" placeholder
   private userNameCache = new Map<string, string>();
+  private userGroupsByHandle: Map<string, SlackUserGroup> | undefined;
 
   constructor(
     botToken: string,
@@ -190,12 +199,7 @@ export class SlackChannel extends EventEmitter implements Channel {
   ownsId(chatId: string): boolean { return chatId.startsWith("slack:"); }
 
   async createChat(_anchor: string, title: string): Promise<string> {
-    const users = [...new Set(
-      this.authorizedUserIds()
-        .filter((id) => id.startsWith("slack:"))
-        .map((id) => id.slice("slack:".length))
-        .filter(Boolean),
-    )];
+    const users = this.authorizedSlackUsers();
     if (users.length === 0) {
       throw new Error("Cannot create Slack peer: no authorized Slack users to invite");
     }
@@ -232,6 +236,63 @@ export class SlackChannel extends EventEmitter implements Channel {
       if (code === "already_archived" || code === "channel_not_found") return;
       throw err;
     }
+  }
+
+  async syncProjectSection(projectName: string, chatIds: string[]): Promise<void> {
+    const channels = [...new Set(
+      chatIds
+        .map((id) => this.slackId(id))
+        .filter((id) => id.startsWith("C") || id.startsWith("G")),
+    )];
+    if (channels.length === 0) return;
+    const users = this.authorizedSlackUsers();
+    if (users.length === 0) {
+      throw new Error("Cannot sync Slack project section: no authorized Slack users");
+    }
+
+    const description = slackUserGroupDescription(projectName);
+    const resolved = await this.projectUserGroup(projectName);
+    const handle = resolved.handle;
+    let group = resolved.group;
+    if (!group) {
+      const created = await this.app.client.apiCall("usergroups.create", {
+        name: projectName,
+        handle,
+        description,
+        channels: channels.join(","),
+        enable_section: true,
+      }) as { usergroup?: SlackUserGroup };
+      group = created.usergroup;
+      if (!group?.id) throw new Error("Slack created a project section without returning its User Group ID");
+      group = { ...group, handle, description };
+      this.userGroupsByHandle!.set(handle, group);
+    } else {
+      if (!group.id) throw new Error("Slack returned a project User Group without its ID");
+      if (group.date_delete) {
+        await this.app.client.apiCall("usergroups.enable", { usergroup: group.id });
+      }
+      await this.app.client.apiCall("usergroups.update", {
+        usergroup: group.id,
+        name: projectName,
+        handle,
+        description,
+        channels: channels.join(","),
+        enable_section: true,
+      });
+    }
+
+    await this.app.client.apiCall("usergroups.users.update", {
+      usergroup: group.id,
+      users: users.join(","),
+    });
+    this.userGroupsByHandle!.set(handle, { ...group, handle, description, date_delete: 0 });
+  }
+
+  async removeProjectSection(projectName: string): Promise<void> {
+    const { handle, group } = await this.projectUserGroup(projectName);
+    if (!group?.id || group.date_delete) return;
+    await this.app.client.apiCall("usergroups.disable", { usergroup: group.id });
+    this.userGroupsByHandle!.set(handle, { ...group, date_delete: Date.now() });
   }
 
   async sendMessage(
@@ -522,6 +583,45 @@ export class SlackChannel extends EventEmitter implements Channel {
     return chatId.replace(/^slack:/, "");
   }
 
+  private authorizedSlackUsers(): string[] {
+    return [...new Set(
+      this.authorizedUserIds()
+        .filter((id) => id.startsWith("slack:"))
+        .map((id) => id.slice("slack:".length))
+        .filter(Boolean),
+    )];
+  }
+
+  private async userGroupByHandle(handle: string): Promise<SlackUserGroup | undefined> {
+    if (!this.userGroupsByHandle) {
+      const result = await this.app.client.apiCall("usergroups.list", {
+        include_disabled: true,
+      }) as { usergroups?: SlackUserGroup[] };
+      this.userGroupsByHandle = new Map(
+        (result.usergroups ?? [])
+          .filter((group): group is SlackUserGroup & { handle: string } => !!group.handle)
+          .map((group) => [group.handle, group]),
+      );
+    }
+    return this.userGroupsByHandle.get(handle);
+  }
+
+  private async projectUserGroup(projectName: string): Promise<{ handle: string; group?: SlackUserGroup }> {
+    const description = slackUserGroupDescription(projectName);
+    const baseHandle = slackUserGroupHandle(projectName);
+    const baseGroup = await this.userGroupByHandle(baseHandle);
+    if (!baseGroup || baseGroup.description === description) {
+      return { handle: baseHandle, group: baseGroup };
+    }
+
+    const collisionHandle = slackUserGroupCollisionHandle(projectName);
+    const collisionGroup = await this.userGroupByHandle(collisionHandle);
+    if (!collisionGroup || collisionGroup.description === description) {
+      return { handle: collisionHandle, group: collisionGroup };
+    }
+    throw new Error(`Slack User Group handles "${baseHandle}" and "${collisionHandle}" are owned by other groups`);
+  }
+
   /** Download a file from Slack using bot token auth. */
   private async downloadFile(url: string): Promise<Buffer> {
     const resp = await fetch(url, {
@@ -591,6 +691,26 @@ function slackChannelName(title: string): string {
     .replace(/[-_]+$/g, "");
   if (!name) throw new Error(`Cannot derive a valid Slack channel name from "${title}"`);
   return name;
+}
+
+function slackUserGroupHandle(projectName: string): string {
+  const slug = slackChannelName(projectName)
+    .slice(0, 77)
+    .replace(/[-_]+$/g, "");
+  return `cc-${slug}`;
+}
+
+function slackUserGroupCollisionHandle(projectName: string): string {
+  const hash = createHash("sha256").update(projectName).digest("hex").slice(0, 6);
+  const slug = slackChannelName(projectName)
+    .slice(0, 70)
+    .replace(/[-_]+$/g, "");
+  return `cc-${slug}-${hash}`;
+}
+
+function slackUserGroupDescription(projectName: string): string {
+  const hash = createHash("sha256").update(projectName).digest("hex").slice(0, 16);
+  return `Managed by ClearClaw (${hash})`;
 }
 
 function slackErrorCode(err: unknown): string | undefined {

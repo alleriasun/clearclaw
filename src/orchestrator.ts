@@ -120,6 +120,7 @@ export class Orchestrator {
     });
 
     await this.channel.connect();
+    await this.syncAllProjectSections();
     log.info("ClearClaw ready.");
 
     this.scheduler = new Scheduler(this.config, (msg) => this.deliverToWorkspace("default", msg.origin, msg.text));
@@ -136,6 +137,48 @@ export class Orchestrator {
   async stop(): Promise<void> {
     this.scheduler?.stop();
     await this.channel.disconnect();
+  }
+
+  private async syncAllProjectSections(): Promise<void> {
+    if (!this.channel.syncProjectSection) return;
+    for (const project of this.config.listProjects()) {
+      await this.syncProjectSection(project.name);
+    }
+  }
+
+  private async syncProjectSection(projectName: string): Promise<void> {
+    const sync = this.channel.syncProjectSection?.bind(this.channel);
+    if (!sync) return;
+    const project = this.config.projectByName(projectName);
+    if (!project) return;
+
+    const workspaces = this.config.listWorkspaces().filter((workspace) => workspace.project === projectName);
+    const main = workspaces.find((workspace) => workspace.name === project.main_workspace);
+    const ordered = main
+      ? [main, ...workspaces.filter((workspace) => workspace.name !== main.name)]
+      : workspaces;
+    const chatIds = [...new Set(
+      ordered
+        .map((workspace) => workspace.chat_id)
+        .filter((chatId) => this.channel.ownsId(chatId)),
+    )];
+    if (chatIds.length === 0) return;
+
+    try {
+      await sync(projectName, chatIds);
+    } catch (err) {
+      log.warn("[project] failed to sync section for %s: %s", projectName, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private async removeProjectSection(projectName: string): Promise<void> {
+    const remove = this.channel.removeProjectSection?.bind(this.channel);
+    if (!remove) return;
+    try {
+      await remove(projectName);
+    } catch (err) {
+      log.warn("[project] failed to remove section for %s: %s", projectName, err instanceof Error ? err.message : String(err));
+    }
   }
 
   /** Deliver a synthetic message to a named workspace and trigger its turn. */
@@ -202,6 +245,7 @@ export class Orchestrator {
         spawnedFrom: fromName,
         owns_worktree: ownsWorktree,
       });
+      await this.syncProjectSection(project.name);
       this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: fromName }, args.brief);
       await this.channel.sendMessage(chatId, `🌱 Spawned "${args.name}" in ${project.name}.`);
       log.info("[tool] spin_out: spawned %s (cwd %s) in project %s", args.name, cwd, project.name);
@@ -940,6 +984,7 @@ export class Orchestrator {
             description: args.description,
           });
           this.config.addProject({ name: args.name, description: args.description, main_workspace: args.name });
+          await this.syncProjectSection(args.name);
           log.info("[tool] workspace_create: %s → %s engine=%s (chat %s)", args.name, args.cwd, args.engine ?? "default", chatId);
           if (args.spin_out_id) {
             const pending = this.config.listSpinOuts().find((s) => s.id === args.spin_out_id);
@@ -1110,13 +1155,11 @@ export class Orchestrator {
           if (!target) {
             return { content: [{ type: "text" as const, text: `No workspace named "${args.name}".` }] };
           }
-          if (target.project) {
-            const proj = this.config.projectByName(target.project);
-            if (proj && proj.main_workspace === args.name) {
-              const peers = this.config.listWorkspaces().filter((w) => w.project === proj.name && w.name !== args.name);
-              if (peers.length > 0) {
-                return { content: [{ type: "text" as const, text: `Cannot archive "${args.name}": it's the main of project "${proj.name}", which still has peers (${peers.map((p) => `"${p.name}"`).join(", ")}). Archive those first, or reassign the main via project_update.` }] };
-              }
+          const project = target.project ? this.config.projectByName(target.project) : undefined;
+          if (project?.main_workspace === args.name) {
+            const peers = this.config.listWorkspaces().filter((w) => w.project === project.name && w.name !== args.name);
+            if (peers.length > 0) {
+              return { content: [{ type: "text" as const, text: `Cannot archive "${args.name}": it's the main of project "${project.name}", which still has peers (${peers.map((p) => `"${p.name}"`).join(", ")}). Archive those first, or reassign the main via project_update.` }] };
             }
           }
           const resp = await this.channel.sendInteractive(
@@ -1128,10 +1171,8 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: "Archive cancelled by the user." }] };
           }
           this.config.removeWorkspace(args.name);
-          if (target.project) {
-            const proj = this.config.projectByName(target.project);
-            if (proj && proj.main_workspace === args.name) this.config.removeProject(proj.name);
-          }
+          const removedProject = project?.main_workspace === args.name ? project : undefined;
+          if (removedProject) this.config.removeProject(removedProject.name);
           let archiveNote = "";
           if (target.spawnedFrom) {
             const closeChat = this.channel.closeChat?.bind(this.channel);
@@ -1148,6 +1189,11 @@ export class Orchestrator {
             } else {
               archiveNote = " Workspace directory left in place because ClearClaw does not own it.";
             }
+          }
+          if (removedProject) {
+            await this.removeProjectSection(removedProject.name);
+          } else if (project) {
+            await this.syncProjectSection(project.name);
           }
           log.info("[tool] workspace_archive: %s", args.name);
           return { content: [{ type: "text" as const, text: `Workspace "${args.name}" archived.${archiveNote}` }] };

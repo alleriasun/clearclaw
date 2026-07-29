@@ -214,6 +214,7 @@ Both channels implement the same `Channel` interface but differ in platform spec
 | **Buttons** | Inline keyboard (callback queries) | Block Kit action buttons |
 | **Message handles** | `message_id` (number as string) | `ts` (timestamp string) |
 | **Topic/description** | `setDescription` (groups) | `setTopic` (channels), auto-deletes system messages |
+| **Project grouping** | Forum group with peer topics | Shared sidebar section backed by a User Group |
 
 **Slack dual-field note:** Slack messages send both `text` (plain fallback for notifications/accessibility) and `blocks` (rich-rendered Block Kit). Both currently receive the same mrkdwn-formatted content. Slack renders mrkdwn in both fields, so there's no formatting mismatch for text content. If we ever need divergent formatting (e.g., stripping markdown from the `text` fallback), the split point is in `sendMessage` / `editMessage`.
 
@@ -232,6 +233,7 @@ Environment variables:
 - `TELEGRAM_BOT_TOKEN` — Telegram bot token (mutually exclusive with Slack)
 - `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` — Slack bot + app-level token for Socket Mode. If both Slack and Telegram tokens are set, Slack takes priority.
   - Slack peer spawning creates private channels. Add the `groups:write` bot-token scope under **OAuth & Permissions**, then reinstall the app to the workspace. ClearClaw invites every authorized Slack user to each spawned peer and archives the channel with the peer workspace.
+  - Slack mirrors each Project into a shared sidebar section named after the Project, with handle `cc-<project-slug>` (plus a stable hash suffix when that handle is occupied). ClearClaw marks the User Groups it creates and never updates or disables an unmarked group. This requires a paid plan, `usergroups:read` and `usergroups:write`, and workspace User Group permissions that allow everyone to manage groups. The section contains the main and all live peer channels, and is reconciled at startup, spawn, and archive.
 
 **General:**
 - `ALLOWED_USER_IDS` (required) — comma-separated, channel-prefixed user IDs (e.g. `tg:12345,slack:U67890`). Trust boundary. `ALLOWED_USER_ID` accepted as single-user alias.

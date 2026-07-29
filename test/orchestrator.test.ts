@@ -24,6 +24,8 @@ interface Harness {
     closeChat: string[];
     createChat: Array<{ anchor: string; title: string }>;
     messages: string[];
+    removeProjectSection: string[];
+    syncProjectSection: Array<{ projectName: string; chatIds: string[] }>;
   };
   config: Config;
   orchestrator: Orchestrator;
@@ -37,6 +39,8 @@ function makeHarness(options: {
   projects?: Project[];
   createChat?: boolean;
   interactiveResponse?: string;
+  projectSections?: boolean;
+  projectSectionError?: Error;
 }): Harness {
   const workspaces = [...options.workspaces];
   const projects = [...(options.projects ?? [])];
@@ -45,9 +49,12 @@ function makeHarness(options: {
     closeChat: [] as string[],
     createChat: [] as Array<{ anchor: string; title: string }>,
     messages: [] as string[],
+    removeProjectSection: [] as string[],
+    syncProjectSection: [] as Array<{ projectName: string; chatIds: string[] }>,
   };
   const channel = {
     name: "test",
+    ownsId: (chatId: string) => chatId.startsWith("test:"),
     sendInteractive: async () => ({ value: options.interactiveResponse ?? "spawn" }),
     sendMessage: async (_chatId: string, text: string) => {
       channelCalls.messages.push(text);
@@ -64,6 +71,18 @@ function makeHarness(options: {
             return "test:peer";
           },
         }),
+    ...(options.projectSections
+      ? {
+          syncProjectSection: async (projectName: string, chatIds: string[]) => {
+            channelCalls.syncProjectSection.push({ projectName, chatIds });
+            if (options.projectSectionError) throw options.projectSectionError;
+          },
+          removeProjectSection: async (projectName: string) => {
+            channelCalls.removeProjectSection.push(projectName);
+            if (options.projectSectionError) throw options.projectSectionError;
+          },
+        }
+      : {}),
   } as unknown as Channel;
   const config = {
     homeWorkspacePath: "/tmp/clearclaw-home",
@@ -211,6 +230,51 @@ test("spin_out persists external cwd as unowned", async () => {
   }
 });
 
+test("spin_out syncs the project section with its main and new peer chat", async () => {
+  const externalCwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-section-spawn-"));
+  const self = workspace({ cwd: externalCwd, project: "ClearClaw" });
+  const harness = makeHarness({
+    workspaces: [self],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+    projectSections: true,
+  });
+
+  try {
+    await tool(harness, "spin_out").handler({
+      name: "peer",
+      brief: "test brief",
+      cwd: externalCwd,
+    });
+
+    assert.deepEqual(harness.channelCalls.syncProjectSection, [{
+      projectName: "ClearClaw",
+      chatIds: ["test:self", "test:peer"],
+    }]);
+  } finally {
+    fs.rmSync(externalCwd, { recursive: true, force: true });
+  }
+});
+
+test("spin_out succeeds when project section sync fails", async () => {
+  const self = workspace({ project: "ClearClaw" });
+  const harness = makeHarness({
+    workspaces: [self],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+    projectSections: true,
+    projectSectionError: new Error("Slack sections unavailable"),
+  });
+
+  const result = await tool(harness, "spin_out").handler({
+    name: "peer",
+    brief: "test brief",
+    cwd: "/tmp",
+  });
+
+  assert.match(result.content[0]!.text, /Spawned workspace "peer"/);
+  assert.equal(harness.workspaces.some((candidate) => candidate.name === "peer"), true);
+  assert.deepEqual(harness.channelCalls.closeChat, []);
+});
+
 test("spin_out rollback never removes an explicit external cwd", async () => {
   const externalCwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-external-rollback-"));
   const main = workspace({ name: "main", cwd: externalCwd, chat_id: "test:main", project: "project" });
@@ -352,6 +416,46 @@ test("workspace_archive leaves legacy unknown-ownership directories in place", a
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("workspace_archive updates a project section after removing a peer", async () => {
+  const self = workspace({ project: "ClearClaw" });
+  const peer = workspace({
+    name: "peer",
+    chat_id: "test:peer",
+    project: "ClearClaw",
+    spawnedFrom: "self",
+    owns_worktree: false,
+  });
+  const harness = makeHarness({
+    workspaces: [self, peer],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+    interactiveResponse: "yes",
+    projectSections: true,
+  });
+
+  await tool(harness, "workspace_archive").handler({ name: "peer" });
+
+  assert.deepEqual(harness.channelCalls.syncProjectSection, [{
+    projectName: "ClearClaw",
+    chatIds: ["test:self"],
+  }]);
+  assert.deepEqual(harness.channelCalls.removeProjectSection, []);
+});
+
+test("workspace_archive removes the section with its main project", async () => {
+  const main = workspace({ name: "main", project: "ClearClaw" });
+  const harness = makeHarness({
+    workspaces: [main],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "main" }],
+    interactiveResponse: "yes",
+    projectSections: true,
+  });
+
+  await tool(harness, "workspace_archive").handler({ name: "main" });
+
+  assert.deepEqual(harness.channelCalls.removeProjectSection, ["ClearClaw"]);
+  assert.deepEqual(harness.channelCalls.syncProjectSection, []);
 });
 
 test("pending-brief fallback reports why one-tap spawning is unavailable", async () => {
