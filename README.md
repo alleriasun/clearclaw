@@ -51,6 +51,10 @@ the scope. Shared project sidebar sections require a paid Slack plan, the
 Group permissions set to allow everyone to manage them. Reinstall the app after
 changing scopes.
 
+Telegram peer topics require Topics to be enabled manually on a supergroup and
+the bot to be an admin with Manage Topics. Private-chat topics require Threaded
+Mode to be enabled for the bot in BotFather.
+
 ## Architecture
 
 Two interfaces keep the core thin: **Channels** (Telegram, Slack, ...) handle messaging, **Engines** (Claude Code, Codex, Kiro, ...) handle the agent. The orchestrator routes between them — adding a channel or engine means adding a file. Details in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).

@@ -14,7 +14,7 @@ The task prompt tells you the chat type: DM or group. Use this to adapt the flow
    - Call `task_complete` immediately after `workspace_create` so the brief is processed as a normal workspace turn
    - Skip the remaining steps. If no (or no pending spin-outs), continue below.
 
-2. **Ask what they want to work on.** A specific repo/codebase, or a general-purpose assistant chat? Either way, get a one-line sense of what this is about — it becomes the project's `description`. (Every workspace you create also creates its project, with this workspace as the project's main. If the group is a Telegram forum, peers spun out later land here as topics; the bot must be an admin with Manage Topics for that to work.)
+2. **Ask what they want to work on.** A specific repo/codebase, or a general-purpose assistant chat? Either way, get a one-line sense of what this is about — it becomes the project's `description`. (Every workspace you create also creates its project, with this workspace as the project's main. For Telegram peer topics, the user must enable Topics manually and make the bot an admin with Manage Topics; bots cannot convert a group into a forum. Private-chat topics require BotFather Threaded Mode.)
 
 3. **Find the repo.** If they mention a repo:
    - Ask for the path, or offer to look in common locations (`~/`, `~/projects/`, `~/src/`, `~/repos/`, `~/workspaces/`, `~/workplace/`)

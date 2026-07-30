@@ -18,6 +18,7 @@ import type {
   InboundMessage,
   MessageOrigin,
   PermissionMode,
+  ProjectChats,
   ReplyContext,
   ToolCall,
   TurnStats,
@@ -120,7 +121,7 @@ export class Orchestrator {
     });
 
     await this.channel.connect();
-    await this.syncAllProjectSections();
+    await this.reconcileAllProjectChats();
     log.info("ClearClaw ready.");
 
     this.scheduler = new Scheduler(this.config, (msg) => this.deliverToWorkspace("default", msg.origin, msg.text));
@@ -139,45 +140,37 @@ export class Orchestrator {
     await this.channel.disconnect();
   }
 
-  private async syncAllProjectSections(): Promise<void> {
-    if (!this.channel.syncProjectSection) return;
+  private async reconcileAllProjectChats(): Promise<void> {
+    if (!this.channel.projectChats) return;
     for (const project of this.config.listProjects()) {
-      await this.syncProjectSection(project.name);
+      await this.reconcileProjectChats(project.name);
     }
   }
 
-  private async syncProjectSection(projectName: string): Promise<void> {
-    const sync = this.channel.syncProjectSection?.bind(this.channel);
-    if (!sync) return;
-    const project = this.config.projectByName(projectName);
-    if (!project) return;
-
-    const workspaces = this.config.listWorkspaces().filter((workspace) => workspace.project === projectName);
-    const main = workspaces.find((workspace) => workspace.name === project.main_workspace);
-    const ordered = main
-      ? [main, ...workspaces.filter((workspace) => workspace.name !== main.name)]
-      : workspaces;
-    const chatIds = [...new Set(
-      ordered
-        .map((workspace) => workspace.chat_id)
-        .filter((chatId) => this.channel.ownsId(chatId)),
-    )];
-    if (chatIds.length === 0) return;
-
-    try {
-      await sync(projectName, chatIds);
-    } catch (err) {
-      log.warn("[project] failed to sync section for %s: %s", projectName, err instanceof Error ? err.message : String(err));
+  private async reconcileProjectChats(projectName: string, removed = false): Promise<void> {
+    const projectChats = this.channel.projectChats;
+    if (!projectChats) return;
+    let chatIds: string[] = [];
+    if (!removed) {
+      const project = this.config.projectByName(projectName);
+      if (!project) return;
+      const workspaces = this.config.listWorkspaces().filter((workspace) => workspace.project === projectName);
+      const main = workspaces.find((workspace) => workspace.name === project.main_workspace);
+      const ordered = main
+        ? [main, ...workspaces.filter((workspace) => workspace.name !== main.name)]
+        : workspaces;
+      chatIds = [...new Set(
+        ordered
+          .map((workspace) => workspace.chat_id)
+          .filter((chatId) => this.channel.ownsId(chatId)),
+      )];
+      if (chatIds.length === 0) return;
     }
-  }
 
-  private async removeProjectSection(projectName: string): Promise<void> {
-    const remove = this.channel.removeProjectSection?.bind(this.channel);
-    if (!remove) return;
     try {
-      await remove(projectName);
+      await projectChats.reconcile(projectName, chatIds);
     } catch (err) {
-      log.warn("[project] failed to remove section for %s: %s", projectName, err instanceof Error ? err.message : String(err));
+      log.warn("[project] failed to reconcile chats for %s: %s", projectName, err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -204,7 +197,7 @@ export class Orchestrator {
     fromName: string,
     project: Project,
     mainWs: Workspace,
-    createChat: (anchor: string, title: string) => Promise<string>,
+    projectChats: ProjectChats,
     args: { name: string; brief: string; cwd?: string; branch?: string },
   ) {
     if (this.config.workspaceByName(args.name)) {
@@ -232,7 +225,7 @@ export class Orchestrator {
           cwd = mainWs.cwd;
         }
       }
-      createdChatId = await createChat(mainWs.chat_id, args.name);
+      createdChatId = await projectChats.create(project.name, mainWs.chat_id, args.name);
       this.config.upsertWorkspace({
         name: args.name,
         cwd,
@@ -245,7 +238,7 @@ export class Orchestrator {
         spawnedFrom: fromName,
         owns_worktree: ownsWorktree,
       });
-      await this.syncProjectSection(project.name);
+      await this.reconcileProjectChats(project.name);
       this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: fromName }, args.brief);
       await this.channel.sendMessage(chatId, `🌱 Spawned "${args.name}" in ${project.name}.`);
       log.info("[tool] spin_out: spawned %s (cwd %s) in project %s", args.name, cwd, project.name);
@@ -253,8 +246,7 @@ export class Orchestrator {
     } catch (err) {
       // Best-effort rollback so a failed spawn leaves nothing behind.
       if (createdChatId) {
-        const closeChat = this.channel.closeChat?.bind(this.channel);
-        if (closeChat) await closeChat(createdChatId).catch(() => { /* best effort */ });
+        await projectChats.close(createdChatId).catch(() => { /* best effort */ });
       }
       if (ownsWorktree && cwd) {
         try { removeWorktree(cwd); } catch { /* best effort */ }
@@ -984,7 +976,7 @@ export class Orchestrator {
             description: args.description,
           });
           this.config.addProject({ name: args.name, description: args.description, main_workspace: args.name });
-          await this.syncProjectSection(args.name);
+          await this.reconcileProjectChats(args.name);
           log.info("[tool] workspace_create: %s → %s engine=%s (chat %s)", args.name, args.cwd, args.engine ?? "default", chatId);
           if (args.spin_out_id) {
             const pending = this.config.listSpinOuts().find((s) => s.id === args.spin_out_id);
@@ -1089,7 +1081,7 @@ export class Orchestrator {
         ),
         tool(
           "spin_out",
-          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. One-tap spawning is available when the target project resolves, its main workspace exists, and the channel supports createChat; otherwise this registers a pending brief the user claims by creating a group. Pass an existing cwd when external tooling prepared the worktree: the path must already exist, and ClearClaw will never create or remove it. Omit cwd to let ClearClaw create and own a standard git worktree for plain git repos. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
+          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. One-tap spawning is available when the target project resolves, its main workspace exists, and the channel supports Project chat lifecycle; otherwise this registers a pending brief the user claims by creating a group. Pass an existing cwd when external tooling prepared the worktree: the path must already exist, and ClearClaw will never create or remove it. Omit cwd to let ClearClaw create and own a standard git worktree for plain git repos. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
           {
             name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
             brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
@@ -1102,10 +1094,10 @@ export class Orchestrator {
             const targetName = args.into ?? self?.project;
             const project = targetName ? this.config.projectByName(targetName) : undefined;
             const mainWs = project ? this.config.workspaceByName(project.main_workspace) : undefined;
-            const createChat = this.channel.createChat?.bind(this.channel);
+            const projectChats = this.channel.projectChats;
             let fallbackReason: string;
 
-            if (project && mainWs && createChat) {
+            if (project && mainWs && projectChats) {
               const resp = await this.channel.sendInteractive(
                 chatId,
                 `🌱 Spin out "${args.name}" into ${project.name}?\n\n${args.brief.slice(0, 300)}`,
@@ -1119,7 +1111,7 @@ export class Orchestrator {
                 return { content: [{ type: "text" as const, text: "Spin-out cancelled by the user." }] };
               }
               if (resp.value === "spawn") {
-                return this.spawnPeer(chatId, fromName, project, mainWs, createChat, args);
+                return this.spawnPeer(chatId, fromName, project, mainWs, projectChats, args);
               }
               fallbackReason = resp.value === "manual"
                 ? "the user selected a manual group"
@@ -1131,7 +1123,7 @@ export class Orchestrator {
             } else if (!mainWs) {
               fallbackReason = `project "${project.name}" has no main workspace "${project.main_workspace}"`;
             } else {
-              fallbackReason = `channel "${this.channel.name}" lacks createChat capability`;
+              fallbackReason = `channel "${this.channel.name}" lacks Project chat lifecycle capability`;
             }
             return this.registerSpinOutBrief(chatId, fromName, args, fallbackReason);
           },
@@ -1175,9 +1167,8 @@ export class Orchestrator {
           if (removedProject) this.config.removeProject(removedProject.name);
           let archiveNote = "";
           if (target.spawnedFrom) {
-            const closeChat = this.channel.closeChat?.bind(this.channel);
-            if (closeChat) {
-              await closeChat(target.chat_id).catch((err) =>
+            if (this.channel.projectChats) {
+              await this.channel.projectChats.close(target.chat_id).catch((err) =>
                 log.warn("[tool] workspace_archive: failed to close chat: %s", err instanceof Error ? err.message : String(err)));
             }
             if (target.owns_worktree === true) {
@@ -1191,9 +1182,9 @@ export class Orchestrator {
             }
           }
           if (removedProject) {
-            await this.removeProjectSection(removedProject.name);
+            await this.reconcileProjectChats(removedProject.name, true);
           } else if (project) {
-            await this.syncProjectSection(project.name);
+            await this.reconcileProjectChats(project.name);
           }
           log.info("[tool] workspace_archive: %s", args.name);
           return { content: [{ type: "text" as const, text: `Workspace "${args.name}" archived.${archiveNote}` }] };

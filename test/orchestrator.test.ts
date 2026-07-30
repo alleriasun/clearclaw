@@ -21,11 +21,10 @@ interface TestTool {
 
 interface Harness {
   channelCalls: {
-    closeChat: string[];
-    createChat: Array<{ anchor: string; title: string }>;
+    closeProjectChat: string[];
+    createProjectChat: Array<{ projectName: string; anchor: string; title: string }>;
     messages: string[];
-    removeProjectSection: string[];
-    syncProjectSection: Array<{ projectName: string; chatIds: string[] }>;
+    reconcileProjectChats: Array<{ projectName: string; chatIds: string[] }>;
   };
   config: Config;
   orchestrator: Orchestrator;
@@ -37,20 +36,18 @@ interface Harness {
 function makeHarness(options: {
   workspaces: Workspace[];
   projects?: Project[];
-  createChat?: boolean;
+  projectChats?: boolean;
   interactiveResponse?: string;
-  projectSections?: boolean;
-  projectSectionError?: Error;
+  reconcileError?: Error;
 }): Harness {
   const workspaces = [...options.workspaces];
   const projects = [...(options.projects ?? [])];
   const pendingSpinOuts: PendingSpinOut[] = [];
   const channelCalls = {
-    closeChat: [] as string[],
-    createChat: [] as Array<{ anchor: string; title: string }>,
+    closeProjectChat: [] as string[],
+    createProjectChat: [] as Array<{ projectName: string; anchor: string; title: string }>,
     messages: [] as string[],
-    removeProjectSection: [] as string[],
-    syncProjectSection: [] as Array<{ projectName: string; chatIds: string[] }>,
+    reconcileProjectChats: [] as Array<{ projectName: string; chatIds: string[] }>,
   };
   const channel = {
     name: "test",
@@ -60,29 +57,23 @@ function makeHarness(options: {
       channelCalls.messages.push(text);
       return ["message-id"];
     },
-    closeChat: async (chatId: string) => {
-      channelCalls.closeChat.push(chatId);
-    },
-    ...(options.createChat === false
+    ...(options.projectChats === false
       ? {}
       : {
-          createChat: async (anchor: string, title: string) => {
-            channelCalls.createChat.push({ anchor, title });
-            return "test:peer";
+          projectChats: {
+            create: async (projectName: string, anchor: string, title: string) => {
+              channelCalls.createProjectChat.push({ projectName, anchor, title });
+              return "test:peer";
+            },
+            close: async (chatId: string) => {
+              channelCalls.closeProjectChat.push(chatId);
+            },
+            reconcile: async (projectName: string, chatIds: string[]) => {
+              channelCalls.reconcileProjectChats.push({ projectName, chatIds });
+              if (options.reconcileError) throw options.reconcileError;
+            },
           },
         }),
-    ...(options.projectSections
-      ? {
-          syncProjectSection: async (projectName: string, chatIds: string[]) => {
-            channelCalls.syncProjectSection.push({ projectName, chatIds });
-            if (options.projectSectionError) throw options.projectSectionError;
-          },
-          removeProjectSection: async (projectName: string) => {
-            channelCalls.removeProjectSection.push(projectName);
-            if (options.projectSectionError) throw options.projectSectionError;
-          },
-        }
-      : {}),
   } as unknown as Channel;
   const config = {
     homeWorkspacePath: "/tmp/clearclaw-home",
@@ -150,7 +141,7 @@ test("spin_out documents strict external cwd ownership", () => {
   const spinOut = tool(harness, "spin_out");
 
   assert.match(spinOut.description, /target project resolves/);
-  assert.match(spinOut.description, /channel supports createChat/);
+  assert.match(spinOut.description, /channel supports Project chat lifecycle/);
   assert.match(spinOut.description, /path must already exist/);
   assert.match(spinOut.description, /never create or remove it/);
   assert.doesNotMatch(spinOut.description, /forum/);
@@ -175,7 +166,7 @@ test("spin_out rejects a missing explicit cwd without creating a chat or directo
 
     assert.match(result.content[0]!.text, /must be an existing directory/);
     assert.equal(fs.existsSync(missingCwd), false);
-    assert.deepEqual(harness.channelCalls.createChat, []);
+    assert.deepEqual(harness.channelCalls.createProjectChat, []);
     assert.equal(harness.workspaces.some((candidate) => candidate.name === "peer"), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -200,7 +191,7 @@ test("spin_out treats an explicitly empty cwd as invalid, not omitted", async ()
 
     assert.match(result.content[0]!.text, /must be an existing directory/);
     assert.equal(fs.existsSync(path.join(repo, ".worktrees", "peer")), false);
-    assert.deepEqual(harness.channelCalls.createChat, []);
+    assert.deepEqual(harness.channelCalls.createProjectChat, []);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
@@ -230,13 +221,12 @@ test("spin_out persists external cwd as unowned", async () => {
   }
 });
 
-test("spin_out syncs the project section with its main and new peer chat", async () => {
+test("spin_out reconciles Project chats with its main and new peer", async () => {
   const externalCwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-section-spawn-"));
   const self = workspace({ cwd: externalCwd, project: "ClearClaw" });
   const harness = makeHarness({
     workspaces: [self],
     projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
-    projectSections: true,
   });
 
   try {
@@ -246,7 +236,7 @@ test("spin_out syncs the project section with its main and new peer chat", async
       cwd: externalCwd,
     });
 
-    assert.deepEqual(harness.channelCalls.syncProjectSection, [{
+    assert.deepEqual(harness.channelCalls.reconcileProjectChats, [{
       projectName: "ClearClaw",
       chatIds: ["test:self", "test:peer"],
     }]);
@@ -255,13 +245,12 @@ test("spin_out syncs the project section with its main and new peer chat", async
   }
 });
 
-test("spin_out succeeds when project section sync fails", async () => {
+test("spin_out succeeds when Project chat reconciliation fails", async () => {
   const self = workspace({ project: "ClearClaw" });
   const harness = makeHarness({
     workspaces: [self],
     projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
-    projectSections: true,
-    projectSectionError: new Error("Slack sections unavailable"),
+    reconcileError: new Error("Project chat grouping unavailable"),
   });
 
   const result = await tool(harness, "spin_out").handler({
@@ -272,7 +261,7 @@ test("spin_out succeeds when project section sync fails", async () => {
 
   assert.match(result.content[0]!.text, /Spawned workspace "peer"/);
   assert.equal(harness.workspaces.some((candidate) => candidate.name === "peer"), true);
-  assert.deepEqual(harness.channelCalls.closeChat, []);
+  assert.deepEqual(harness.channelCalls.closeProjectChat, []);
 });
 
 test("spin_out rollback never removes an explicit external cwd", async () => {
@@ -296,7 +285,7 @@ test("spin_out rollback never removes an explicit external cwd", async () => {
 
     assert.match(result.content[0]!.text, /persist failed/);
     assert.equal(fs.existsSync(externalCwd), true);
-    assert.deepEqual(harness.channelCalls.closeChat, ["test:peer"]);
+    assert.deepEqual(harness.channelCalls.closeProjectChat, ["test:peer"]);
   } finally {
     fs.rmSync(externalCwd, { recursive: true, force: true });
   }
@@ -311,8 +300,9 @@ test("spin_out owns its built-in worktree and removes it on rollback", async () 
     workspaces: [self, main],
     projects: [{ name: "project", description: "test", main_workspace: "main" }],
   });
-  const createChat = (harness.orchestrator as unknown as { channel: Channel }).channel.createChat;
-  (harness.orchestrator as unknown as { channel: Channel }).channel.createChat = async () => {
+  const projectChats = (harness.orchestrator as unknown as { channel: Channel }).channel.projectChats!;
+  const createProjectChat = projectChats.create;
+  projectChats.create = async () => {
     throw new Error("chat failed");
   };
 
@@ -326,7 +316,7 @@ test("spin_out owns its built-in worktree and removes it on rollback", async () 
     assert.equal(fs.existsSync(worktree), false);
     assert.equal(harness.workspaces.some((candidate) => candidate.name === "peer"), false);
   } finally {
-    (harness.orchestrator as unknown as { channel: Channel }).channel.createChat = createChat;
+    projectChats.create = createProjectChat;
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
@@ -382,7 +372,7 @@ test("workspace_archive leaves an external worktree in place", async () => {
     const result = await tool(harness, "workspace_archive").handler({ name: "peer" });
 
     assert.equal(fs.existsSync(externalCwd), true);
-    assert.deepEqual(harness.channelCalls.closeChat, ["test:peer"]);
+    assert.deepEqual(harness.channelCalls.closeProjectChat, ["test:peer"]);
     assert.equal(harness.workspaces.some((candidate) => candidate.name === "peer"), false);
     assert.match(result.content[0]!.text, /External worktree left in place; clean up with your own tooling\./);
   } finally {
@@ -418,7 +408,7 @@ test("workspace_archive leaves legacy unknown-ownership directories in place", a
   }
 });
 
-test("workspace_archive updates a project section after removing a peer", async () => {
+test("workspace_archive reconciles Project chats after removing a peer", async () => {
   const self = workspace({ project: "ClearClaw" });
   const peer = workspace({
     name: "peer",
@@ -431,31 +421,52 @@ test("workspace_archive updates a project section after removing a peer", async 
     workspaces: [self, peer],
     projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
     interactiveResponse: "yes",
-    projectSections: true,
   });
 
   await tool(harness, "workspace_archive").handler({ name: "peer" });
 
-  assert.deepEqual(harness.channelCalls.syncProjectSection, [{
+  assert.deepEqual(harness.channelCalls.reconcileProjectChats, [{
     projectName: "ClearClaw",
     chatIds: ["test:self"],
   }]);
-  assert.deepEqual(harness.channelCalls.removeProjectSection, []);
 });
 
-test("workspace_archive removes the section with its main project", async () => {
+test("workspace_archive reconciles an empty chat set when removing a Project", async () => {
   const main = workspace({ name: "main", project: "ClearClaw" });
   const harness = makeHarness({
     workspaces: [main],
     projects: [{ name: "ClearClaw", description: "test", main_workspace: "main" }],
     interactiveResponse: "yes",
-    projectSections: true,
   });
 
   await tool(harness, "workspace_archive").handler({ name: "main" });
 
-  assert.deepEqual(harness.channelCalls.removeProjectSection, ["ClearClaw"]);
-  assert.deepEqual(harness.channelCalls.syncProjectSection, []);
+  assert.deepEqual(harness.channelCalls.reconcileProjectChats, [{
+    projectName: "ClearClaw",
+    chatIds: [],
+  }]);
+});
+
+test("Project reconciliation skips live Projects with no channel-owned chats", async () => {
+  const foreign = workspace({
+    name: "foreign",
+    chat_id: "telegram:main",
+    project: "Foreign",
+  });
+  const harness = makeHarness({
+    workspaces: [foreign],
+    projects: [{
+      name: "Foreign",
+      description: "test",
+      main_workspace: "foreign",
+    }],
+  });
+
+  await (harness.orchestrator as unknown as {
+    reconcileProjectChats(projectName: string): Promise<void>;
+  }).reconcileProjectChats("Foreign");
+
+  assert.deepEqual(harness.channelCalls.reconcileProjectChats, []);
 });
 
 test("pending-brief fallback reports why one-tap spawning is unavailable", async () => {
@@ -474,16 +485,16 @@ test("pending-brief fallback reports why one-tap spawning is unavailable", async
       reason: 'project "project" has no main workspace "missing"',
     },
     {
-      name: "channel lacks createChat",
+      name: "channel lacks Project chat lifecycle",
       harness: makeHarness({
         workspaces: [
           workspace({ project: "project" }),
           workspace({ name: "main", chat_id: "test:main", project: "project" }),
         ],
         projects: [{ name: "project", description: "test", main_workspace: "main" }],
-        createChat: false,
+        projectChats: false,
       }),
-      reason: 'channel "test" lacks createChat capability',
+      reason: 'channel "test" lacks Project chat lifecycle capability',
     },
   ];
 

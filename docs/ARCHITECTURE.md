@@ -216,6 +216,8 @@ Both channels implement the same `Channel` interface but differ in platform spec
 | **Topic/description** | `setDescription` (groups) | `setTopic` (channels), auto-deletes system messages |
 | **Project grouping** | Forum group with peer topics | Shared sidebar section backed by a User Group |
 
+Both adapters expose this through the optional `projectChats` lifecycle: `create` and `close` manage one peer chat, while `reconcile` validates or updates the Project-wide chat set. Telegram validates that group Projects use one forum supergroup because bots cannot enable Topics, or that private chats have BotFather Threaded Mode enabled. Slack reconciles the shared User Group section.
+
 **Slack dual-field note:** Slack messages send both `text` (plain fallback for notifications/accessibility) and `blocks` (rich-rendered Block Kit). Both currently receive the same mrkdwn-formatted content. Slack renders mrkdwn in both fields, so there's no formatting mismatch for text content. If we ever need divergent formatting (e.g., stripping markdown from the `text` fallback), the split point is in `sendMessage` / `editMessage`.
 
 ## Storage

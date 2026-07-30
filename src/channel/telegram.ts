@@ -11,6 +11,7 @@ import type {
   Button,
   ButtonResponse,
   MessageOrigin,
+  ProjectChats,
   ReplyContext,
   SendFileOpts,
   MessageOpts,
@@ -19,6 +20,11 @@ import type {
 
 export class TelegramChannel extends EventEmitter implements Channel {
   name = "telegram";
+  readonly projectChats: ProjectChats = {
+    create: (projectName, anchor, title) => this.createProjectChat(projectName, anchor, title),
+    close: (chatId) => this.closeProjectChat(chatId),
+    reconcile: (projectName, chatIds) => this.validateProjectChats(projectName, chatIds),
+  };
 
   private bot: Bot;
   private botToken: string;
@@ -551,15 +557,42 @@ export class TelegramChannel extends EventEmitter implements Channel {
     }
   }
 
-  async createChat(anchor: string, title: string): Promise<string> {
+  private async createProjectChat(projectName: string, anchor: string, title: string): Promise<string> {
+    await this.validateProjectChats(projectName, [anchor]);
     const topic = await this.bot.api.createForumTopic(this.numericId(anchor), title);
     return `${anchor}:${topic.message_thread_id}`;
   }
 
-  async closeChat(chatId: string): Promise<void> {
+  private async closeProjectChat(chatId: string): Promise<void> {
     const thread = chatId.split(":")[2];
     if (!thread) return;
-    await this.bot.api.closeForumTopic(this.numericId(chatId), Number(thread));
+    const parentId = this.numericId(chatId);
+    if (parentId > 0) {
+      await this.bot.api.deleteForumTopic(parentId, Number(thread));
+      return;
+    }
+    await this.bot.api.closeForumTopic(parentId, Number(thread));
+  }
+
+  private async validateProjectChats(projectName: string, chatIds: string[]): Promise<void> {
+    if (chatIds.length === 0) return;
+    const parentIds = [...new Set(chatIds.map((chatId) => this.numericId(chatId)))];
+    if (parentIds.length !== 1 || !Number.isFinite(parentIds[0])) {
+      throw new Error(`Telegram project "${projectName}" must use one forum chat`);
+    }
+
+    const chat = await this.bot.api.getChat(parentIds[0]);
+    if (chat.type === "private") {
+      const botInfo = await this.bot.api.getMe() as unknown as { has_topics_enabled?: boolean };
+      if (botInfo.has_topics_enabled) return;
+      throw new Error(
+        `Telegram project "${projectName}" requires Threaded Mode for this bot. Enable it in BotFather, then retry.`,
+      );
+    }
+    if (chat.type === "supergroup" && chat.is_forum) return;
+    throw new Error(
+      `Telegram project "${projectName}" requires a forum supergroup. Enable Topics manually in Telegram, then retry.`,
+    );
   }
 
   /** Download a Telegram file by file_id, returning the raw buffer. */

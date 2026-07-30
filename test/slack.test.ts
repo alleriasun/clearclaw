@@ -67,7 +67,7 @@ test("constructing a Slack channel does not start Slack I/O", () => {
   assert.equal((channel as unknown as { app?: unknown }).app, undefined);
 });
 
-test("createChat creates a private channel and invites authorized Slack users", async () => {
+test("projectChats.create creates a private channel and invites authorized Slack users", async () => {
   const { channel, calls } = channelWithClient([
     "slack:UONE",
     "tg:123",
@@ -75,14 +75,14 @@ test("createChat creates a private channel and invites authorized Slack users", 
     "slack:UONE",
   ]);
 
-  const chatId = await channel.createChat("slack:CMAIN", "Résumé Review!");
+  const chatId = await channel.projectChats.create("ClearClaw", "slack:CMAIN", "Résumé Review!");
 
   assert.equal(chatId, "slack:CPEER");
   assert.deepEqual(calls.create, [{ name: "resume-review", is_private: true }]);
   assert.deepEqual(calls.invite, [{ channel: "CPEER", users: "UONE,UTWO" }]);
 });
 
-test("createChat archives the new channel when inviting users fails", async () => {
+test("projectChats.create archives the new channel when inviting users fails", async () => {
   const inviteError = new Error("invite failed");
   const { channel, calls } = channelWithClient(
     ["slack:UONE"],
@@ -90,24 +90,24 @@ test("createChat archives the new channel when inviting users fails", async () =
   );
 
   await assert.rejects(
-    channel.createChat("slack:CMAIN", "peer"),
+    channel.projectChats.create("ClearClaw", "slack:CMAIN", "peer"),
     (err) => err === inviteError,
   );
   assert.deepEqual(calls.archive, [{ channel: "CPEER" }]);
 });
 
-test("closeChat treats an already archived channel as closed", async () => {
+test("projectChats.close treats an already archived channel as closed", async () => {
   const { channel, calls } = channelWithClient(
     ["slack:UONE"],
     { archive: async () => { throw { data: { error: "already_archived" } }; } },
   );
 
-  await channel.closeChat("slack:CPEER");
+  await channel.projectChats.close("slack:CPEER");
 
   assert.deepEqual(calls.archive, [{ channel: "CPEER" }]);
 });
 
-test("syncProjectSection creates a shared section with project chats and authorized users", async () => {
+test("projectChats.reconcile creates a shared section with Project chats and authorized users", async () => {
   const { channel, calls } = channelWithClient([
     "slack:UONE",
     "tg:123",
@@ -115,7 +115,7 @@ test("syncProjectSection creates a shared section with project chats and authori
     "slack:UONE",
   ]);
 
-  await channel.syncProjectSection("Résumé Review!", [
+  await channel.projectChats.reconcile("Résumé Review!", [
     "slack:DHOME",
     "slack:CMAIN",
     "slack:CPEER",
@@ -144,15 +144,18 @@ test("syncProjectSection creates a shared section with project chats and authori
   ]);
 });
 
-test("syncProjectSection ignores a project containing only a Slack DM", async () => {
+test("projectChats.reconcile treats a Project containing only a Slack DM as empty", async () => {
   const { channel, calls } = channelWithClient(["slack:UONE"]);
 
-  await channel.syncProjectSection("default", ["slack:DHOME"]);
+  await channel.projectChats.reconcile("default", ["slack:DHOME"]);
 
-  assert.deepEqual(calls.api, []);
+  assert.deepEqual(calls.api, [{
+    method: "usergroups.list",
+    args: { include_disabled: true },
+  }]);
 });
 
-test("syncProjectSection re-enables and updates its existing User Group", async () => {
+test("projectChats.reconcile re-enables and updates its existing User Group", async () => {
   const { channel, calls } = channelWithClient(
     ["slack:UONE"],
     {
@@ -169,7 +172,7 @@ test("syncProjectSection re-enables and updates its existing User Group", async 
     },
   );
 
-  await channel.syncProjectSection("ClearClaw", ["slack:CMAIN", "slack:CPEER"]);
+  await channel.projectChats.reconcile("ClearClaw", ["slack:CMAIN", "slack:CPEER"]);
 
   assert.deepEqual(calls.api, [
     {
@@ -198,7 +201,7 @@ test("syncProjectSection re-enables and updates its existing User Group", async 
   ]);
 });
 
-test("removeProjectSection disables its User Group", async () => {
+test("projectChats.reconcile disables its User Group for an empty chat set", async () => {
   const { channel, calls } = channelWithClient(
     ["slack:UONE"],
     {
@@ -215,7 +218,7 @@ test("removeProjectSection disables its User Group", async () => {
     },
   );
 
-  await channel.removeProjectSection("ClearClaw");
+  await channel.projectChats.reconcile("ClearClaw", []);
 
   assert.deepEqual(calls.api, [
     {
@@ -229,7 +232,7 @@ test("removeProjectSection disables its User Group", async () => {
   ]);
 });
 
-test("syncProjectSection leaves a human-owned handle alone and uses a stable fallback", async () => {
+test("projectChats.reconcile leaves a human-owned handle alone and uses a stable fallback", async () => {
   const { channel, calls } = channelWithClient(
     ["slack:UONE"],
     {
@@ -251,7 +254,7 @@ test("syncProjectSection leaves a human-owned handle alone and uses a stable fal
     },
   );
 
-  await channel.syncProjectSection("ClearClaw", ["slack:CMAIN"]);
+  await channel.projectChats.reconcile("ClearClaw", ["slack:CMAIN"]);
 
   assert.deepEqual(calls.api, [
     {
@@ -275,7 +278,7 @@ test("syncProjectSection leaves a human-owned handle alone and uses a stable fal
   ]);
 });
 
-test("removeProjectSection never disables a human-owned User Group", async () => {
+test("projectChats.reconcile never disables a human-owned User Group", async () => {
   const { channel, calls } = channelWithClient(
     ["slack:UONE"],
     {
@@ -291,7 +294,7 @@ test("removeProjectSection never disables a human-owned User Group", async () =>
     },
   );
 
-  await channel.removeProjectSection("ClearClaw");
+  await channel.projectChats.reconcile("ClearClaw", []);
 
   assert.deepEqual(calls.api, [{
     method: "usergroups.list",

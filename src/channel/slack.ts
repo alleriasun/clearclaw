@@ -4,7 +4,7 @@ import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
 import type { MessageElement } from "@slack/web-api/dist/types/response/ConversationsHistoryResponse.js";
 import log from "../logger.js";
-import type { Attachment, Channel, ChatType, Button, ButtonResponse, ReplyContext, SendFileOpts, MessageOpts, UserInfo } from "../types.js";
+import type { Attachment, Channel, ChatType, Button, ButtonResponse, ProjectChats, ReplyContext, SendFileOpts, MessageOpts, UserInfo } from "../types.js";
 
 interface SlackUserGroup {
   id?: string;
@@ -15,6 +15,11 @@ interface SlackUserGroup {
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
+  readonly projectChats: ProjectChats = {
+    create: (projectName, anchor, title) => this.createProjectChat(projectName, anchor, title),
+    close: (chatId) => this.closeProjectChat(chatId),
+    reconcile: (projectName, chatIds) => this.reconcileProjectChats(projectName, chatIds),
+  };
 
   private static readonly EMOJI_TO_SLACK: Record<string, string> = {
     "👍": "+1", "👎": "-1", "❤️": "heart", "🔥": "fire",
@@ -198,7 +203,7 @@ export class SlackChannel extends EventEmitter implements Channel {
   }
   ownsId(chatId: string): boolean { return chatId.startsWith("slack:"); }
 
-  async createChat(_anchor: string, title: string): Promise<string> {
+  private async createProjectChat(_projectName: string, _anchor: string, title: string): Promise<string> {
     const users = this.authorizedSlackUsers();
     if (users.length === 0) {
       throw new Error("Cannot create Slack peer: no authorized Slack users to invite");
@@ -226,7 +231,7 @@ export class SlackChannel extends EventEmitter implements Channel {
     return `slack:${channel}`;
   }
 
-  async closeChat(chatId: string): Promise<void> {
+  private async closeProjectChat(chatId: string): Promise<void> {
     try {
       await this.app.client.conversations.archive({
         channel: this.slackId(chatId),
@@ -238,20 +243,25 @@ export class SlackChannel extends EventEmitter implements Channel {
     }
   }
 
-  async syncProjectSection(projectName: string, chatIds: string[]): Promise<void> {
+  private async reconcileProjectChats(projectName: string, chatIds: string[]): Promise<void> {
     const channels = [...new Set(
       chatIds
         .map((id) => this.slackId(id))
         .filter((id) => id.startsWith("C") || id.startsWith("G")),
     )];
-    if (channels.length === 0) return;
+    const resolved = await this.projectUserGroup(projectName);
+    if (channels.length === 0) {
+      if (!resolved.group?.id || resolved.group.date_delete) return;
+      await this.app.client.apiCall("usergroups.disable", { usergroup: resolved.group.id });
+      this.userGroupsByHandle!.set(resolved.handle, { ...resolved.group, date_delete: Date.now() });
+      return;
+    }
     const users = this.authorizedSlackUsers();
     if (users.length === 0) {
       throw new Error("Cannot sync Slack project section: no authorized Slack users");
     }
 
     const description = slackUserGroupDescription(projectName);
-    const resolved = await this.projectUserGroup(projectName);
     const handle = resolved.handle;
     let group = resolved.group;
     if (!group) {
@@ -286,13 +296,6 @@ export class SlackChannel extends EventEmitter implements Channel {
       users: users.join(","),
     });
     this.userGroupsByHandle!.set(handle, { ...group, handle, description, date_delete: 0 });
-  }
-
-  async removeProjectSection(projectName: string): Promise<void> {
-    const { handle, group } = await this.projectUserGroup(projectName);
-    if (!group?.id || group.date_delete) return;
-    await this.app.client.apiCall("usergroups.disable", { usergroup: group.id });
-    this.userGroupsByHandle!.set(handle, { ...group, date_delete: Date.now() });
   }
 
   async sendMessage(
