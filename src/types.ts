@@ -6,6 +6,15 @@ export interface ChannelEvents {
   message: [msg: InboundMessage];
 }
 
+export interface ProjectChats {
+  /** Create a platform-native peer chat for a Project. Returns an opaque chat id. */
+  create(projectName: string, anchor: string, title: string): Promise<string>;
+  /** Close/archive a peer chat previously returned by create. */
+  close(chatId: string): Promise<void>;
+  /** Reconcile platform-native Project grouping. Empty chatIds removes that grouping. */
+  reconcile(projectName: string, chatIds: string[]): Promise<void>;
+}
+
 export interface Channel {
   name: string;
   connect(): Promise<void>;
@@ -29,6 +38,8 @@ export interface Channel {
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
   sendFile(chatId: string, buffer: Buffer, filename: string, opts?: SendFileOpts): Promise<void>;
   reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void>;
+  /** Platform-native Project chat lifecycle: Telegram topics, Slack channels + shared section. */
+  projectChats?: ProjectChats;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   emit<K extends keyof ChannelEvents>(event: K, ...args: ChannelEvents[K]): boolean;
@@ -161,6 +172,10 @@ export interface Workspace {
   behavior?: "assistant" | "relay";
   engine?: string;         // "claude-code" (default) | "kiro" | other ACP agent
   model?: string;          // per-workspace model override; unset = engine's own default
+  project?: string;        // the project this workspace belongs to, if any (set at onboarding; absent for legacy/non-forum workspaces)
+  description?: string;    // what this workspace is currently working on (its focus / peer brief)
+  spawnedFrom?: string;    // origin workspace if spawned via spin_out (a peer); absent = the project's main
+  owns_worktree?: boolean; // true = ClearClaw-created; false = caller-owned; absent = no worktree or legacy ownership unknown
 }
 
 // --- User identity (populated by channel from platform data) ---

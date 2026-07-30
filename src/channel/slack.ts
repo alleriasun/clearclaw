@@ -1,12 +1,25 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
 import type { MessageElement } from "@slack/web-api/dist/types/response/ConversationsHistoryResponse.js";
 import log from "../logger.js";
-import type { Attachment, Channel, ChatType, Button, ButtonResponse, ReplyContext, SendFileOpts, MessageOpts, UserInfo } from "../types.js";
+import type { Attachment, Channel, ChatType, Button, ButtonResponse, ProjectChats, ReplyContext, SendFileOpts, MessageOpts, UserInfo } from "../types.js";
+
+interface SlackUserGroup {
+  id?: string;
+  description?: string;
+  handle?: string;
+  date_delete?: number;
+}
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
+  readonly projectChats: ProjectChats = {
+    create: (projectName, anchor, title) => this.createProjectChat(projectName, anchor, title),
+    close: (chatId) => this.closeProjectChat(chatId),
+    reconcile: (projectName, chatIds) => this.reconcileProjectChats(projectName, chatIds),
+  };
 
   private static readonly EMOJI_TO_SLACK: Record<string, string> = {
     "👍": "+1", "👎": "-1", "❤️": "heart", "🔥": "fire",
@@ -15,32 +28,38 @@ export class SlackChannel extends EventEmitter implements Channel {
     "🙏": "pray", "💪": "muscle", "⚡": "zap", "🌟": "star2",
   };
 
-  private app: App;
+  private app!: App;
   private botToken: string;
+  private appToken: string;
   private botUserId: string | undefined;
   private isAuthorized: (userId: string) => boolean;
+  private authorizedUserIds: () => string[];
   private onUnauthorizedDM?: (chatId: string, user: UserInfo) => void;
   private pendingButtonCallbacks = new Map<string, (triggerId: string) => void>(); // actionId → resolve
   private pendingModalCallbacks = new Map<string, (text: string) => void>(); // modal callbackId → resolve
   private typingMessageTs = new Map<string, string>(); // chatId → ts of bot's "typing…" placeholder
   private userNameCache = new Map<string, string>();
+  private userGroupsByHandle: Map<string, SlackUserGroup> | undefined;
 
   constructor(
     botToken: string,
     appToken: string,
     isAuthorized: (userId: string) => boolean,
     onUnauthorizedDM?: (chatId: string, user: UserInfo) => void,
+    authorizedUserIds: () => string[] = () => [],
   ) {
     super();
     this.botToken = botToken;
+    this.appToken = appToken;
     this.isAuthorized = isAuthorized;
+    this.authorizedUserIds = authorizedUserIds;
     this.onUnauthorizedDM = onUnauthorizedDM;
-    this.app = new App({
-      token: botToken, appToken, socketMode: true, logLevel: LogLevel.ERROR,
-    });
   }
 
   async connect(): Promise<void> {
+    this.app = new App({
+      token: this.botToken, appToken: this.appToken, socketMode: true, logLevel: LogLevel.ERROR,
+    });
     this.app.event("message", async ({ event }) => {
       const subtype = (event as { subtype?: string }).subtype;
 
@@ -183,6 +202,102 @@ export class SlackChannel extends EventEmitter implements Channel {
     await this.app.stop();
   }
   ownsId(chatId: string): boolean { return chatId.startsWith("slack:"); }
+
+  private async createProjectChat(_projectName: string, _anchor: string, title: string): Promise<string> {
+    const users = this.authorizedSlackUsers();
+    if (users.length === 0) {
+      throw new Error("Cannot create Slack peer: no authorized Slack users to invite");
+    }
+
+    const result = await this.app.client.conversations.create({
+      name: slackChannelName(title),
+      is_private: true,
+    });
+    const channel = result.channel?.id;
+    if (!channel) throw new Error("Slack created a peer channel without returning its ID");
+
+    try {
+      await this.app.client.conversations.invite({
+        channel,
+        users: users.join(","),
+      });
+    } catch (err) {
+      await this.app.client.conversations.archive({ channel }).catch((archiveErr) => {
+        log.warn({ err: archiveErr }, "[channel] failed to archive Slack peer after invite failure");
+      });
+      throw err;
+    }
+
+    return `slack:${channel}`;
+  }
+
+  private async closeProjectChat(chatId: string): Promise<void> {
+    try {
+      await this.app.client.conversations.archive({
+        channel: this.slackId(chatId),
+      });
+    } catch (err) {
+      const code = slackErrorCode(err);
+      if (code === "already_archived" || code === "channel_not_found") return;
+      throw err;
+    }
+  }
+
+  private async reconcileProjectChats(projectName: string, chatIds: string[]): Promise<void> {
+    const channels = [...new Set(
+      chatIds
+        .map((id) => this.slackId(id))
+        .filter((id) => id.startsWith("C") || id.startsWith("G")),
+    )];
+    const resolved = await this.projectUserGroup(projectName);
+    if (channels.length === 0) {
+      if (!resolved.group?.id || resolved.group.date_delete) return;
+      await this.app.client.apiCall("usergroups.disable", { usergroup: resolved.group.id });
+      this.userGroupsByHandle!.set(resolved.handle, { ...resolved.group, date_delete: Date.now() });
+      return;
+    }
+    const users = this.authorizedSlackUsers();
+    if (users.length === 0) {
+      throw new Error("Cannot sync Slack project section: no authorized Slack users");
+    }
+
+    const description = slackUserGroupDescription(projectName);
+    const handle = resolved.handle;
+    let group = resolved.group;
+    if (!group) {
+      const created = await this.app.client.apiCall("usergroups.create", {
+        name: projectName,
+        handle,
+        description,
+        channels: channels.join(","),
+        enable_section: true,
+      }) as { usergroup?: SlackUserGroup };
+      group = created.usergroup;
+      if (!group?.id) throw new Error("Slack created a project section without returning its User Group ID");
+      group = { ...group, handle, description };
+      this.userGroupsByHandle!.set(handle, group);
+    } else {
+      if (!group.id) throw new Error("Slack returned a project User Group without its ID");
+      if (group.date_delete) {
+        await this.app.client.apiCall("usergroups.enable", { usergroup: group.id });
+      }
+      await this.app.client.apiCall("usergroups.update", {
+        usergroup: group.id,
+        name: projectName,
+        handle,
+        description,
+        channels: channels.join(","),
+        enable_section: true,
+      });
+    }
+
+    await this.app.client.apiCall("usergroups.users.update", {
+      usergroup: group.id,
+      users: users.join(","),
+    });
+    this.userGroupsByHandle!.set(handle, { ...group, handle, description, date_delete: 0 });
+  }
+
   async sendMessage(
     chatId: string,
     text: string,
@@ -471,6 +586,45 @@ export class SlackChannel extends EventEmitter implements Channel {
     return chatId.replace(/^slack:/, "");
   }
 
+  private authorizedSlackUsers(): string[] {
+    return [...new Set(
+      this.authorizedUserIds()
+        .filter((id) => id.startsWith("slack:"))
+        .map((id) => id.slice("slack:".length))
+        .filter(Boolean),
+    )];
+  }
+
+  private async userGroupByHandle(handle: string): Promise<SlackUserGroup | undefined> {
+    if (!this.userGroupsByHandle) {
+      const result = await this.app.client.apiCall("usergroups.list", {
+        include_disabled: true,
+      }) as { usergroups?: SlackUserGroup[] };
+      this.userGroupsByHandle = new Map(
+        (result.usergroups ?? [])
+          .filter((group): group is SlackUserGroup & { handle: string } => !!group.handle)
+          .map((group) => [group.handle, group]),
+      );
+    }
+    return this.userGroupsByHandle.get(handle);
+  }
+
+  private async projectUserGroup(projectName: string): Promise<{ handle: string; group?: SlackUserGroup }> {
+    const description = slackUserGroupDescription(projectName);
+    const baseHandle = slackUserGroupHandle(projectName);
+    const baseGroup = await this.userGroupByHandle(baseHandle);
+    if (!baseGroup || baseGroup.description === description) {
+      return { handle: baseHandle, group: baseGroup };
+    }
+
+    const collisionHandle = slackUserGroupCollisionHandle(projectName);
+    const collisionGroup = await this.userGroupByHandle(collisionHandle);
+    if (!collisionGroup || collisionGroup.description === description) {
+      return { handle: collisionHandle, group: collisionGroup };
+    }
+    throw new Error(`Slack User Group handles "${baseHandle}" and "${collisionHandle}" are owned by other groups`);
+  }
+
   /** Download a file from Slack using bot token auth. */
   private async downloadFile(url: string): Promise<Buffer> {
     const resp = await fetch(url, {
@@ -528,6 +682,47 @@ function markdownBlock(text: string): KnownBlock[] {
 // The markdown block caps at 12,000 chars. We split at this limit so each chunk
 // fits the block; the text fallback (notification preview) can safely be longer.
 const MAX_TEXT = 12000;
+
+function slackChannelName(title: string): string {
+  const name = title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, 80)
+    .replace(/[-_]+$/g, "");
+  if (!name) throw new Error(`Cannot derive a valid Slack channel name from "${title}"`);
+  return name;
+}
+
+function slackUserGroupHandle(projectName: string): string {
+  const slug = slackChannelName(projectName)
+    .slice(0, 77)
+    .replace(/[-_]+$/g, "");
+  return `cc-${slug}`;
+}
+
+function slackUserGroupCollisionHandle(projectName: string): string {
+  const hash = createHash("sha256").update(projectName).digest("hex").slice(0, 6);
+  const slug = slackChannelName(projectName)
+    .slice(0, 70)
+    .replace(/[-_]+$/g, "");
+  return `cc-${slug}-${hash}`;
+}
+
+function slackUserGroupDescription(projectName: string): string {
+  const hash = createHash("sha256").update(projectName).digest("hex").slice(0, 16);
+  return `Managed by ClearClaw (${hash})`;
+}
+
+function slackErrorCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null || !("data" in err)) return undefined;
+  const data = (err as { data?: unknown }).data;
+  if (typeof data !== "object" || data === null || !("error" in data)) return undefined;
+  const code = (data as { error?: unknown }).error;
+  return typeof code === "string" ? code : undefined;
+}
 
 function splitMessage(text: string): string[] {
   if (text.length <= MAX_TEXT) return [text];

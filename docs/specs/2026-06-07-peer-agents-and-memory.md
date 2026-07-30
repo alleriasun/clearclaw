@@ -36,6 +36,8 @@ Decisions, each against the road not taken:
 
 - Lifespan and isolation are independent dials, both chosen by the human: persistent or ephemeral, main checkout or worktree. A long-lived worktree agent for a series of small tasks is a valid quadrant, not an anomaly.
 
+- Spawned peers live in human-provisioned spawn surfaces. Bots cannot create Telegram chats, so the human creates a forum-enabled group once and registers it as a spawn surface bound to a scope (specific workspaces, or default catch-all); the bot then mints a topic per spawned peer inside it. The registration is a manually curated routing rule — the same trust model as workspace creation: humans provision surfaces, the bot populates them. The surface registry and resolution logic are platform-neutral; what an "anchor" means lives inside each Channel implementation (Telegram: forum group + topics; Slack: no container needed — bots create channels directly, so the anchor degenerates to a naming convention). Rejected a single global "workers" forum: the binding model subsumes it (one default surface) while allowing per-repo or per-concern forums.
+
 - Do not model "Task." Three layers already cover context: the session is working context (persisted by the engine, per cwd), git is the durable record, and the channel transcript is the human-readable log. A first-class Task entity would duplicate these and rot.
 
 ## Part 2: Shared memory

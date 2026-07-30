@@ -53,13 +53,32 @@ export interface ScheduleEntry {
   createdAt: number;
 }
 
+export interface PendingSpinOut {
+  id: string;             // short id, shown to the user and used to claim
+  fromWorkspace: string;  // originating workspace name (becomes the peer origin)
+  name: string;           // suggested workspace name
+  brief: string;          // distilled handoff, delivered as the new workspace's first turn
+  suggestedCwd?: string;
+  engine?: string;        // chosen engine override, or inherited explicit engine
+  model?: string;         // chosen/inherited model override when supported by the engine
+  createdAt: number;      // epoch ms
+}
+
+export interface Project {
+  name: string;           // registry key; onboarding initially matches the main workspace name
+  description: string;    // what the project is about — shared context across its workspaces
+  main_workspace: string; // the trunk workspace; its chat is the spawn container, its cwd the repo root
+}
+
 interface ConfigData {
   channel?: ChannelConfig;
   engines?: EngineEntry[];
   authorizedUsers: AuthorizedUser[];
   pendingPairings: PendingPairing[];
+  pendingSpinOuts: PendingSpinOut[];
   workspaces: Workspace[];
   schedules: ScheduleEntry[];
+  projects: Project[];
 }
 
 // --- Pairing constants ---
@@ -186,8 +205,10 @@ export class Config {
       engines: raw.engines as EngineEntry[] | undefined,
       authorizedUsers: (raw.authorizedUsers ?? []) as AuthorizedUser[],
       pendingPairings: (raw.pendingPairings ?? []) as PendingPairing[],
+      pendingSpinOuts: (raw.pendingSpinOuts ?? []) as PendingSpinOut[],
       workspaces: (raw.workspaces ?? []) as Workspace[],
       schedules: (raw.schedules ?? []) as ScheduleEntry[],
+      projects: (raw.projects ?? []) as Project[],
     };
   }
 
@@ -230,6 +251,14 @@ export class Config {
 
   listUsers(): AuthorizedUser[] {
     return this.read().authorizedUsers;
+  }
+
+  /** All authorized IDs, including environment-configured and pairing-approved users. */
+  listAuthorizedUserIds(): string[] {
+    return [...new Set([
+      ...this.envUserIds,
+      ...this.listUsers().map((user) => user.id),
+    ])];
   }
 
   /** env var IDs (in-memory) + pairing-approved users (hot-reload from disk) */
@@ -306,6 +335,15 @@ export class Config {
     this.write(data);
   }
 
+  removeWorkspace(name: string): Workspace | undefined {
+    const data = this.read();
+    const idx = data.workspaces.findIndex((w) => w.name === name);
+    if (idx < 0) return undefined;
+    const [removed] = data.workspaces.splice(idx, 1);
+    this.write(data);
+    return removed;
+  }
+
   /** Persists the session ID and, when known, the model resolved for it — same write, so a fix for one is never a fix for the other. */
   setSession(name: string, sessionId: string, model?: string): void {
     const data = this.read();
@@ -342,6 +380,51 @@ export class Config {
       ws.behavior = behavior;
       this.write(data);
     }
+  }
+
+  // --- Spin-outs ---
+
+  addSpinOut(entry: PendingSpinOut): void {
+    const data = this.read();
+    data.pendingSpinOuts.push(entry);
+    this.write(data);
+  }
+
+  listSpinOuts(): PendingSpinOut[] {
+    return this.read().pendingSpinOuts;
+  }
+
+  removeSpinOut(id: string): boolean {
+    const data = this.read();
+    const idx = data.pendingSpinOuts.findIndex((s) => s.id === id);
+    if (idx < 0) return false;
+    data.pendingSpinOuts.splice(idx, 1);
+    this.write(data);
+    return true;
+  }
+
+  // --- Projects ---
+
+  addProject(project: Project): void {
+    const data = this.read();
+    const idx = data.projects.findIndex((p) => p.name === project.name);
+    if (idx >= 0) data.projects[idx] = project;
+    else data.projects.push(project);
+    this.write(data);
+  }
+
+  listProjects(): Project[] {
+    return this.read().projects;
+  }
+
+  projectByName(name: string): Project | undefined {
+    return this.read().projects.find((p) => p.name === name);
+  }
+
+  removeProject(name: string): void {
+    const data = this.read();
+    data.projects = data.projects.filter((p) => p.name !== name);
+    this.write(data);
   }
 
   // --- Schedules ---

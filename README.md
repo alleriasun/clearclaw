@@ -17,7 +17,7 @@ ClearClaw reuses what the CLI already has:
 
 ## What It Does
 
-- Routes messages between your phone and your coding agent (Telegram today, Slack planned)
+- Routes messages between your phone and your coding agent through Telegram or Slack
 - Permission prompts with diffs, tool status, and feedback — like the terminal, on your phone
 - Maps chat groups to project workspaces — each group = a working directory
 - Personal assistant workspace for non-project conversations
@@ -42,6 +42,18 @@ npx clearclaw
 Or install globally: `npm install -g clearclaw`
 
 Optional: `PERMISSION_MODE` (`default` | `acceptEdits` | `bypassPermissions` | `plan`), `CLEARCLAW_HOME` (default `~/.clearclaw`).
+
+For Slack, set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and Slack-prefixed
+`ALLOWED_USER_IDS` (for example, `slack:U12345`). Private peer-channel spawning
+also requires the `groups:write` bot-token scope; reinstall the app after adding
+the scope. Shared project sidebar sections require a paid Slack plan, the
+`usergroups:read` and `usergroups:write` bot-token scopes, and workspace User
+Group permissions set to allow everyone to manage them. Reinstall the app after
+changing scopes.
+
+Telegram peer topics require Topics to be enabled manually on a supergroup and
+the bot to be an admin with Manage Topics. Private-chat topics require Threaded
+Mode to be enabled for the bot in BotFather.
 
 ## Architecture
 

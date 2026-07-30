@@ -80,6 +80,22 @@
 - [ ] Idle housekeeping (auto-tidy memory/context during inactivity)
 - [ ] `/schedule` command for schedule inspection
 
+## Peer Agents
+
+See `docs/specs/2026-06-13-projects-and-peer-spawning.md` for the current Project / peer-spawning model. (The `2026-06-07` spec is the original point-in-time design, kept for history.) Eventually fold the canonical model into `ARCHITECTURE.md` so docs stop depending on dated specs.
+
+- [x] Phase 1: peer messaging — `message_peer` cross-workspace handoff over typed `MessageOrigin`
+- [x] Phase 1b: spin-out — implemented + verified end-to-end on `feat/spin-out` (`docs/plans/2026-06-11-spin-out.md`): `spin_out` registration, onboarding claim, brief delivery, and `message_peer` round-trip all confirmed 2026-06-13. Pending merge to main.
+- [x] Phase 1c: auto-worktree peers — built + verified end to end on `feat/spin-out` (composite `tg:{chat}:{thread}` ids, `projectChats` lifecycle, universal **Project** model `{ name, description, main_workspace }` with per-workspace `project`/`about`/`spawnedFrom`, worktree helpers with rollback + branch cleanup, one-tap `spin_out` with `into` targeting, `workspace_archive` teardown, `project_update`/`workspace_update`). Pending merge to main (PR). Spec: `docs/specs/2026-06-13-projects-and-peer-spawning.md`; plan: `docs/plans/2026-06-12-auto-worktree-peers.md`
+- [x] Slack Project chat lifecycle — private channels via `conversations.create`/`invite`/`archive` with `groups:write`; flat channels, no container tier (follow-on to 1c)
+- [x] Slack Project sidebar sections — one shared section per Project via a `cc-<project-slug>` User Group; startup/spawn/archive reconciliation keeps main + live peer channels in sync
+- [ ] Update `ARCHITECTURE.md` for the Project model + peer spawning (its own PR): it predates Projects — add a Project concept + main/peer/spawnedFrom vocabulary + the new tools, fix the stale Workspace field list, and correct the "SQLite" storage claim (the store is `config.json`)
+- [x] Designate an existing workspace into a project (manual/opt-in): `project_create` establishes the Project/main relationship for an unprojected workspace; it refuses silent reassignment
+- [x] Per-peer runtime selection: `spin_out` accepts `engine` and Claude Code `model` overrides, otherwise inheriting the Project main's compatible runtime settings; pending/manual claims preserve the choice
+- [ ] Spin-out v2: thin relay primitives + agent-improvised prep via a skill — move worktree/cwd/project judgment out of the `spin_out` tool (it kept tripping cwd/worktree edges; minimal fix landed in PR #31). Spec: `docs/specs/2026-06-20-spin-out-skill-redesign.md`. Folds in: manual claim path stops `mkdir`-ing a bare dir. (Branch naming already moved to conventional/agent-chosen with naming-agnostic cleanup in the minimal fix.)
+- [ ] Later: extract built-in worktree logic from ClearClaw entirely, so callers always pre-create the worktree and pass `cwd`. Keep the built-in default for plain git repos until then.
+- [ ] Phase 2: shared memory (STM/LTM) — per spec Part 2. 1b/1c landed; context seam in place (`Project.description` + `Workspace.description`, editable via `project_update`/`workspace_update`)
+
 ## Agent Situational Awareness
 
 - [ ] Wire `chatType` through Telegram and Slack channels — `chatType` is on `InboundMessage` but not yet populated by either channel

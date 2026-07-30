@@ -149,6 +149,7 @@ Claude Code stores sessions at `~/.claude/projects/{encoded-cwd-path}/sessions/`
 - **Session commands:** `/new` clears the stored session ID. Default behavior is resume.
 - **Engine:** `/engine` switches the workspace's engine and clears the stored session ID (session IDs are engine-private — a Claude session means nothing to Kiro). Handled natively rather than via the `workspace_update` tool, so it still works when the current engine is broken.
 - **Model:** `/model <name>` sets a per-workspace model override, persisted in workspace config; `/model` alone shows the current one. Unset means the engine picks its own default. The session ID and resolved model are captured from the engine's first message, not its last, so cancelling mid-turn doesn't lose either.
+- **Peer runtime:** `spin_out` inherits the Project main's engine and compatible model by default. Callers may select another engine or Claude Code model per peer. Manual spin-out claims preserve that runtime choice.
 - **Turn isolation:** One message at a time per workspace. Concurrent turns across different workspaces are allowed.
 
 ## User Identity
@@ -214,6 +215,11 @@ Both channels implement the same `Channel` interface but differ in platform spec
 | **Buttons** | Inline keyboard (callback queries) | Block Kit action buttons |
 | **Message handles** | `message_id` (number as string) | `ts` (timestamp string) |
 | **Topic/description** | `setDescription` (groups) | `setTopic` (channels), auto-deletes system messages |
+| **Project grouping** | Forum group with peer topics | Shared sidebar section backed by a User Group |
+
+Both adapters expose this through the optional `projectChats` lifecycle: `create` and `close` manage one peer chat, while `reconcile` validates or updates the Project-wide chat set. Telegram validates that group Projects use one forum supergroup because bots cannot enable Topics, or that private chats have BotFather Threaded Mode enabled. Slack reconciles the shared User Group section.
+
+Regular workspace turns expose `project_create` for legacy workspaces that have no Project. It creates a Project with an existing unprojected workspace as main and refuses silent reassignment. This keeps the required Project/main relationship intact while removing manual `config.json` edits.
 
 **Slack dual-field note:** Slack messages send both `text` (plain fallback for notifications/accessibility) and `blocks` (rich-rendered Block Kit). Both currently receive the same mrkdwn-formatted content. Slack renders mrkdwn in both fields, so there's no formatting mismatch for text content. If we ever need divergent formatting (e.g., stripping markdown from the `text` fallback), the split point is in `sendMessage` / `editMessage`.
 
@@ -231,6 +237,8 @@ Environment variables:
 **Channel (one required):**
 - `TELEGRAM_BOT_TOKEN` — Telegram bot token (mutually exclusive with Slack)
 - `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` — Slack bot + app-level token for Socket Mode. If both Slack and Telegram tokens are set, Slack takes priority.
+  - Slack peer spawning creates private channels. Add the `groups:write` bot-token scope under **OAuth & Permissions**, then reinstall the app to the workspace. ClearClaw invites every authorized Slack user to each spawned peer and archives the channel with the peer workspace.
+  - Slack mirrors each Project into a shared sidebar section named after the Project, with handle `cc-<project-slug>` (plus a stable hash suffix when that handle is occupied). ClearClaw marks the User Groups it creates and never updates or disables an unmarked group. This requires a paid plan, `usergroups:read` and `usergroups:write`, and workspace User Group permissions that allow everyone to manage groups. The section contains the main and all live peer channels, and is reconciled at startup, spawn, and archive.
 
 **General:**
 - `ALLOWED_USER_IDS` (required) — comma-separated, channel-prefixed user IDs (e.g. `tg:12345,slack:U67890`). Trust boundary. `ALLOWED_USER_ID` accepted as single-user alias.
