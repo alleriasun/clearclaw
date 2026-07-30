@@ -59,11 +59,13 @@ export interface PendingSpinOut {
   name: string;           // suggested workspace name
   brief: string;          // distilled handoff, delivered as the new workspace's first turn
   suggestedCwd?: string;
+  engine?: string;        // chosen engine override, or inherited explicit engine
+  model?: string;         // chosen/inherited model override when supported by the engine
   createdAt: number;      // epoch ms
 }
 
 export interface Project {
-  name: string;           // registry key (matches its main workspace's name)
+  name: string;           // registry key; onboarding initially matches the main workspace name
   description: string;    // what the project is about — shared context across its workspaces
   main_workspace: string; // the trunk workspace; its chat is the spawn container, its cwd the repo root
 }

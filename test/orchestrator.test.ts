@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import type { Config, PendingSpinOut, Project } from "../src/config.js";
 import { Orchestrator } from "../src/orchestrator.js";
-import type { Channel, Workspace } from "../src/types.js";
+import type { Channel, Engine, Workspace } from "../src/types.js";
 import { createWorktree, removeWorktree } from "../src/worktree.js";
 
 interface ToolResult {
@@ -29,6 +29,7 @@ interface Harness {
   config: Config;
   orchestrator: Orchestrator;
   pendingSpinOuts: PendingSpinOut[];
+  projects: Project[];
   tools: TestTool[];
   workspaces: Workspace[];
 }
@@ -77,6 +78,7 @@ function makeHarness(options: {
   } as unknown as Channel;
   const config = {
     homeWorkspacePath: "/tmp/clearclaw-home",
+    defaultEngine: "claude-code",
     workspaceByChat: (chatId: string) => workspaces.find((workspace) => workspace.chat_id === chatId),
     workspaceByName: (name: string) => workspaces.find((workspace) => workspace.name === name),
     listWorkspaces: () => workspaces,
@@ -91,13 +93,29 @@ function makeHarness(options: {
     },
     listProjects: () => projects,
     projectByName: (name: string) => projects.find((project) => project.name === name),
+    addProject: (project: Project) => {
+      const index = projects.findIndex((candidate) => candidate.name === project.name);
+      if (index >= 0) projects[index] = project;
+      else projects.push(project);
+    },
     removeProject: (name: string) => {
       const index = projects.findIndex((project) => project.name === name);
       return index >= 0 ? projects.splice(index, 1)[0] : undefined;
     },
     addSpinOut: (entry: PendingSpinOut) => pendingSpinOuts.push(entry),
+    listSpinOuts: () => pendingSpinOuts,
+    removeSpinOut: (id: string) => {
+      const index = pendingSpinOuts.findIndex((entry) => entry.id === id);
+      if (index < 0) return false;
+      pendingSpinOuts.splice(index, 1);
+      return true;
+    },
   } as unknown as Config;
-  const orchestrator = new Orchestrator({ channel, engines: new Map(), config });
+  const engines = new Map([
+    ["claude-code", { name: "claude-code" }],
+    ["kiro", { name: "kiro" }],
+  ]) as Map<string, Engine>;
+  const orchestrator = new Orchestrator({ channel, engines, config });
   orchestrator.deliverToWorkspace = () => true;
   const tools = (orchestrator as unknown as {
     buildMcpTools(
@@ -106,7 +124,7 @@ function makeHarness(options: {
       turnState: { staySilent: boolean; replyToMessageId: string | null },
     ): TestTool[];
   }).buildMcpTools("test:self", "relay", { staySilent: false, replyToMessageId: null });
-  return { channelCalls, config, orchestrator, pendingSpinOuts, tools, workspaces };
+  return { channelCalls, config, orchestrator, pendingSpinOuts, projects, tools, workspaces };
 }
 
 function workspace(overrides: Partial<Workspace> = {}): Workspace {
@@ -123,6 +141,23 @@ function tool(harness: Harness, name: string): TestTool {
   const found = harness.tools.find((candidate) => candidate.name === name);
   assert.ok(found, `tool ${name} should exist`);
   return found;
+}
+
+function taskTools(harness: Harness, chatId = "test:new"): TestTool[] {
+  (harness.orchestrator as unknown as {
+    tasks: Map<string, { sessionId: string | null; cwd: string; prompt: string }>;
+  }).tasks.set(chatId, {
+    sessionId: null,
+    cwd: "/tmp/clearclaw-home",
+    prompt: "onboarding",
+  });
+  return (harness.orchestrator as unknown as {
+    buildMcpTools(
+      chatId: string,
+      behavior: "assistant" | "relay",
+      turnState: { staySilent: boolean; replyToMessageId: string | null },
+    ): TestTool[];
+  }).buildMcpTools(chatId, "assistant", { staySilent: false, replyToMessageId: null });
 }
 
 function initRepo(): string {
@@ -145,6 +180,159 @@ test("spin_out documents strict external cwd ownership", () => {
   assert.match(spinOut.description, /path must already exist/);
   assert.match(spinOut.description, /never create or remove it/);
   assert.doesNotMatch(spinOut.description, /forum/);
+});
+
+test("spin_out can override the peer engine without inheriting another engine's model", async () => {
+  const externalCwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-engine-spawn-"));
+  const main = workspace({
+    cwd: externalCwd,
+    project: "ClearClaw",
+    engine: "claude-code",
+    model: "claude-opus-4-6",
+  });
+  const harness = makeHarness({
+    workspaces: [main],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+  });
+
+  try {
+    await tool(harness, "spin_out").handler({
+      name: "peer",
+      brief: "test brief",
+      cwd: externalCwd,
+      engine: "kiro",
+    });
+
+    const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+    assert.equal(peer?.engine, "kiro");
+    assert.equal(peer?.model, undefined);
+  } finally {
+    fs.rmSync(externalCwd, { recursive: true, force: true });
+  }
+});
+
+test("spin_out can override the peer model and otherwise inherits runtime settings", async () => {
+  const externalCwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-model-spawn-"));
+  const main = workspace({
+    cwd: externalCwd,
+    project: "ClearClaw",
+    behavior: "assistant",
+    engine: "claude-code",
+    model: "claude-sonnet-4-6",
+  });
+  const harness = makeHarness({
+    workspaces: [main],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+  });
+
+  try {
+    await tool(harness, "spin_out").handler({
+      name: "peer",
+      brief: "test brief",
+      cwd: externalCwd,
+      model: "claude-opus-4-6",
+    });
+
+    const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+    assert.equal(peer?.behavior, "assistant");
+    assert.equal(peer?.engine, "claude-code");
+    assert.equal(peer?.model, "claude-opus-4-6");
+  } finally {
+    fs.rmSync(externalCwd, { recursive: true, force: true });
+  }
+});
+
+test("spin_out inherits the Project main's model by default", async () => {
+  const externalCwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-inherit-model-"));
+  const main = workspace({
+    cwd: externalCwd,
+    project: "ClearClaw",
+    engine: "claude-code",
+    model: "claude-sonnet-4-6",
+  });
+  const harness = makeHarness({
+    workspaces: [main],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+  });
+
+  try {
+    await tool(harness, "spin_out").handler({
+      name: "peer",
+      brief: "test brief",
+      cwd: externalCwd,
+    });
+
+    const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+    assert.equal(peer?.engine, "claude-code");
+    assert.equal(peer?.model, "claude-sonnet-4-6");
+  } finally {
+    fs.rmSync(externalCwd, { recursive: true, force: true });
+  }
+});
+
+test("spin_out drops a stale model from an engine without model support", async () => {
+  const externalCwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-stale-model-"));
+  const main = workspace({
+    cwd: externalCwd,
+    project: "ClearClaw",
+    engine: "kiro",
+    model: "claude-opus-4-6",
+  });
+  const harness = makeHarness({
+    workspaces: [main],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+  });
+
+  try {
+    await tool(harness, "spin_out").handler({
+      name: "peer",
+      brief: "test brief",
+      cwd: externalCwd,
+    });
+
+    const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+    assert.equal(peer?.engine, "kiro");
+    assert.equal(peer?.model, undefined);
+  } finally {
+    fs.rmSync(externalCwd, { recursive: true, force: true });
+  }
+});
+
+test("spin_out rejects a model override for an engine without model support", async () => {
+  const main = workspace({ project: "ClearClaw", engine: "kiro" });
+  const harness = makeHarness({
+    workspaces: [main],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+  });
+
+  const result = await tool(harness, "spin_out").handler({
+    name: "peer",
+    brief: "test brief",
+    engine: "kiro",
+    model: "opus",
+  });
+
+  assert.match(result.content[0]!.text, /Model override isn't supported for the "kiro" engine/);
+  assert.deepEqual(harness.channelCalls.createProjectChat, []);
+});
+
+test("pending spin_out preserves its chosen engine and model", async () => {
+  const self = workspace({ project: "ClearClaw" });
+  const harness = makeHarness({
+    workspaces: [self],
+    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+    projectChats: false,
+  });
+
+  await tool(harness, "spin_out").handler({
+    name: "peer",
+    brief: "test brief",
+    engine: "claude-code",
+    model: "claude-opus-4-6",
+  });
+
+  assert.equal(harness.pendingSpinOuts[0]?.engine, "claude-code");
+  assert.equal(harness.pendingSpinOuts[0]?.model, "claude-opus-4-6");
 });
 
 test("spin_out rejects a missing explicit cwd without creating a chat or directory", async () => {
@@ -467,6 +655,133 @@ test("Project reconciliation skips live Projects with no channel-owned chats", a
   }).reconcileProjectChats("Foreign");
 
   assert.deepEqual(harness.channelCalls.reconcileProjectChats, []);
+});
+
+test("project_create adopts an unprojected workspace as Project main", async () => {
+  const self = workspace();
+  const harness = makeHarness({ workspaces: [self] });
+
+  const result = await tool(harness, "project_create").handler({
+    name: "ClearClaw",
+    description: "ClearClaw development",
+  });
+
+  assert.match(result.content[0]!.text, /Project "ClearClaw" created with "self" as its main workspace/);
+  assert.equal(harness.workspaces[0]?.project, "ClearClaw");
+  assert.deepEqual(harness.projects, [{
+    name: "ClearClaw",
+    description: "ClearClaw development",
+    main_workspace: "self",
+  }]);
+  assert.deepEqual(harness.channelCalls.reconcileProjectChats, [{
+    projectName: "ClearClaw",
+    chatIds: ["test:self"],
+  }]);
+});
+
+test("spin_out sees a Project created earlier in the same turn", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-create-then-spawn-"));
+  const self = workspace({ cwd });
+  const harness = makeHarness({ workspaces: [self] });
+
+  try {
+    await tool(harness, "project_create").handler({
+      name: "ClearClaw",
+      description: "ClearClaw development",
+    });
+    await tool(harness, "spin_out").handler({
+      name: "peer",
+      brief: "test brief",
+      cwd,
+    });
+
+    const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+    assert.equal(peer?.project, "ClearClaw");
+    assert.equal(harness.pendingSpinOuts.length, 0);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("project_create refuses to silently reassign a workspace", async () => {
+  const self = workspace({ project: "Existing" });
+  const harness = makeHarness({
+    workspaces: [self],
+    projects: [{ name: "Existing", description: "existing", main_workspace: "self" }],
+  });
+
+  const result = await tool(harness, "project_create").handler({
+    name: "Other",
+    description: "other",
+  });
+
+  assert.match(result.content[0]!.text, /already belongs to project "Existing"/);
+  assert.equal(harness.projects.some((project) => project.name === "Other"), false);
+});
+
+test("workspace_create inherits engine and model from a claimed pending spin-out", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-pending-runtime-"));
+  const harness = makeHarness({ workspaces: [workspace()] });
+  harness.pendingSpinOuts.push({
+    id: "pending1",
+    fromWorkspace: "self",
+    name: "peer",
+    brief: "test brief",
+    suggestedCwd: cwd,
+    engine: "claude-code",
+    model: "claude-opus-4-6",
+    createdAt: Date.now(),
+  });
+  const workspaceCreate = taskTools(harness).find((candidate) => candidate.name === "workspace_create");
+  assert.ok(workspaceCreate);
+
+  try {
+    await workspaceCreate.handler({
+      name: "peer",
+      cwd,
+      description: "test brief",
+      spin_out_id: "pending1",
+    });
+
+    const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+    assert.equal(peer?.engine, "claude-code");
+    assert.equal(peer?.model, "claude-opus-4-6");
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("workspace_create drops a pending model when its engine is overridden", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-pending-engine-"));
+  const harness = makeHarness({ workspaces: [workspace()] });
+  harness.pendingSpinOuts.push({
+    id: "pending1",
+    fromWorkspace: "self",
+    name: "peer",
+    brief: "test brief",
+    suggestedCwd: cwd,
+    engine: "claude-code",
+    model: "claude-opus-4-6",
+    createdAt: Date.now(),
+  });
+  const workspaceCreate = taskTools(harness).find((candidate) => candidate.name === "workspace_create");
+  assert.ok(workspaceCreate);
+
+  try {
+    await workspaceCreate.handler({
+      name: "peer",
+      cwd,
+      description: "test brief",
+      engine: "kiro",
+      spin_out_id: "pending1",
+    });
+
+    const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+    assert.equal(peer?.engine, "kiro");
+    assert.equal(peer?.model, undefined);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("pending-brief fallback reports why one-tap spawning is unavailable", async () => {

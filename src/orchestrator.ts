@@ -199,6 +199,7 @@ export class Orchestrator {
     mainWs: Workspace,
     projectChats: ProjectChats,
     args: { name: string; brief: string; cwd?: string; branch?: string },
+    runtime: { engine?: string; model?: string },
   ) {
     if (this.config.workspaceByName(args.name)) {
       return { content: [{ type: "text" as const, text: `Workspace "${args.name}" already exists. Pick another name.` }] };
@@ -232,7 +233,8 @@ export class Orchestrator {
         chat_id: createdChatId,
         current_session_id: null,
         behavior: mainWs.behavior,
-        engine: mainWs.engine,
+        engine: runtime.engine,
+        model: runtime.model,
         project: project.name,
         description: args.brief,
         spawnedFrom: fromName,
@@ -262,6 +264,7 @@ export class Orchestrator {
     fromName: string,
     args: { name: string; brief: string; cwd?: string },
     fallbackReason: string,
+    runtime: { engine?: string; model?: string },
   ) {
     const entry: PendingSpinOut = {
       id: crypto.randomUUID().slice(0, 8),
@@ -269,12 +272,41 @@ export class Orchestrator {
       name: args.name,
       brief: args.brief,
       suggestedCwd: args.cwd,
+      engine: runtime.engine,
+      model: runtime.model,
       createdAt: Date.now(),
     };
     this.config.addSpinOut(entry);
-    log.info("[tool] spin_out: %s registered from %s; pending-brief fallback because %s", entry.id, fromName, fallbackReason);
-    await this.channel.sendMessage(chatId, `🌱 Spin-out "${args.name}" registered (${entry.id}) because ${fallbackReason}. Create a new group, add me to it, and I'll offer to pick this up there.`);
-    return { content: [{ type: "text" as const, text: `Spin-out ${entry.id} registered because ${fallbackReason}. The user creates a new group chat and adds the bot; onboarding there claims the brief.` }] };
+    const effectiveEngine = runtime.engine ?? this.config.defaultEngine;
+    const runtimeLabel = runtime.model ? `${effectiveEngine} / ${runtime.model}` : effectiveEngine;
+    log.info("[tool] spin_out: %s registered from %s using %s; pending-brief fallback because %s",
+      entry.id, fromName, runtimeLabel, fallbackReason);
+    await this.channel.sendMessage(chatId, `🌱 Spin-out "${args.name}" registered (${entry.id}) using ${runtimeLabel} because ${fallbackReason}. Create a new group, add me to it, and I'll offer to pick this up there.`);
+    return { content: [{ type: "text" as const, text: `Spin-out ${entry.id} registered using ${runtimeLabel} because ${fallbackReason}. The user creates a new group chat and adds the bot; onboarding there claims the brief.` }] };
+  }
+
+  private peerRuntime(
+    baseWorkspace: Workspace | undefined,
+    requested: { engine?: string; model?: string },
+  ): { runtime?: { engine?: string; model?: string }; error?: string } {
+    const baseEngine = baseWorkspace?.engine ?? this.config.defaultEngine;
+    const engine = requested.engine ?? baseWorkspace?.engine;
+    const effectiveEngine = engine ?? this.config.defaultEngine;
+    if (!this.engines.has(effectiveEngine)) {
+      return { error: `Unknown engine "${effectiveEngine}". Available: ${[...this.engines.keys()].join(", ")}` };
+    }
+    if (requested.model && effectiveEngine !== "claude-code") {
+      return { error: `Model override isn't supported for the "${effectiveEngine}" engine.` };
+    }
+    return {
+      runtime: {
+        engine,
+        model: requested.model
+          ?? (effectiveEngine === "claude-code" && effectiveEngine === baseEngine
+            ? baseWorkspace?.model
+            : undefined),
+      },
+    };
   }
 
   /** Effective behavior: tasks→assistant, workspace→explicit setting or home→assistant / project→relay. */
@@ -708,7 +740,7 @@ export class Orchestrator {
             promptLines.push(
               "",
               "Pending spin-outs (if this chat was created for one, offer to claim it via workspace_create's spin_out_id):",
-              ...spinOuts.map((s) => `- ${s.id}: "${s.name}" from workspace ${s.fromWorkspace}${s.suggestedCwd ? `, suggested cwd ${s.suggestedCwd}` : ""} — ${s.brief.slice(0, 200)}`),
+              ...spinOuts.map((s) => `- ${s.id}: "${s.name}" from workspace ${s.fromWorkspace}${s.suggestedCwd ? `, suggested cwd ${s.suggestedCwd}` : ""}${s.engine ? `, engine ${s.engine}` : ""}${s.model ? `, model ${s.model}` : ""} — ${s.brief.slice(0, 200)}`),
             );
           }
           const newTask: TaskState = {
@@ -955,14 +987,29 @@ export class Orchestrator {
             .describe("Workspace behavior mode"),
           engine: z.string().optional()
             .describe("Engine to use (e.g. 'claude-code', 'kiro'). Defaults to the server's configured default engine."),
+          model: z.string().optional()
+            .describe("Model override for Claude Code. When claiming a spin-out, defaults to its chosen model."),
           spin_out_id: z.string().optional()
             .describe("Pending spin-out id to claim: after creation, its brief is delivered to this workspace as a peer message from the originating workspace"),
         }, async (args) => {
           if (this.config.workspaceByName(args.name)) {
             throw new Error(`Workspace "${args.name}" already exists. Choose a different name.`);
           }
-          if (args.engine && !this.engines.has(args.engine)) {
-            throw new Error(`Unknown engine "${args.engine}". Available: ${[...this.engines.keys()].join(", ")}`);
+          const pending = args.spin_out_id
+            ? this.config.listSpinOuts().find((candidate) => candidate.id === args.spin_out_id)
+            : undefined;
+          const engine = args.engine ?? pending?.engine;
+          const effectiveEngine = engine ?? this.config.defaultEngine;
+          const pendingEngine = pending?.engine ?? this.config.defaultEngine;
+          const model = args.model
+            ?? (effectiveEngine === "claude-code" && effectiveEngine === pendingEngine
+              ? pending?.model
+              : undefined);
+          if (!this.engines.has(effectiveEngine)) {
+            throw new Error(`Unknown engine "${effectiveEngine}". Available: ${[...this.engines.keys()].join(", ")}`);
+          }
+          if (model && effectiveEngine !== "claude-code") {
+            throw new Error(`Model override isn't supported for the "${effectiveEngine}" engine.`);
           }
           fs.mkdirSync(args.cwd, { recursive: true });
           this.config.upsertWorkspace({
@@ -971,15 +1018,16 @@ export class Orchestrator {
             chat_id: chatId,
             current_session_id: null,
             behavior: args.behavior,
-            engine: args.engine,
+            engine,
+            model,
             project: args.name,
             description: args.description,
           });
           this.config.addProject({ name: args.name, description: args.description, main_workspace: args.name });
           await this.reconcileProjectChats(args.name);
-          log.info("[tool] workspace_create: %s → %s engine=%s (chat %s)", args.name, args.cwd, args.engine ?? "default", chatId);
+          log.info("[tool] workspace_create: %s → %s engine=%s model=%s (chat %s)",
+            args.name, args.cwd, engine ?? "default", model ?? "default", chatId);
           if (args.spin_out_id) {
-            const pending = this.config.listSpinOuts().find((s) => s.id === args.spin_out_id);
             if (!pending) {
               return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created, but no pending spin-out "${args.spin_out_id}" was found.` }] };
             }
@@ -1080,27 +1128,71 @@ export class Orchestrator {
           },
         ),
         tool(
+          "project_create",
+          `Create a Project around an existing workspace so it can become a spin_out target. The chosen main workspace must not already belong to another Project. Defaults to the current workspace. Existing Projects: ${projectNames}.`,
+          {
+            name: z.string().describe("New Project name"),
+            description: z.string().describe("What the Project is about"),
+            main_workspace: z.string().optional().describe("Existing unprojected workspace to make the Project main; defaults to the current workspace"),
+          },
+          async (args) => {
+            if (this.config.projectByName(args.name)) {
+              return { content: [{ type: "text" as const, text: `Project "${args.name}" already exists.` }] };
+            }
+            const mainName = args.main_workspace ?? self?.name;
+            if (!mainName) {
+              return { content: [{ type: "text" as const, text: "No current workspace to use as the Project main." }] };
+            }
+            const main = this.config.workspaceByName(mainName);
+            if (!main) {
+              return { content: [{ type: "text" as const, text: `No workspace named "${mainName}".` }] };
+            }
+            if (main.project) {
+              return { content: [{ type: "text" as const, text: `Workspace "${main.name}" already belongs to project "${main.project}".` }] };
+            }
+            this.config.upsertWorkspace({ ...main, project: args.name });
+            this.config.addProject({
+              name: args.name,
+              description: args.description,
+              main_workspace: main.name,
+            });
+            await this.reconcileProjectChats(args.name);
+            log.info("[tool] project_create: %s (main %s)", args.name, main.name);
+            return { content: [{ type: "text" as const, text: `Project "${args.name}" created with "${main.name}" as its main workspace.` }] };
+          },
+        ),
+        tool(
           "spin_out",
-          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. One-tap spawning is available when the target project resolves, its main workspace exists, and the channel supports Project chat lifecycle; otherwise this registers a pending brief the user claims by creating a group. Pass an existing cwd when external tooling prepared the worktree: the path must already exist, and ClearClaw will never create or remove it. Omit cwd to let ClearClaw create and own a standard git worktree for plain git repos. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
+          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. One-tap spawning is available when the target project resolves, its main workspace exists, and the channel supports Project chat lifecycle; otherwise this registers a pending brief the user claims by creating a group. The peer inherits its Project main's engine and model by default; pass engine and/or model to override them. Model overrides currently require the claude-code engine. Pass an existing cwd when external tooling prepared the worktree: the path must already exist, and ClearClaw will never create or remove it. Omit cwd to let ClearClaw create and own a standard git worktree for plain git repos. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
           {
             name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
             brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
             cwd: z.string().min(1).optional().describe("Existing working directory prepared by the caller. It must already exist; ClearClaw never creates or removes an explicitly provided path. Omit to let ClearClaw create and manage a standard git worktree when possible."),
             branch: z.string().optional().describe("Git branch used only when ClearClaw creates the worktree (cwd omitted). Conventional name (e.g. 'feat/x', 'fix/y', 'chore/z'); defaults to 'feat/<name>'."),
             into: z.string().optional().describe("Target project name to spawn into; defaults to your own project"),
+            engine: z.string().optional().describe("Engine for the peer (e.g. 'claude-code', 'kiro'); defaults to the Project main's engine"),
+            model: z.string().optional().describe("Claude Code model override for the peer; defaults to the Project main's model when using the same engine"),
           },
           async (args) => {
-            const fromName = self?.name ?? "unknown";
-            const targetName = args.into ?? self?.project;
+            const currentSelf = this.config.workspaceByChat(chatId) ?? self;
+            const fromName = currentSelf?.name ?? "unknown";
+            const targetName = args.into ?? currentSelf?.project;
             const project = targetName ? this.config.projectByName(targetName) : undefined;
             const mainWs = project ? this.config.workspaceByName(project.main_workspace) : undefined;
             const projectChats = this.channel.projectChats;
+            const resolved = this.peerRuntime(mainWs ?? currentSelf, args);
+            if (resolved.error) {
+              return { content: [{ type: "text" as const, text: resolved.error }] };
+            }
+            const runtime = resolved.runtime!;
+            const effectiveEngine = runtime.engine ?? this.config.defaultEngine;
+            const runtimeLabel = runtime.model ? `${effectiveEngine} / ${runtime.model}` : effectiveEngine;
             let fallbackReason: string;
 
             if (project && mainWs && projectChats) {
               const resp = await this.channel.sendInteractive(
                 chatId,
-                `🌱 Spin out "${args.name}" into ${project.name}?\n\n${args.brief.slice(0, 300)}`,
+                `🌱 Spin out "${args.name}" into ${project.name} using ${runtimeLabel}?\n\n${args.brief.slice(0, 300)}`,
                 [[
                   { label: `Spawn in ${project.name}`, value: "spawn" },
                   { label: "Manual group", value: "manual" },
@@ -1111,7 +1203,7 @@ export class Orchestrator {
                 return { content: [{ type: "text" as const, text: "Spin-out cancelled by the user." }] };
               }
               if (resp.value === "spawn") {
-                return this.spawnPeer(chatId, fromName, project, mainWs, projectChats, args);
+                return this.spawnPeer(chatId, fromName, project, mainWs, projectChats, args, runtime);
               }
               fallbackReason = resp.value === "manual"
                 ? "the user selected a manual group"
@@ -1125,7 +1217,7 @@ export class Orchestrator {
             } else {
               fallbackReason = `channel "${this.channel.name}" lacks Project chat lifecycle capability`;
             }
-            return this.registerSpinOutBrief(chatId, fromName, args, fallbackReason);
+            return this.registerSpinOutBrief(chatId, fromName, args, fallbackReason, runtime);
           },
         ),
         tool(

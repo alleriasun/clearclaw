@@ -9,8 +9,8 @@ The task prompt tells you the chat type: DM or group. Use this to adapt the flow
 ### Group chats
 
 1. **Check for pending spin-outs.** If the task prompt lists pending spin-outs, ask first whether this chat was created for one of them. If yes:
-   - Use the spin-out's suggested name and cwd as defaults (confirm with the user; create a worktree per step 4 if they want isolation)
-   - Call `workspace_create` with `spin_out_id` — the brief from the originating workspace arrives as the first message after setup
+   - Use the spin-out's suggested name, cwd, engine, and model as defaults (confirm with the user; create a worktree per step 4 if they want isolation)
+   - Call `workspace_create` with `spin_out_id`; its engine and model defaults are preserved unless the user overrides them, and the brief from the originating workspace arrives as the first message after setup
    - Call `task_complete` immediately after `workspace_create` so the brief is processed as a normal workspace turn
    - Skip the remaining steps. If no (or no pending spin-outs), continue below.
 
