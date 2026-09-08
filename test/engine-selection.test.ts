@@ -1,0 +1,370 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test, { type TestContext } from "node:test";
+import { Config } from "../src/config.js";
+import { Orchestrator } from "../src/orchestrator.js";
+import type { ButtonResponse, Channel, Engine, InboundMessage, RunTurnOpts, TurnStats, Workspace } from "../src/types.js";
+
+const chatId = "test:engine-selection";
+interface Task {
+  sessionId: string | null;
+  cwd: string;
+  prompt: string;
+  engine?: string;
+}
+interface Internals {
+  tasks: Map<string, Task>;
+  chat(id: string): {
+    busy: boolean;
+    debounceTimer: ReturnType<typeof setTimeout> | null;
+    stats: TurnStats | null;
+    engineName: string | null;
+    permissionMode: RunTurnOpts["permissionMode"] | null;
+  };
+  routeMessage(message: InboundMessage): Promise<void>;
+  processQueuedMessages(id: string): Promise<void>;
+  buildMcpTools(id: string, behavior: string, state: object): Array<{
+    name: string;
+    handler(args: Record<string, unknown>): Promise<unknown>;
+  }>;
+}
+
+function harness(t: TestContext) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-engine-selection-"));
+  const previousHome = process.env.CLEARCLAW_HOME;
+  process.env.CLEARCLAW_HOME = root;
+  let config: Config;
+  try {
+    config = new Config();
+  } finally {
+    if (previousHome === undefined) delete process.env.CLEARCLAW_HOME;
+    else process.env.CLEARCLAW_HOME = previousHome;
+  }
+  config.defaultEngine = "claude-code";
+  config.addUser({ id: "test:paddy", name: "Paddy", approvedAt: Date.now() });
+  fs.mkdirSync(config.homeWorkspacePath, { recursive: true });
+  const calls: Array<{ engine: string; opts: RunTurnOpts }> = [];
+  const messages: string[] = [];
+  let picker: () => Promise<ButtonResponse> = async () => ({ value: "codex" });
+  const channel = {
+    name: "test",
+    ownsId: (id: string) => id.startsWith("test:"),
+    sendMessage: async (_id: string, text: string) => { messages.push(text); return ["message"]; },
+    sendInteractive: async () => picker(),
+    updateStatus: async () => {},
+    setTyping: async () => {},
+    editMessage: async () => {},
+    reactToMessage: async () => {},
+  } as unknown as Channel;
+  const engines = new Map<string, Engine>(["claude-code", "codex"].map((name) => [name, {
+    name,
+    listSessions: async () => [],
+    async *runTurn(opts: RunTurnOpts) {
+      calls.push({ engine: name, opts });
+      if (name === "claude-code") throw new Error("Claude quota exhausted");
+      yield { type: "done" as const, sessionId: "codex-session" };
+    },
+  }]));
+  const orchestrator = new Orchestrator({ config, channel, engines });
+  const internals = orchestrator as unknown as Internals;
+  t.after(() => {
+    const state = internals.chat(chatId);
+    if (state.debounceTimer) clearTimeout(state.debounceTimer);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const route = (text: string, userId = "test:paddy") => internals.routeMessage({
+    chatId, chatType: "group", text,
+    origin: { kind: "user", user: { id: userId, name: "Paddy" } },
+  });
+  return {
+    config, internals, calls, messages, route,
+    runTurn: (name: string, run: Engine["runTurn"]) => {
+      engines.get(name)!.runTurn = (opts) => {
+        calls.push({ engine: name, opts });
+        return run(opts);
+      };
+    },
+    picker: (fn: () => Promise<ButtonResponse>) => { picker = fn; },
+    workspace: (overrides: Partial<Workspace> = {}) => {
+      const ws: Workspace = {
+        name: "engine-selection", chat_id: chatId, cwd: config.homeWorkspacePath,
+        current_session_id: "claude-session", engine: "claude-code", model: "claude-opus",
+        ...overrides,
+      };
+      config.upsertWorkspace(ws);
+      return ws;
+    },
+    task: (overrides: Partial<Task> = {}) => {
+      const task: Task = {
+        sessionId: "claude-task-session", cwd: config.homeWorkspacePath,
+        prompt: "Continue workspace onboarding", ...overrides,
+      };
+      internals.tasks.set(chatId, task);
+      return task;
+    },
+    drain: async () => {
+      const state = internals.chat(chatId);
+      if (state.debounceTimer) clearTimeout(state.debounceTimer);
+      state.debounceTimer = null;
+      await internals.processQueuedMessages(chatId);
+    },
+    createWorkspace: async (args: Record<string, unknown> = {}) => {
+      const tool = internals.buildMcpTools(chatId, "assistant", { staySilent: false, replyToMessageId: null })
+        .find((candidate) => candidate.name === "workspace_create");
+      assert.ok(tool);
+      await tool.handler({ name: "created", cwd: config.homeWorkspacePath, ...args });
+      return config.workspaceByName("created")!;
+    },
+  };
+}
+
+for (const command of ["/engine codex", "/engine"]) {
+  test(`${command} selects onboarding engine without calling exhausted Claude`, async (t) => {
+    const h = harness(t);
+    await h.route(command);
+    assert.equal(h.internals.tasks.get(chatId)?.engine, "codex");
+    assert.equal(h.calls.length, 0);
+    await h.route("Set up this project");
+    await h.drain();
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].engine, "codex");
+    assert.equal(h.calls[0].opts.sessionId, null);
+    assert.match(h.calls[0].opts.appendSystemPrompt!, /Workspace Onboarding/);
+    assert.equal(h.internals.tasks.get(chatId)?.sessionId, "codex-session");
+    if (command === "/engine codex") {
+      t.diagnostic(JSON.stringify({
+        input: command,
+        response: h.messages,
+        nextInput: "Set up this project",
+        observedEngine: h.calls[0].engine,
+        observedResumeSession: h.calls[0].opts.sessionId,
+        claudeCalls: h.calls.filter((call) => call.engine === "claude-code").length,
+      }));
+    }
+  });
+}
+
+test("switching an idle onboarding task keeps its prompt and cwd but resets its session", async (t) => {
+  const h = harness(t);
+  const task = h.task();
+  const original = { ...task };
+  await h.route("/engine codex");
+  assert.equal(task.engine, "codex");
+  assert.equal(task.sessionId, null);
+  assert.equal(task.cwd, original.cwd);
+  assert.equal(task.prompt, original.prompt);
+  await h.route("Continue");
+  await h.drain();
+  assert.equal(h.calls[0].engine, "codex");
+  assert.equal(h.calls[0].opts.sessionId, null);
+});
+
+test("/mode during onboarding opens the native picker without an engine turn", async (t) => {
+  const h = harness(t);
+  h.task();
+  let pickerCalls = 0;
+  h.picker(async () => {
+    pickerCalls++;
+    return { value: "plan" };
+  });
+  await h.route("/mode");
+  await h.drain();
+  assert.equal(pickerCalls, 1);
+  assert.equal(h.internals.chat(chatId).permissionMode, "plan");
+  assert.equal(h.calls.length, 0);
+});
+
+for (const command of ["/new", "/resume", "/behavior", "/model"]) {
+  test(`${command} during onboarding returns its native missing-workspace response`, async (t) => {
+    const h = harness(t);
+    h.task();
+    await h.route(command);
+    await h.drain();
+    assert.match(h.messages.join("\n"), /No workspace linked/);
+    assert.equal(h.calls.length, 0);
+  });
+}
+
+test("workspace switch clears engine-specific session and model before the next turn", async (t) => {
+  const h = harness(t);
+  h.workspace();
+  await h.route("/engine codex");
+  const saved = h.config.workspaceByChat(chatId)!;
+  assert.equal(saved.engine, "codex");
+  assert.equal(saved.current_session_id, null);
+  assert.equal(saved.model, undefined);
+  assert.equal(h.calls.length, 0);
+  await h.route("Continue");
+  await h.drain();
+  assert.equal(h.calls[0].engine, "codex");
+  assert.equal(h.calls[0].opts.sessionId, null);
+  assert.equal(h.calls[0].opts.model, undefined);
+});
+
+test("engine selection updates both unfinished onboarding and its newly linked workspace", async (t) => {
+  const h = harness(t);
+  const task = h.task();
+  h.workspace();
+  await h.route("/engine codex");
+  assert.equal(task.engine, "codex");
+  assert.equal(task.sessionId, null);
+  assert.equal(h.config.workspaceByChat(chatId)?.engine, "codex");
+  assert.equal(h.config.workspaceByChat(chatId)?.current_session_id, null);
+});
+
+for (const command of ["/engine missing", "/engine claude-code"]) {
+  test(`${command} preserves the existing workspace session and model`, async (t) => {
+    const h = harness(t);
+    const original = h.workspace();
+    await h.route(command);
+    assert.deepEqual(h.config.workspaceByChat(chatId), original);
+    assert.equal(h.calls.length, 0);
+  });
+}
+
+test("unknown picker values cannot become a configured engine", async (t) => {
+  const h = harness(t);
+  const original = h.workspace();
+  h.picker(async () => ({ value: "missing" }));
+  await h.route("/engine");
+  assert.deepEqual(h.config.workspaceByChat(chatId), original);
+});
+
+test("explicitly choosing the current default preserves the onboarding session", async (t) => {
+  const h = harness(t);
+  const task = h.task();
+  await h.route("/engine claude-code");
+  assert.equal(task.sessionId, "claude-task-session");
+  assert.equal(task.engine, "claude-code");
+  const ws = await h.createWorkspace();
+  assert.equal(ws.engine, "claude-code");
+  assert.equal(h.calls.length, 0);
+});
+
+test("unauthorized unregistered chats cannot start onboarding through engine selection", async (t) => {
+  const h = harness(t);
+  await h.route("/engine codex", "test:unknown");
+  assert.equal(h.internals.tasks.has(chatId), false);
+  assert.equal(h.calls.length, 0);
+});
+
+test("busy onboarding rejects engine changes with cancel guidance", async (t) => {
+  const h = harness(t);
+  const task = h.task();
+  h.internals.chat(chatId).busy = true;
+  await h.route("/engine codex");
+  assert.equal(task.engine, undefined);
+  assert.equal(task.sessionId, "claude-task-session");
+  assert.match(h.messages.join("\n"), /\/cancel/);
+  assert.equal(h.calls.length, 0);
+});
+
+test("picker cannot switch engines after a turn starts", async (t) => {
+  const h = harness(t);
+  const original = h.workspace();
+  h.picker(async () => {
+    h.internals.chat(chatId).busy = true;
+    return { value: "codex" };
+  });
+  await h.route("/engine");
+  assert.deepEqual(h.config.workspaceByChat(chatId), original);
+  assert.match(h.messages.join("\n"), /\/cancel/);
+});
+
+test("picker cannot apply its result to a replacement onboarding task", async (t) => {
+  const h = harness(t);
+  h.task();
+  let replacement: Task;
+  h.picker(async () => {
+    await h.route("/cancel");
+    replacement = h.task({ prompt: "A different task", sessionId: "replacement-session" });
+    return { value: "codex" };
+  });
+  await h.route("/engine");
+  assert.equal(replacement!.engine, undefined);
+  assert.equal(replacement!.sessionId, "replacement-session");
+});
+
+for (const scenario of [
+  { label: "explicit engine overrides selected engine", selected: "codex", requested: "claude-code", expected: "claude-code" },
+  { label: "selected engine overrides global default", selected: "codex", expected: "codex" },
+  { label: "unselected onboarding uses global default", expected: "claude-code" },
+] as Array<{ label: string; selected?: string; requested?: string; expected: string }>) {
+  test(`workspace_create: ${scenario.label}`, async (t) => {
+    const h = harness(t);
+    h.task({ engine: scenario.selected });
+    const ws = await h.createWorkspace({ engine: scenario.requested });
+    assert.equal(ws.engine ?? h.config.defaultEngine, scenario.expected);
+    assert.equal(h.calls.length, 0);
+  });
+}
+
+test("late cancelled task events cannot overwrite a replacement task session", async (t) => {
+  const h = harness(t);
+  h.task({ engine: "codex" });
+  let originalSession: string | null | undefined;
+  let replacement: Task | undefined;
+  h.runTurn("codex", async function* () {
+    yield { type: "session", sessionId: "original-codex-session" };
+    originalSession = h.internals.tasks.get(chatId)?.sessionId;
+    await h.route("/cancel");
+    replacement = h.task({ engine: "codex", sessionId: "replacement-session" });
+    yield { type: "session", sessionId: "late-original-session" };
+    yield {
+      type: "done", sessionId: "late-original-done",
+      stats: { model: "stale-model", contextUsed: 20, contextWindow: 100, toolCalls: {} },
+    };
+  });
+  await h.route("Continue setup");
+  await h.drain();
+  assert.equal(originalSession, "original-codex-session");
+  assert.equal(replacement?.sessionId, "replacement-session");
+  assert.equal(h.internals.chat(chatId).stats, null);
+  assert.equal(h.calls.length, 1);
+});
+
+test("cancelled task final stats are discarded when no replacement task exists", async (t) => {
+  const h = harness(t);
+  h.task({ engine: "codex" });
+  h.runTurn("codex", async function* () {
+    await h.route("/cancel");
+    yield {
+      type: "done", sessionId: "cancelled-session",
+      stats: { model: "stale-model", contextUsed: 20, contextWindow: 100, toolCalls: {} },
+    };
+  });
+  await h.route("Continue setup");
+  await h.drain();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.internals.tasks.has(chatId), false);
+  assert.equal(h.internals.chat(chatId).stats, null);
+});
+
+test("task_complete preserves final task usage without transferring its session to the new workspace", async (t) => {
+  const h = harness(t);
+  h.task({ engine: "codex" });
+  const complete = h.internals.buildMcpTools(chatId, "assistant", { staySilent: false, replyToMessageId: null })
+    .find((candidate) => candidate.name === "task_complete");
+  assert.ok(complete);
+  const finalStats: TurnStats = {
+    model: "codex-model", contextUsed: 125, contextWindow: 1000,
+    toolCalls: { workspace_create: 1, task_complete: 1 },
+  };
+  h.runTurn("codex", async function* () {
+    yield { type: "session", sessionId: "onboarding-session" };
+    await h.createWorkspace();
+    await complete.handler({ message: "Workspace ready" });
+    yield { type: "done", sessionId: "onboarding-session", stats: finalStats };
+  });
+  await h.route("Finish setup");
+  await h.drain();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.internals.tasks.has(chatId), false);
+  assert.deepEqual(h.internals.chat(chatId).stats, finalStats);
+  const ws = h.config.workspaceByName("created");
+  assert.ok(ws);
+  assert.equal(ws.current_session_id, null);
+  assert.equal(ws.model, undefined);
+});
