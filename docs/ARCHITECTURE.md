@@ -147,7 +147,8 @@ Claude Code stores sessions at `~/.claude/projects/{encoded-cwd-path}/sessions/`
 
 - **Terminal-mobile handoff:** A terminal session and a mobile session for the same CWD share the same session store. Start in the terminal, continue via Telegram, pick it back up in the terminal.
 - **Session commands:** `/new` clears the stored session ID. Default behavior is resume.
-- **Engine:** `/engine` switches the workspace's engine and clears the stored session ID (session IDs are engine-private — a Claude session means nothing to Kiro). Handled natively rather than via the `workspace_update` tool, so it still works when the current engine is broken.
+- **Control routing:** Native commands are handled before onboarding and workspace message dispatch. `/mode`, `/cancel`, and `/engine` work during setup; workspace-only commands report when no workspace is linked instead of reaching the setup model.
+- **Engine:** `/engine` opens the engine picker; `/engine <name>` selects directly. Both work before a workspace exists and during idle onboarding, without invoking a model. Setup uses the selected engine and carries it into `workspace_create` (explicit tool argument, then setup selection, then server default). Changing engines clears the old session and workspace model override. A running turn must be cancelled and finish before switching; the picker rechecks state after the selection. `/cancel` clears an onboarding task, including its engine choice.
 - **Model:** `/model <name>` sets a per-workspace model override, persisted in workspace config; `/model` alone shows the current one. Unset means the engine picks its own default. The session ID and resolved model are captured from the engine's first message, not its last, so cancelling mid-turn doesn't lose either.
 - **Turn isolation:** One message at a time per workspace. Concurrent turns across different workspaces are allowed.
 

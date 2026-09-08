@@ -50,6 +50,7 @@ interface ChatState {
 }
 
 interface TaskState {
+  engine?: string;
   sessionId: string | null;
   cwd: string;
   prompt: string;
@@ -278,7 +279,7 @@ export class Orchestrator {
       tools: this.buildMcpTools(chatId, behavior, turnState),
     });
 
-    const engine = ws ? this.engineFor(ws) : this.engines.get(this.config.defaultEngine)!;
+    const engine = ws ? this.engineFor(ws) : this.engines.get(task!.engine ?? this.config.defaultEngine)!;
     state.engineName = engine.name;
 
     try {
@@ -306,8 +307,10 @@ export class Orchestrator {
           // Model already persisted from the early "session" event above —
           // writing it again here from this (possibly stale, if /model ran
           // mid-turn) turn's resolved model would race and clobber it.
-          this.persistSessionId(chatId, task, ws, event.sessionId);
-          if (event.stats) state.stats = event.stats;
+          const persistedSessionId = this.persistSessionId(chatId, task, ws, event.sessionId);
+          // task_complete removes setup before done; /cancel also aborts the turn.
+          const completedTask = task !== undefined && !abort.signal.aborted && !this.tasks.has(chatId);
+          if ((persistedSessionId !== undefined || completedTask) && event.stats) state.stats = event.stats;
           if (behavior === "relay" && state.toolCallHandle && event.stats) {
             const summary = formatToolCallSummary(event.stats.toolCalls);
             if (summary) {
@@ -347,13 +350,90 @@ export class Orchestrator {
     ws: Workspace | undefined,
     sessionId: string,
     model?: string,
-  ): void {
+  ): string | undefined {
     if (task) {
-      const currentTask = this.tasks.get(chatId);
-      if (currentTask) currentTask.sessionId = sessionId;
+      if (this.tasks.get(chatId) !== task) return undefined;
+      task.sessionId = sessionId;
     } else {
+      const current = this.config.workspaceByName(ws!.name);
+      // Ignore late events if the workspace engine changed during this turn.
+      if (!current || (current.engine ?? this.config.defaultEngine) !== (ws!.engine ?? this.config.defaultEngine)) return undefined;
       this.config.setSession(ws!.name, sessionId, model);
     }
+    return sessionId;
+  }
+
+  /** Create setup state without starting an engine turn. */
+  private createOnboardingTask(msg: InboundMessage): TaskState {
+    const chatType = msg.chatType === "dm" ? "DM" : "group";
+    const promptLines = [
+      "THIS IS A TASK SESSION — not a regular conversation.",
+      "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
+      `This is a ${chatType} chat. Home workspace path: ${this.config.homeWorkspacePath}`,
+      "Follow the Workspace Onboarding instructions in the system prompt.",
+    ];
+    const newTask: TaskState = {
+      sessionId: null,
+      cwd: this.config.homeWorkspacePath,
+      prompt: promptLines.join("\n"),
+    };
+    this.tasks.set(msg.chatId, newTask);
+    log.info("[task] onboarding started for chat %s", msg.chatId);
+    return newTask;
+  }
+
+  /** Native engine selection must remain available when setup's engine cannot run. */
+  private async selectEngine(msg: InboundMessage, requested?: string): Promise<void> {
+    const state = this.chat(msg.chatId);
+    if (state.busy) {
+      await this.channel.sendMessage(msg.chatId, "A turn is running. Use /cancel first, then /engine once it stops.");
+      return;
+    }
+    const task = this.tasks.get(msg.chatId);
+    const ws = this.config.workspaceByChat(msg.chatId);
+    const current = task
+      ? task.engine ?? this.config.defaultEngine
+      : ws?.engine ?? this.config.defaultEngine;
+    const selected = requested ?? (await this.channel.sendInteractive(
+      msg.chatId,
+      `Current engine: ${current}`,
+      [[...this.engines.keys()].map((name) => ({ label: name === current ? `✓ ${name}` : name, value: name }))],
+    )).value;
+    if (!selected) return;
+    if (!this.engines.has(selected)) {
+      await this.channel.sendMessage(msg.chatId, `Unknown engine "${selected}". Available: ${[...this.engines.keys()].join(", ")}`);
+      return;
+    }
+    // The picker awaits user input: a turn, /cancel, or workspace update may have intervened.
+    if (state.busy) {
+      await this.channel.sendMessage(msg.chatId, "A turn is running. Use /cancel first, then /engine once it stops.");
+      return;
+    }
+    const latestTask = this.tasks.get(msg.chatId);
+    const latestWs = this.config.workspaceByChat(msg.chatId);
+    const latestEngine = latestTask
+      ? latestTask.engine ?? this.config.defaultEngine
+      : latestWs?.engine ?? this.config.defaultEngine;
+    if (latestTask !== task || latestWs?.name !== ws?.name || latestEngine !== current) {
+      await this.channel.sendMessage(msg.chatId, "Setup or engine changed while choosing. Run /engine again.");
+      return;
+    }
+    const setup = latestTask ?? (!latestWs ? this.createOnboardingTask(msg) : undefined);
+    const changed = selected !== current;
+    if (setup) {
+      setup.engine = selected;
+      if (changed) setup.sessionId = null;
+    }
+    const workspaceChanged = latestWs && (latestWs.engine ?? this.config.defaultEngine) !== selected;
+    if (workspaceChanged) {
+      this.config.upsertWorkspace({ ...latestWs, engine: selected, current_session_id: null, model: undefined });
+    }
+    if (changed || workspaceChanged) state.stats = null;
+    state.engineName = selected;
+    await this.updateStatusMessage(msg.chatId, state);
+    log.info("[cmd] chat %s engine → %s", msg.chatId, selected);
+    await this.channel.sendMessage(msg.chatId,
+      `Engine set to ${selected}.${changed ? " Session cleared." : ""}${setup ? " Send a message to continue setup." : ""}`);
   }
 
   private async routeMessage(msg: InboundMessage): Promise<void> {
@@ -364,7 +444,8 @@ export class Orchestrator {
 
       const state = this.chat(msg.chatId);
 
-      // /cancel — abort running turn or clear active task (must come before task routing)
+      // Native controls run before task/workspace dispatch, without a model call.
+      // /cancel — abort running turn or clear active task
       if (msg.text === "/cancel") {
         const task = this.tasks.get(msg.chatId);
         if (task) {
@@ -380,13 +461,6 @@ export class Orchestrator {
         } else {
           await this.channel.sendMessage(msg.chatId, "Nothing to cancel.");
         }
-        return;
-      }
-
-      // Task routing — takes priority over workspace and all other commands
-      const existingTask = this.tasks.get(msg.chatId);
-      if (existingTask) {
-        this.enqueueMessage(msg, existingTask, state);
         return;
       }
 
@@ -513,29 +587,14 @@ export class Orchestrator {
         return;
       }
 
-      // /engine — switch the workspace's engine. Handled natively (not via the
-      // workspace_update tool) so it still works when the current engine is broken.
-      if (msg.text === "/engine") {
-        if (!ws) {
-          await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.");
+      // /engine [name] — select an engine, including before/during setup.
+      const engineMatch = msg.text.match(/^\/engine(?:\s+(\S+))?$/);
+      if (engineMatch) {
+        if (!this.config.isAuthorized(user.id)) {
+          await this.channel.sendMessage(msg.chatId, "Not authorized to select an engine.");
           return;
         }
-        const current = ws.engine ?? this.config.defaultEngine;
-        const names = [...this.engines.keys()];
-        const resp = await this.channel.sendInteractive(
-          msg.chatId,
-          `Current engine: ${current}`,
-          [names.map((n) => ({ label: n === current ? `✓ ${n}` : n, value: n }))],
-        );
-        if (resp.value && resp.value !== current) {
-          this.config.upsertWorkspace({ ...ws, engine: resp.value });
-          // Session IDs are engine-private — a Claude session ID means nothing to Kiro.
-          this.config.clearSession(ws.name);
-          state.stats = null;
-          await this.updateStatusMessage(msg.chatId, state);
-          log.info("[cmd] workspace %s engine → %s (session cleared)", ws.name, resp.value);
-          await this.channel.sendMessage(msg.chatId, `Engine set to ${resp.value}. Session cleared.`);
-        }
+        await this.selectEngine(msg, engineMatch[1]);
         return;
       }
 
@@ -564,21 +623,16 @@ export class Orchestrator {
         return;
       }
 
+      // Only non-control messages reach the active task or workspace engine.
+      const existingTask = this.tasks.get(msg.chatId);
+      if (existingTask) {
+        this.enqueueMessage(msg, existingTask, state);
+        return;
+      }
+
       if (!ws) {
         if (this.config.isAuthorized(user.id)) {
-          const chatType = msg.chatType === "dm" ? "DM" : "group";
-          const newTask: TaskState = {
-            sessionId: null,
-            cwd: this.config.homeWorkspacePath,
-            prompt: [
-              "THIS IS A TASK SESSION — not a regular conversation.",
-              "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
-              `This is a ${chatType} chat. Home workspace path: ${this.config.homeWorkspacePath}`,
-              "Follow the Workspace Onboarding instructions in the system prompt.",
-            ].join("\n"),
-          };
-          this.tasks.set(msg.chatId, newTask);
-          log.info("[task] onboarding started for chat %s", msg.chatId);
+          const newTask = this.createOnboardingTask(msg);
           this.enqueueMessage(msg, newTask, state);
         } else {
           log.info("[msg] no workspace for chat %s", msg.chatId);
@@ -814,13 +868,14 @@ export class Orchestrator {
           behavior: z.enum(["assistant", "relay"]).optional()
             .describe("Workspace behavior mode"),
           engine: z.string().optional()
-            .describe("Engine to use (e.g. 'claude-code', 'kiro'). Defaults to the server's configured default engine."),
+            .describe("Engine to use (e.g. 'claude-code', 'kiro'). Defaults to the engine selected for setup, then the server default."),
         }, async (args) => {
           if (this.config.workspaceByName(args.name)) {
             throw new Error(`Workspace "${args.name}" already exists. Choose a different name.`);
           }
-          if (args.engine && !this.engines.has(args.engine)) {
-            throw new Error(`Unknown engine "${args.engine}". Available: ${[...this.engines.keys()].join(", ")}`);
+          const engine = args.engine ?? this.tasks.get(chatId)?.engine;
+          if (engine && !this.engines.has(engine)) {
+            throw new Error(`Unknown engine "${engine}". Available: ${[...this.engines.keys()].join(", ")}`);
           }
           fs.mkdirSync(args.cwd, { recursive: true });
           this.config.upsertWorkspace({
@@ -829,9 +884,9 @@ export class Orchestrator {
             chat_id: chatId,
             current_session_id: null,
             behavior: args.behavior,
-            engine: args.engine,
+            engine,
           });
-          log.info("[tool] workspace_create: %s → %s engine=%s (chat %s)", args.name, args.cwd, args.engine ?? "default", chatId);
+          log.info("[tool] workspace_create: %s → %s engine=%s (chat %s)", args.name, args.cwd, engine ?? "default", chatId);
           return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created at ${args.cwd}, linked to this chat.` }] };
         }),
         tool("task_complete", "Signal that the current task is complete", {
