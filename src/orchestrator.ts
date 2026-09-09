@@ -1299,7 +1299,7 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: removed ? `Spin-out ${args.id} cancelled.` : `No pending spin-out "${args.id}".` }] };
           },
         ),
-        tool("workspace_archive", "Archive a workspace: close its bound chat and unbind it. Removes a git worktree only when ClearClaw created and owns it; externally managed worktrees stay in place. Cannot archive 'default'.", {
+        tool("workspace_archive", "Archive a workspace: try to close its bound chat, then unbind it even if chat closure fails. Reports any closure error. Removes a git worktree only when ClearClaw created and owns it; externally managed worktrees stay in place. Cannot archive 'default'.", {
           name: z.string().describe("Workspace to archive"),
         }, async (args) => {
           if (args.name === "default") {
@@ -1318,7 +1318,7 @@ export class Orchestrator {
           }
           const resp = await this.channel.sendInteractive(
             chatId,
-            `Archive workspace "${args.name}" (${target.cwd}) and close its chat?`,
+            `Archive workspace "${args.name}" (${target.cwd})? Its registration will be removed even if closing its chat fails.${target.spawnedFrom && target.owns_worktree === true ? " Its ClearClaw-owned worktree will also be removed, including uncommitted files." : " Its directory will be left in place."}`,
             [[{ label: "Archive", value: "yes" }, { label: "Cancel", value: "no" }]],
           );
           if (resp.value !== "yes") {
@@ -1327,24 +1327,27 @@ export class Orchestrator {
           if (!this.channel.ownsId(target.chat_id) || !this.channel.closeProjectChat) {
             return { content: [{ type: "text" as const, text: "Cannot archive: this channel cannot close the workspace's chat." }] };
           }
+          // Whole Telegram chats and deleted topics can be impossible to close.
+          let archiveNote = "";
           try {
             await this.channel.closeProjectChat(target.chat_id, target.project);
           } catch (err) {
-            return { content: [{ type: "text" as const, text: `Cannot archive: chat closure failed (${err instanceof Error ? err.message : String(err)}). Workspace remains bound.` }] };
+            const reason = err instanceof Error ? err.message : String(err);
+            log.warn("[tool] workspace_archive: chat closure failed, unbinding anyway: %s", reason);
+            archiveNote = ` Chat closure failed (${reason}).`;
           }
           this.config.removeWorkspace(args.name);
           const removedProject = project?.main_workspace === args.name ? project : undefined;
           if (removedProject) this.config.removeProject(removedProject.name);
-          let archiveNote = "";
           if (target.spawnedFrom) {
             if (target.owns_worktree === true) {
               try { removeWorktree(target.cwd); } catch (err) {
                 log.warn("[tool] workspace_archive: worktree removal failed, leaving directory: %s", err instanceof Error ? err.message : String(err));
               }
             } else if (target.owns_worktree === false) {
-              archiveNote = " External worktree left in place; clean up with your own tooling.";
+              archiveNote += " External worktree left in place; clean up with your own tooling.";
             } else {
-              archiveNote = " Workspace directory left in place because ClearClaw does not own it.";
+              archiveNote += " Workspace directory left in place because ClearClaw does not own it.";
             }
           }
           log.info("[tool] workspace_archive: %s", args.name);
