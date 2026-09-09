@@ -369,3 +369,54 @@ test("task_complete preserves final task usage without transferring its session 
   assert.equal(ws.current_session_id, null);
   assert.equal(ws.model, undefined);
 });
+
+for (const scenario of [
+  { label: "native setup selection overrides incompatible pending runtime", select: true, expectedEngine: "codex", expectedModel: undefined },
+  { label: "onboarding without a selection preserves pending runtime over global default", select: false, expectedEngine: "claude-code", expectedModel: "claude-opus" },
+  { label: "explicit tool engine overrides native setup selection", select: true, requested: "claude-code", expectedEngine: "claude-code", expectedModel: "claude-opus" },
+]) {
+  test(`pending spin-out integration: ${scenario.label}`, async (t) => {
+    const h = harness(t);
+    h.config.addSpinOut({
+      id: "parity", name: "parity", fromWorkspace: "main", brief: "Finish parity work",
+      engine: "claude-code", model: "claude-opus", createdAt: 1,
+    });
+    if (scenario.select) {
+      await h.route("/engine codex");
+      assert.equal(h.calls.length, 0);
+    } else {
+      h.config.defaultEngine = "codex";
+      await h.route("Start setup");
+      await h.drain();
+      assert.equal(h.internals.tasks.get(chatId)?.engine, undefined);
+      assert.equal(h.calls[0].engine, "codex");
+    }
+    const ws = await h.createWorkspace({
+      description: "Codex parity work", spin_out_id: "parity", engine: scenario.requested,
+    });
+    assert.equal(ws.engine, scenario.expectedEngine);
+    assert.equal(ws.model, scenario.expectedModel);
+    assert.equal(h.config.listSpinOuts().length, 0);
+    assert.equal(h.calls.filter((call) => call.engine === "claude-code").length, 0);
+  });
+}
+
+test("native engine selection retains pending spin-out runtime metadata in the onboarding prompt", async (t) => {
+  const h = harness(t);
+  h.config.addSpinOut({
+    id: "parity", name: "codex-parity", fromWorkspace: "main", brief: "Finish parity work",
+    suggestedCwd: h.config.homeWorkspacePath, engine: "claude-code", model: "claude-opus", createdAt: 1,
+  });
+  await h.route("/engine codex");
+  const prompt = h.internals.tasks.get(chatId)?.prompt;
+  assert.ok(prompt);
+  for (const text of [
+    'parity: "codex-parity" from workspace main',
+    `suggested cwd ${h.config.homeWorkspacePath}`, "engine claude-code", "model claude-opus", "Finish parity work",
+  ]) assert.ok(prompt.includes(text), `onboarding prompt should include ${text}`);
+  await h.route("Continue setup");
+  await h.drain();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].engine, "codex");
+  assert.ok(h.calls[0].opts.appendSystemPrompt?.includes(prompt));
+});
