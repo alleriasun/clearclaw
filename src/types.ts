@@ -29,6 +29,12 @@ export interface Channel {
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
   sendFile(chatId: string, buffer: Buffer, filename: string, opts?: SendFileOpts): Promise<void>;
   reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void>;
+  /** Set up platform-specific Project organization around an existing main chat. */
+  setupProject?(projectName: string, mainChat: string): Promise<void>;
+  /** Create a peer chat and organize it within its Project. Returns an opaque chat ID. */
+  createProjectChat?(projectName: string, anchor: string, title: string): Promise<string>;
+  /** Close a workspace's chat and remove its Project grouping, regardless of origin. */
+  closeProjectChat?(chatId: string, projectName?: string): Promise<void>;
   on<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   off<K extends keyof ChannelEvents>(event: K, listener: (...args: ChannelEvents[K]) => void): this;
   emit<K extends keyof ChannelEvents>(event: K, ...args: ChannelEvents[K]): boolean;
@@ -182,6 +188,10 @@ export interface Workspace {
   behavior?: "assistant" | "relay";
   engine?: string;         // "claude-code" (default) | "kiro" | other ACP agent
   model?: string;          // per-workspace model override; unset = engine's own default
+  project?: string;        // the project this workspace belongs to, if any (set at onboarding; absent for legacy/non-forum workspaces)
+  description?: string;    // what this workspace is currently working on (its focus / peer brief)
+  spawnedFrom?: string;    // origin workspace if spawned via spin_out (a peer); absent = the project's main
+  owns_worktree?: boolean; // true = ClearClaw-created; false = caller-owned; absent = no worktree or legacy ownership unknown
 }
 
 // --- User identity (populated by channel from platform data) ---
