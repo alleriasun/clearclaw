@@ -118,3 +118,19 @@ test("absent overrides leave the agent's model unchanged with or without config 
     assert.equal((await f.traces()).some((entry) => entry.method === "session/set_config_option"), false);
   }
 });
+
+for (const [mode, used, size] of [
+  ["usage-load", 800, 1000], ["usage-live", 250, 2000], ["usage-zero", 0, 2000], ["success", 0, 0],
+] as const) {
+  test(`ACP context usage: ${mode} retains the latest reported window`, async (t) => {
+    const f = await fixture(t, mode, "custom-agent");
+    const events = await collect(f.engine.runTurn({ ...f.opts, sessionId: "resumed-session" }));
+    assert.deepEqual(events.filter((event) => event.type === "text_chunk"),
+      [{ type: "text_chunk", text: "Model answered" }], "history replay stays suppressed");
+    const done = events.at(-1);
+    assert.equal(done?.type, "done");
+    if (done?.type !== "done") assert.fail("Expected completed turn");
+    assert.equal(done.stats.contextUsed, used);
+    assert.equal(done.stats.contextWindow, size);
+  });
+}

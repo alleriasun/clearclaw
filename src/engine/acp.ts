@@ -45,6 +45,8 @@ export class AcpEngine implements Engine {
     let proc: ChildProcess | undefined;
     const queue = new AsyncQueue<EngineEvent>();
     const toolCalls: Record<string, number> = {};
+    let contextUsed = 0;
+    let contextWindow = 0;
     // tool_call events carry content that requestPermission lacks — cache by ID
     const pendingTools = new Map<string, ToolCall>();
 
@@ -73,6 +75,12 @@ export class AcpEngine implements Engine {
         },
 
         sessionUpdate: async (notification: SessionNotification): Promise<void> => {
+          // Usage is session state, including updates sent during session loading.
+          if (notification.update.sessionUpdate === "usage_update") {
+            contextUsed = notification.update.used;
+            contextWindow = notification.update.size;
+            return;
+          }
           if (!live) return; // Suppress replay events from loadSession
           const event = mapSessionUpdate(notification, toolCalls, pendingTools);
           if (event) queue.push(event);
@@ -165,7 +173,7 @@ export class AcpEngine implements Engine {
           queue.push({
             type: "done",
             sessionId: acpSessionId,
-            stats: { model: null, contextUsed: 0, contextWindow: 0, toolCalls },
+            stats: { model: null, contextUsed, contextWindow, toolCalls },
           });
           queue.close();
         })

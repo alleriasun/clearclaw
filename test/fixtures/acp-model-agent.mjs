@@ -23,6 +23,9 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   } else if (req.method === 'session/load') {
     send({ method: 'session/update', params: { sessionId: req.params.sessionId,
       update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'History replay' } } } });
+    if (mode.startsWith('usage-')) send({ method: 'session/update', params: {
+      sessionId: req.params.sessionId, update: { sessionUpdate: 'usage_update', used: 800, size: 1000 },
+    } });
     send({ id: req.id, result: config });
   } else if (req.method === 'session/set_config_option') {
     if (mode === 'reject-model') return send({ id: req.id, error: { code: -32000, message: 'Fixture rejected model' } });
@@ -30,6 +33,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   } else if (req.method === 'session/prompt') {
     send({ method: 'session/update', params: { sessionId: req.params.sessionId,
       update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Model answered' } } } });
+    if (mode === 'usage-live' || mode === 'usage-zero') {
+      for (const used of [600, mode === 'usage-zero' ? 0 : 250]) {
+        send({ method: 'session/update', params: { sessionId: req.params.sessionId,
+          update: { sessionUpdate: 'usage_update', used, size: 2000 } } });
+      }
+    }
     send({ id: req.id, result: { stopReason: 'end_turn' } });
   } else if (req.id !== undefined) {
     send({ id: req.id, error: { code: -32601, message: 'Unexpected request' } });
