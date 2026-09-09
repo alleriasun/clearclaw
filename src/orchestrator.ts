@@ -1363,32 +1363,20 @@ export class Orchestrator {
           log.info("[tool] project_update: %s", args.name);
           return { content: [{ type: "text" as const, text: `Project "${args.name}" updated.` }] };
         }),
-        tool("workspace_update", "Update a workspace: what it's working on (its description), or its behavior/engine.", {
+        tool("workspace_update", "Update what a workspace is working on (its description). Use /engine and /behavior in that workspace's chat to change runtime settings.", {
           name: z.string().describe("Workspace to update"),
           description: z.string().optional().describe("What this workspace is currently working on"),
-          behavior: z.enum(["assistant", "relay"]).optional().describe("Workspace behavior mode"),
-          engine: z.string().optional().describe("Engine (e.g. 'claude-code', 'kiro')"),
         }, async (args) => {
           const ws = this.config.workspaceByName(args.name);
           if (!ws) {
             return { content: [{ type: "text" as const, text: `No workspace named "${args.name}".` }] };
           }
-          if (args.engine && !this.engines.has(args.engine)) {
-            return { content: [{ type: "text" as const, text: `Unknown engine "${args.engine}". Available: ${[...this.engines.keys()].join(", ")}` }] };
-          }
-          // Switching engines must reset the session: a stored session id belongs to the old
-          // engine and the new one can't resume it (codex can't load a claude session id).
-          const engineChanged = args.engine !== undefined && args.engine !== (ws.engine ?? this.config.defaultEngine);
           this.config.upsertWorkspace({
             ...ws,
             description: args.description ?? ws.description,
-            behavior: args.behavior ?? ws.behavior,
-            engine: args.engine ?? ws.engine,
-            current_session_id: engineChanged ? null : ws.current_session_id,
           });
-          log.info("[tool] workspace_update: %s%s", args.name, engineChanged ? ` (engine → ${args.engine}, session reset)` : "");
-          const resetNote = engineChanged ? ` Engine set to "${args.engine}"; session reset.` : "";
-          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" updated.${resetNote}` }] };
+          log.info("[tool] workspace_update: %s", args.name);
+          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" updated.` }] };
         }),
       );
     }
