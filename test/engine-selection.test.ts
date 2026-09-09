@@ -61,6 +61,7 @@ function harness(t: TestContext) {
   const engines = new Map<string, Engine>(["claude-code", "codex"].map((name) => [name, {
     name,
     listSessions: async () => [],
+    getSessionMessages: async () => [],
     async *runTurn(opts: RunTurnOpts) {
       calls.push({ engine: name, opts });
       if (name === "claude-code") throw new Error("Claude quota exhausted");

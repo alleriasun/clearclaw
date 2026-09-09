@@ -19,6 +19,8 @@ import type {
   PermissionMode,
   RunTurnOpts,
   SessionInfo,
+  SessionHistoryOpts,
+  SessionMessage,
   ToolCall,
 } from "../types.js";
 
@@ -179,6 +181,86 @@ export class AcpEngine implements Engine {
       if (proc && !proc.killed) {
         proc.kill();
       }
+    }
+  }
+
+  async getSessionMessages(opts: SessionHistoryOpts): Promise<SessionMessage[]> {
+    opts.signal?.throwIfAborted();
+    const signal = AbortSignal.any([
+      ...(opts.signal ? [opts.signal] : []),
+      AbortSignal.timeout(30_000),
+    ]);
+    const proc = spawnAgent(this.spawnConfig, {
+      ...opts,
+      prompt: "",
+      permissionMode: "default",
+      onPermissionRequest: async () => ({ decision: "deny", message: "History loading cannot run tools" }),
+    });
+    const messages: SessionMessage[] = [];
+    let previousId: string | null | undefined;
+    let previousRole: SessionMessage["role"] | undefined;
+    let rejectStopped!: (reason: unknown) => void;
+    const stopped = new Promise<never>((_resolve, reject) => { rejectStopped = reject; });
+    const onAbort = () => rejectStopped(signal.reason);
+    const onError = (err: Error) => rejectStopped(err);
+    const onExit = () => rejectStopped(new Error(`${this.name} exited while loading session history`));
+    signal.addEventListener("abort", onAbort, { once: true });
+    proc.once("error", onError);
+    proc.once("exit", onExit);
+    // Drain stderr so verbose adapters cannot block waiting for a full pipe.
+    proc.stderr?.resume();
+    const client: Client = {
+      extNotification: async () => {},
+      requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+      sessionUpdate: async ({ sessionId, update }) => {
+        if (sessionId !== opts.sessionId) return;
+        if (update.sessionUpdate !== "user_message_chunk" && update.sessionUpdate !== "agent_message_chunk") {
+          // A tool/thought between text chunks ends the adjacent text segment.
+          previousRole = undefined;
+          return;
+        }
+        const role = update.sessionUpdate === "user_message_chunk" ? "user" : "assistant";
+        if (update.content.type !== "text") {
+          previousRole = undefined;
+          previousId = undefined;
+          return;
+        }
+        const last = messages.at(-1);
+        // ACP message IDs preserve separate consecutive messages from the same role.
+        // Older agents without IDs can only be normalized into adjacent role segments.
+        if (last && previousRole === role && previousId === update.messageId) {
+          last.text += update.content.text;
+        } else {
+          messages.push({ role, text: update.content.text });
+        }
+        previousId = update.messageId;
+        previousRole = role;
+      },
+    };
+    const conn = new ClientSideConnection(() => client, ndJsonStream(
+      Writable.toWeb(proc.stdin!) as WritableStream<Uint8Array>,
+      Readable.toWeb(proc.stdout!) as ReadableStream<Uint8Array>,
+    ));
+    try {
+      await Promise.race([stopped, (async () => {
+        const init = await conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+        if (!init.agentCapabilities?.loadSession) {
+          throw new Error(`${this.name} does not support loading session history`);
+        }
+        await conn.loadSession({ sessionId: opts.sessionId, cwd: opts.cwd, mcpServers: [] });
+      })()]);
+      signal.throwIfAborted();
+      return messages.filter((message) => message.text.length > 0);
+    } catch (err) {
+      if (err instanceof Error) throw err;
+      const message = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
+      throw new Error(message);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      proc.removeListener("error", onError);
+      proc.removeListener("exit", onExit);
+      proc.stdin?.end();
+      proc.kill();
     }
   }
 
