@@ -13,7 +13,7 @@ npm run check      # tsc --noEmit (type check only)
 ```
 
 **Required env vars:** Channel token(s) + `ALLOWED_USER_IDS` (comma-separated, channel-prefixed, e.g. `tg:12345,slack:U67890`)
-**Channel:** `TELEGRAM_BOT_TOKEN` for Telegram, or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for Slack (one channel at a time; Slack takes priority if both are set)
+**Channel:** `TELEGRAM_BOT_TOKEN` for Telegram, or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for Slack (one channel at a time; Slack takes priority if both are set). Grok Bot gateway: `GROKBOT_GATEWAY_URL` (or `SAND_GATEWAY_URL`) + `SAND_GATEWAY_TOKEN` when Slack/Telegram are unset. See [docs/channels/grok.md](docs/channels/grok.md).
 **Optional:** `PERMISSION_MODE` (default|acceptEdits|bypassPermissions|plan|dontAsk), `CLEARCLAW_HOME` (defaults to `~/.clearclaw`)
 
 ## Dev Server

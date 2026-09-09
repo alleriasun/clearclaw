@@ -8,6 +8,7 @@ import log, { initLogger } from "./logger.js";
 import { createEngineMap, ENGINE_NAMES, engineCommand } from "./engine/registry.js";
 import { TelegramChannel } from "./channel/telegram.js";
 import { SlackChannel } from "./channel/slack.js";
+import { DEFAULT_GROK_RELAY_AGENT_ID, GrokChannel } from "./channel/grok.js";
 import { Orchestrator } from "./orchestrator.js";
 import type { Channel, UserInfo } from "./types.js";
 
@@ -94,9 +95,9 @@ async function runSetup(): Promise<void> {
 
     let channelType: string;
     while (true) {
-      channelType = (await ask("Channel [telegram/slack]: ")).trim().toLowerCase();
-      if (channelType === "telegram" || channelType === "slack") break;
-      console.log('  Please enter "telegram" or "slack".');
+      channelType = (await ask("Channel [telegram/slack/grok]: ")).trim().toLowerCase();
+      if (channelType === "telegram" || channelType === "slack" || channelType === "grok") break;
+      console.log('  Please enter "telegram", "slack", or "grok".');
     }
 
     let channelConfig: ChannelConfig;
@@ -105,6 +106,13 @@ async function runSetup(): Promise<void> {
       const appToken = (await ask("Slack app token (xapp-...): ")).trim();
       if (!botToken || !appToken) throw new Error("Both tokens required for Slack.");
       channelConfig = { type: "slack", botToken, appToken };
+    } else if (channelType === "grok") {
+      const gatewayUrl = (await ask("Grok gateway URL (http://<host>:1340): ")).trim();
+      const gatewayToken = (await ask("Grok gateway token (SAND_GATEWAY_TOKEN): ")).trim();
+      const relayAgentId = (await ask(`Relay agent id [${DEFAULT_GROK_RELAY_AGENT_ID}]: `)).trim()
+        || DEFAULT_GROK_RELAY_AGENT_ID;
+      if (!gatewayUrl || !gatewayToken) throw new Error("Gateway URL and token required for Grok.");
+      channelConfig = { type: "grok", gatewayUrl, gatewayToken, relayAgentId };
     } else {
       const botToken = (await ask("Telegram bot token: ")).trim();
       if (!botToken) throw new Error("Bot token required.");
@@ -144,6 +152,25 @@ async function runSetup(): Promise<void> {
     ]);
     console.log("Saved to ~/.clearclaw/config.json\n");
     config.resolve();
+
+    if (channelConfig.type === "grok") {
+      channel = createChannel(
+        config.channel!,
+        (userId) => config.isAuthorized(userId),
+        () => {},
+        () => config.listAuthorizedUserIds(),
+      );
+      console.log("Connecting to Grok gateway...");
+      await channel.connect();
+      console.log([
+        "Connected. Grok has no pairing DM.",
+        `Bind a workspace chat_id to grok:${channelConfig.relayAgentId} (or grok:default).`,
+        "",
+        "Start the daemon:",
+        "  clearclaw daemon",
+      ].join("\n"));
+      return;
+    }
 
     let resolveFirstDM!: (info: { chatId: string; user: UserInfo }) => void;
     const firstDM = new Promise<{ chatId: string; user: UserInfo }>((r) => {
@@ -212,6 +239,13 @@ function createChannel(
       onUnauthorizedDM,
       authorizedUserIds,
     );
+  }
+  if (ch.type === "grok") {
+    return new GrokChannel({
+      gatewayUrl: ch.gatewayUrl,
+      token: ch.gatewayToken,
+      relayAgentId: ch.relayAgentId,
+    });
   }
   return new TelegramChannel(ch.botToken, isAuthorized, onUnauthorizedDM);
 }

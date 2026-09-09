@@ -71,6 +71,7 @@
 - [x] Universal markdown in format.ts, channel-specific escaping (MarkdownV2 in telegram.ts, mrkdwn in slack.ts)
 - [x] Channel config (env var detection: Slack priority if both set)
 - [x] Typing indicator via emoji reactions (👀 on user's message)
+- [x] Grok Bot host gateway channel stub (`grok:` prefix, sendPrompt / transcript tail / SSE)
 
 ## Scheduler
 

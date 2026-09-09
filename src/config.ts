@@ -4,6 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { PermissionMode, Workspace } from "./types.js";
+import { DEFAULT_GROK_RELAY_AGENT_ID } from "./channel/grok.js";
 
 // --- Channel config types ---
 
@@ -18,7 +19,14 @@ export interface SlackConfig {
   appToken: string;
 }
 
-export type ChannelConfig = TelegramConfig | SlackConfig;
+export interface GrokConfig {
+  type: "grok";
+  gatewayUrl: string;
+  gatewayToken: string;
+  relayAgentId: string;
+}
+
+export type ChannelConfig = TelegramConfig | SlackConfig | GrokConfig;
 
 // --- Auth / pairing data types ---
 
@@ -143,16 +151,26 @@ export class Config {
     const slackBotToken = process.env.SLACK_BOT_TOKEN;
     const slackAppToken = process.env.SLACK_APP_TOKEN;
     const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+    const grokGatewayUrl = process.env.GROKBOT_GATEWAY_URL ?? process.env.SAND_GATEWAY_URL;
+    const grokGatewayToken = process.env.SAND_GATEWAY_TOKEN;
+    const grokRelayAgentId = process.env.GROK_RELAY_AGENT_ID ?? DEFAULT_GROK_RELAY_AGENT_ID;
 
     if (slackBotToken && slackAppToken) {
       this.channel = { type: "slack", botToken: slackBotToken, appToken: slackAppToken };
     } else if (telegramBotToken) {
       this.channel = { type: "telegram", botToken: telegramBotToken };
+    } else if (grokGatewayUrl && grokGatewayToken) {
+      this.channel = {
+        type: "grok",
+        gatewayUrl: grokGatewayUrl,
+        gatewayToken: grokGatewayToken,
+        relayAgentId: grokRelayAgentId,
+      };
     } else {
       const saved = this.getChannel();
       if (!saved) {
         throw new Error(
-          "Missing channel config: set TELEGRAM_BOT_TOKEN or SLACK_BOT_TOKEN + SLACK_APP_TOKEN, or run `clearclaw setup`",
+          "Missing channel config: set TELEGRAM_BOT_TOKEN, SLACK_BOT_TOKEN + SLACK_APP_TOKEN, or GROKBOT_GATEWAY_URL (or SAND_GATEWAY_URL) + SAND_GATEWAY_TOKEN, or run `clearclaw setup`",
         );
       }
       this.channel = saved;

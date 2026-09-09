@@ -641,6 +641,9 @@ export class Orchestrator {
         }
         if (state.abort) {
           state.abort.abort();
+          await this.channel.interrupt?.(msg.chatId).catch((err) => {
+            log.warn({ err }, "[cmd] channel interrupt failed for %s", msg.chatId);
+          });
           log.info("[cmd] turn cancelled");
         } else {
           await this.channel.sendMessage(msg.chatId, "Nothing to cancel.");
