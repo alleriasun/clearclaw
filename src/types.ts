@@ -108,7 +108,7 @@ export interface RunTurnOpts {
   appendSystemPrompt?: string;
   mcpServers?: Record<string, McpServerConfig>;
   signal?: AbortSignal;
-  model?: string; // per-workspace model override; omitted = engine's own default
+  model?: string; // per-workspace model override; omitted leaves the model to the engine/session
 }
 
 interface ToolCallBase {
@@ -187,7 +187,7 @@ export interface Workspace {
   engine_handoff?: EngineHandoff; // prior session context, delivered on the next ordinary turn
   behavior?: "assistant" | "relay";
   engine?: string;         // "claude-code" (default) | "kiro" | other ACP agent
-  model?: string;          // per-workspace model override; unset = engine's own default
+  model?: string;          // per-workspace model override; unset = no override; resumed sessions may retain their model
   project?: string;        // the project this workspace belongs to, if any (set at onboarding; absent for legacy/non-forum workspaces)
   description?: string;    // what this workspace is currently working on (its focus / peer brief)
   spawnedFrom?: string;    // origin workspace if spawned via spin_out (a peer); absent = the project's main

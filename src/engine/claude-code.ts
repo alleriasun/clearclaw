@@ -218,8 +218,8 @@ export class ClaudeCodeEngine implements Engine {
           log.info(`[sdk] ${msg.type}${sub}`);
         }
 
-        // Session ID (and resolved model) are known from the very first message —
-        // persist right away so a cancelled turn doesn't lose them.
+        // Report session metadata immediately so a cancelled turn keeps its ID.
+        // The observed model is metadata, not a user-selected override.
         if (msg.type === "system" && (msg as SDKSystemMessage).subtype === "init") {
           const init = msg as SDKSystemMessage;
           yield { type: "session", sessionId: init.session_id, model: init.model };
