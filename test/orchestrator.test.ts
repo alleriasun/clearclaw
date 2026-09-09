@@ -683,17 +683,51 @@ test("workspace_archive refuses another channel's chat and leaves it bound", asy
   assert.deepEqual(harness.channelCalls.closeProjectChat, []);
 });
 
-test("workspace_archive preserves workspace and Project when chat closure fails", async () => {
+for (const reason of ["Telegram cannot close a whole chat; only topics can be archived", "400 TOPIC_ID_INVALID"]) {
+test(`workspace_archive unbinds after chat closure fails: ${reason}`, async (t) => {
   const harness = makeHarness({
     workspaces: [workspace({ name: "main", project: "ClearClaw" })],
     projects: [{ name: "ClearClaw", description: "test", main_workspace: "main" }],
     interactiveResponse: "yes",
+    closeError: new Error(reason),
+  });
+  const result = await tool(harness, "workspace_archive").handler({ name: "main" });
+  assert.equal(result.content[0]!.text, `Workspace "main" archived. Chat closure failed (${reason}).`);
+  assert.equal(harness.workspaces.length, 0);
+  assert.equal(harness.projects.length, 0);
+  t.diagnostic(JSON.stringify({ input: { name: "main" }, response: result.content[0]!.text,
+    workspacesRemaining: harness.workspaces.length, projectsRemaining: harness.projects.length }));
+});
+}
+
+test("workspace_archive preserves external files and both notes after chat closure fails", async (t) => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-archive-failed-close-"));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(cwd, "work.txt"), "uncommitted work");
+  const harness = makeHarness({
+    workspaces: [workspace({ name: "peer", cwd, spawnedFrom: "main", owns_worktree: false })],
+    interactiveResponse: "yes",
+    closeError: new Error("closure unavailable"),
+  });
+  const result = await tool(harness, "workspace_archive").handler({ name: "peer" });
+  assert.equal(harness.workspaces.length, 0);
+  assert.equal(fs.readFileSync(path.join(cwd, "work.txt"), "utf8"), "uncommitted work");
+  assert.match(result.content[0]!.text, /Chat closure failed \(closure unavailable\)/);
+  assert.match(result.content[0]!.text, /External worktree left in place/);
+});
+
+test("workspace_archive cancellation leaves the registration and chat untouched", async () => {
+  const harness = makeHarness({
+    workspaces: [workspace({ name: "main", project: "project" })],
+    projects: [{ name: "project", description: "test", main_workspace: "main" }],
+    interactiveResponse: "no",
     closeError: new Error("closure unavailable"),
   });
   const result = await tool(harness, "workspace_archive").handler({ name: "main" });
-  assert.match(result.content[0]!.text, /closure unavailable.*Workspace remains bound/);
+  assert.match(result.content[0]!.text, /Archive cancelled/);
   assert.equal(harness.workspaces.length, 1);
   assert.equal(harness.projects.length, 1);
+  assert.deepEqual(harness.channelCalls.closeProjectChat, []);
 });
 
 test("startup leaves existing Project grouping untouched", async () => {
