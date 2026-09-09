@@ -344,13 +344,12 @@ export class Config {
     return removed;
   }
 
-  /** Persists the session ID and, when known, the model resolved for it — same write, so a fix for one is never a fix for the other. */
-  setSession(name: string, sessionId: string, model?: string): void {
+  /** Persist the session ID without changing the user-selected model override. */
+  setSession(name: string, sessionId: string): void {
     const data = this.read();
     const ws = data.workspaces.find((w) => w.name === name);
     if (ws) {
       ws.current_session_id = sessionId;
-      if (model) ws.model = model;
       this.write(data);
     }
   }
@@ -365,7 +364,7 @@ export class Config {
     }
   }
 
-  setModel(name: string, model: string): void {
+  setModel(name: string, model: string | undefined): void {
     const data = this.read();
     const ws = data.workspaces.find((w) => w.name === name);
     if (ws) {
