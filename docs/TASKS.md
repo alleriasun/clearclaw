@@ -80,6 +80,19 @@
 - [ ] Idle housekeeping (auto-tidy memory/context during inactivity)
 - [ ] `/schedule` command for schedule inspection
 
+## Peer Agents
+
+[Projects and peer spawning](specs/peer-spawning.md) is the maintained lifecycle spec.
+
+- [x] Explicit peer messaging through `message_peer`
+- [x] Spin-out proposals, automatic spawning, and manual brief claims
+- [x] Project creation for new and existing unprojected workspaces
+- [x] Telegram topics and Slack private channels with Project grouping
+- [x] Explicit directory ownership and ownership-aware archive
+- [x] Per-peer engine selection and compatible model inheritance, including onboarding overrides
+- [ ] [#46: Move worktree preparation out of spin_out](https://github.com/alleriasun/clearclaw/issues/46), so corporate commands and repository layouts stay in caller tooling; include manual claims and the ownership transition
+- [ ] Decide and implement shared memory separately; the existing [shared-memory proposal](specs/2026-06-07-peer-agents-and-memory.md#part-2-shared-memory) is not part of the current peer lifecycle
+
 ## Agent Situational Awareness
 
 - [ ] Wire `chatType` through Telegram and Slack channels — `chatType` is on `InboundMessage` but not yet populated by either channel

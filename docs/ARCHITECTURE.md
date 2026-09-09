@@ -11,6 +11,7 @@ Transparent relay between chat channels and CLI agents. See [OVERVIEW.md](OVERVI
 | **Channel** | A delivery channel — the platform adapter (Telegram, Slack, etc.) that handles sending/receiving messages, buttons, and typing indicators. | One per platform per instance |
 | **Chat** | A conversation on a platform — a Telegram group, a DM, a Slack channel. Identified by `chat_id` with a platform prefix (e.g., `tg:123456`, `slack:C1234`). Platform names differ (Telegram "group", Slack "channel") but ClearClaw calls them all "chats". | Many per instance |
 | **Workspace** | A named work context: `cwd` + session + chat binding. The unit of isolation within an instance. | One per chat, many per instance |
+| **Project** | A named body of work with a description and main workspace; groups peer workspaces but owns no session. | Many per instance |
 | **ClearClaw Instance** | One running process: one bot, one owner, multiple workspaces. | Process-level |
 
 **Bot ≠ Agent.** A bot is a platform identity. An agent is defined by what's in the workspace's `cwd` — same bot, different cwd, different agent behavior. ClearClaw doesn't model agents. It routes messages to engines pointed at workspaces, and the engine picks up whatever configuration is in that directory.
@@ -24,18 +25,23 @@ Transparent relay between chat channels and CLI agents. See [OVERVIEW.md](OVERVI
 A **workspace** is a named unit defined by a working directory (CWD).
 
 - **Home workspace** (`default`): The bot's home — personal assistant context for general questions, life management, system tasks. Lives at `~/.clearclaw/workspace/` (singular). Has its own `CLAUDE.md`, identity files, memory, skills. DM chat routes here.
-- **Project workspaces** (user-defined, e.g., `myapp`, `work-api`): CWD is any directory on the machine (e.g., `~/projects/myapp`). The agent runs there with full access to the codebase. The project's own `CLAUDE.md` and `.claude/settings.json` apply naturally — same as a terminal session. Each project workspace maps to a Telegram group.
+- **Project workspaces** (user-defined, e.g., `myapp`, `work-api`): CWD is any directory on the machine (e.g., `~/projects/myapp`). The agent runs there with full access to the codebase. The project's own `CLAUDE.md` and `.claude/settings.json` apply naturally — same as a terminal session. Each workspace maps to a chat, including a Telegram topic or Slack channel.
 
 **Why singular `workspace/`, not `workspaces/default/`?** Project workspaces don't need a ClearClaw-managed directory — they point to existing repos. The only workspace that needs a managed home is the personal one, and there's only ever one (one bot, one user, one DM). Multiple identities would mean multiple bot deployments, not multiple directories. Keeping it singular also gives a clean mental model: the bot has a home (`workspace/`) and visits projects (external repos).
 
-Each workspace is a row in SQLite:
+Workspaces and Projects are persisted in `config.json`. The workspace fields are:
 
 | Field | Description |
 |-------|-------------|
 | `name` | Unique identifier (e.g., `default`, `myapp`) |
 | `cwd` | Absolute path to working directory |
-| `session_id` | Current Claude Code session ID |
+| `current_session_id` | Current session ID for the selected engine, or null |
 | `chat_id` | The chat (Telegram group, DM, Slack channel, etc.) mapped to this workspace |
+| `behavior`, `engine`, `model` | Optional workspace runtime settings |
+| `project`, `description` | Optional Project membership and workspace context |
+| `spawnedFrom`, `owns_worktree` | Spawn provenance and explicit worktree ownership |
+
+A Project stores `name`, `description`, and `main_workspace`. Its main supplies the spawn destination and default runtime; automatic peers join that Project. Legacy workspaces can remain unprojected or opt in with `project_create`. See the [Projects and peer spawning decision](specs/peer-spawning.md) for the context, contracts, alternatives, and consequences of this model.
 
 ## File Structure
 
@@ -148,9 +154,10 @@ Claude Code stores sessions at `~/.claude/projects/{encoded-cwd-path}/sessions/`
 - **Terminal-mobile handoff:** A terminal session and a mobile session for the same CWD share the same session store. Start in the terminal, continue via Telegram, pick it back up in the terminal.
 - **Session commands:** `/new` clears the stored session ID. Default behavior is resume.
 - **Control routing:** Native commands are handled before onboarding and workspace message dispatch. `/mode`, `/cancel`, and `/engine` work during setup; workspace-only commands report when no workspace is linked instead of reaching the setup model.
-- **Engine:** `/engine` opens the engine picker; `/engine <name>` selects directly. Both work before a workspace exists and during idle onboarding, without invoking a model. Setup uses the selected engine and carries it into `workspace_create` (explicit tool argument, then setup selection, then server default). Changing engines clears the old session and workspace model override. A running turn must be cancelled and finish before switching; the picker rechecks state after the selection. `/cancel` clears an onboarding task, including its engine choice.
+- **Engine:** `/engine` opens the engine picker; `/engine <name>` selects directly. Both work before a workspace exists and during idle onboarding, without invoking a model. Setup uses the selected engine and carries it into `workspace_create` (explicit tool argument, then setup selection, then claimed spin-out engine, then server default). Changing engines clears the old session and workspace model override. A running turn must be cancelled and finish before switching; the picker rechecks state after the selection. `/cancel` clears an onboarding task, including its engine choice.
 - **Engine handoff:** Changing engines keeps a reference to the previous engine, session ID, and cwd. The next ordinary user turn includes that ID and all available user/assistant conversation text, without a ClearClaw character cap. Each engine retrieves a message array through `getSessionMessages`: Claude uses its SDK, and ACP agents replay `session/load` without a prompt. Formatting stays separate. System prompts remain unchanged; unavailable history is marked explicitly. Workspace handoffs survive restarts and failed/cancelled turns and are consumed after successful completion. `/new` and choosing a session with `/resume` discard the pending handoff. Repeated switches before delivery retain the original source; scheduler/peer-only turns leave it pending.
 - **Model:** `/model <name>` sets a per-workspace model override, persisted in workspace config; `/model` alone shows the current one. Unset means the engine picks its own default. The session ID and resolved model are captured from the engine's first message, not its last, so cancelling mid-turn doesn't lose either.
+- **Peer runtime:** `spin_out` inherits the Project main's engine and compatible model by default. Callers may select another engine or Claude Code model per peer. Manual spin-out claims preserve that runtime choice.
 - **Turn isolation:** One message at a time per workspace. Concurrent turns across different workspaces are allowed.
 
 ## User Identity
@@ -216,6 +223,13 @@ Both channels implement the same `Channel` interface but differ in platform spec
 | **Buttons** | Inline keyboard (callback queries) | Block Kit action buttons |
 | **Message handles** | `message_id` (number as string) | `ts` (timestamp string) |
 | **Topic/description** | `setDescription` (groups) | `setTopic` (channels), auto-deletes system messages |
+| **Project grouping** | Forum group with peer topics | Shared sidebar section backed by a User Group |
+
+Both adapters expose `createProjectChat` and `closeProjectChat` directly on `Channel`. Slack also implements `setupProject`, awaited inline during Project registration to initialize its section around the main chat. Slack section handling stays inside the adapter: creation adds its channel, closure archives the channel and removes it from the live User Group. Completed manual section edits are preserved. Telegram validates topic support before creation and closes topics; whole-chat closure is unsupported. Workspace archive closes the bound chat regardless of origin before removing its binding, and reports closure failures without unbinding. Directory ownership remains a separate cleanup decision. There is no startup or per-turn grouping synchronization.
+
+The [platform-boundary decision](specs/peer-spawning.md#platform-boundary) explains why Projects use native topics/channels and keep grouping in the adapter. Worktree preparation still has a built-in git default; moving it to caller tooling for different corporate commands and layouts is the [accepted follow-up](specs/peer-spawning.md#follow-up-decision-caller-prepared-worktrees), tracked in [#46](https://github.com/alleriasun/clearclaw/issues/46).
+
+Regular workspace turns expose `project_create` for legacy workspaces that have no Project. It creates a Project with an existing unprojected workspace as main and refuses silent reassignment. This keeps the required Project/main relationship intact while removing manual `config.json` edits.
 
 **Slack dual-field note:** Slack messages send both `text` (plain fallback for notifications/accessibility) and `blocks` (rich-rendered Block Kit). Both currently receive the same mrkdwn-formatted content. Slack renders mrkdwn in both fields, so there's no formatting mismatch for text content. If we ever need divergent formatting (e.g., stripping markdown from the `text` fallback), the split point is in `sendMessage` / `editMessage`.
 
@@ -233,6 +247,8 @@ Environment variables:
 **Channel (one required):**
 - `TELEGRAM_BOT_TOKEN` — Telegram bot token (mutually exclusive with Slack)
 - `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` — Slack bot + app-level token for Socket Mode. If both Slack and Telegram tokens are set, Slack takes priority.
+  - Slack peer spawning creates private channels. Add the `groups:write` bot-token scope under **OAuth & Permissions**, then reinstall the app to the workspace. ClearClaw invites every authorized Slack user to each spawned peer and archives the channel with the peer workspace.
+  - Slack initializes a shared sidebar section when a channel-backed Project is created, initially named after the Project, with handle `cc-<project-slug>` (plus a stable hash suffix when that handle is occupied). ClearClaw marks the User Groups it creates and never updates or disables an unmarked group. This requires a paid plan, `usergroups:read` and `usergroups:write`, and workspace User Group permissions that allow everyone to manage groups. Spawn adds its new peer channel and archive removes its channel. Existing group names, members, other channels, and disabled state are preserved; missing groups are not recreated by these peer operations.
 
 **General:**
 - `ALLOWED_USER_IDS` (required) — comma-separated, channel-prefixed user IDs (e.g. `tg:12345,slack:U67890`). Trust boundary. `ALLOWED_USER_ID` accepted as single-user alias.
