@@ -374,10 +374,17 @@ export class Orchestrator {
     log.info("%s start session=%s msgs=%d cwd=%s", logPrefix, sessionId ?? "new", messages.length, cwd);
     await this.channel.setTyping(chatId, true);
 
-    const assembledPrompt = assemblePrompt(
+    const { prompt: assembledPrompt, skipped } = await assemblePrompt(
       this.config.frameworkPromptDir,
       this.config.instructionsDir,
     );
+    if (skipped.length > 0) {
+      // Loud on purpose: running without instructions changes how the agent
+      // behaves, so never let it look like a normal turn.
+      await this.channel.sendMessage(chatId,
+        `⚠️ Running without ${skipped.join(", ")} — unreadable (cloud placeholder or I/O timeout).`,
+      ).catch(() => {});
+    }
     const appendSystemPrompt = task
       ? (assembledPrompt ? `${assembledPrompt}\n\n${task.prompt}` : task.prompt)
       : assembledPrompt;

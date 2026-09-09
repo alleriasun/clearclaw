@@ -113,7 +113,7 @@ test("engine handoff survives restart, enters only the ordinary prompt, and is c
   assert.ok(h.calls[0].opts.prompt.includes(oldSession));
   assert.match(h.calls[0].opts.prompt, /legacy-test/);
   assert.match(h.calls[0].opts.prompt, /Continue the previous design discussion/);
-  assert.equal(h.calls[0].opts.appendSystemPrompt, assemblePrompt(h.config.frameworkPromptDir, h.config.instructionsDir));
+  assert.equal(h.calls[0].opts.appendSystemPrompt, (await assemblePrompt(h.config.frameworkPromptDir, h.config.instructionsDir)).prompt);
   assert.equal(h.saved().engine_handoff, undefined);
   await h.turn("Next question");
   assert.equal(h.calls[1].opts.sessionId, "new-engine-session");
@@ -246,7 +246,7 @@ test("the source engine supplies normalized history once, regardless of engine n
   assert.ok(h.calls[0].opts.prompt.includes("User:\nKeep the design in plain markdown."));
   assert.ok(h.calls[0].opts.prompt.includes("Assistant:\nWe chose markdown files for the first version."));
   assert.ok(h.calls[0].opts.prompt.includes("Continue with that design."));
-  assert.equal(h.calls[0].opts.appendSystemPrompt, assemblePrompt(h.config.frameworkPromptDir, h.config.instructionsDir));
+  assert.equal(h.calls[0].opts.appendSystemPrompt, (await assemblePrompt(h.config.frameworkPromptDir, h.config.instructionsDir)).prompt);
   await h.turn("Next question.");
   assert.equal(h.historyCalls.length, 1);
   assert.equal(h.calls[1].opts.prompt.includes(sessionId), false);
