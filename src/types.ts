@@ -70,10 +70,24 @@ export interface SessionInfo {
   gitBranch?: string;
 }
 
+/** Chronological conversation text, excluding tool payloads and internal reasoning. */
+export interface SessionMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export interface SessionHistoryOpts {
+  sessionId: string;
+  cwd: string;
+  signal?: AbortSignal;
+}
+
 export interface Engine {
   name: string;
   runTurn(opts: RunTurnOpts): AsyncIterable<EngineEvent>;
   listSessions(cwd: string): Promise<SessionInfo[]>;
+  /** Read history without submitting a new prompt. Reject on unsupported/failed retrieval. */
+  getSessionMessages(opts: SessionHistoryOpts): Promise<SessionMessage[]>;
 }
 
 export interface RunTurnOpts {
@@ -153,11 +167,18 @@ export type EngineEvent =
 
 // --- Workspace ---
 
+export interface EngineHandoff {
+  engine: string;
+  sessionId: string;
+  cwd: string;
+}
+
 export interface Workspace {
   name: string;
   cwd: string;
   chat_id: string;
   current_session_id: string | null;
+  engine_handoff?: EngineHandoff; // prior session context, delivered on the next ordinary turn
   behavior?: "assistant" | "relay";
   engine?: string;         // "claude-code" (default) | "kiro" | other ACP agent
   model?: string;          // per-workspace model override; unset = engine's own default

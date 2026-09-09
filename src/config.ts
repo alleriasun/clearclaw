@@ -322,6 +322,7 @@ export class Config {
     const ws = data.workspaces.find((w) => w.name === name);
     if (ws) {
       ws.current_session_id = null;
+      delete ws.engine_handoff;
       this.write(data);
     }
   }

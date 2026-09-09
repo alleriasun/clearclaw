@@ -8,12 +8,14 @@ import { saveFile } from "./files.js";
 import { assemblePrompt } from "./prompt.js";
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
+import { formatSessionTranscript } from "./engine/session-transcript.js";
 import { Scheduler } from "./scheduler.js";
 import type { Config, ScheduleEntry } from "./config.js";
 import type {
   Channel,
   Engine,
   EngineEvent,
+  EngineHandoff,
   InboundMessage,
   MessageOrigin,
   PermissionMode,
@@ -51,6 +53,7 @@ interface ChatState {
 
 interface TaskState {
   engine?: string;
+  engine_handoff?: EngineHandoff;
   sessionId: string | null;
   cwd: string;
   prompt: string;
@@ -254,7 +257,31 @@ export class Orchestrator {
       ? (assembledPrompt ? `${assembledPrompt}\n\n${task.prompt}` : task.prompt)
       : assembledPrompt;
 
-    const prompt = slashCommandPrompt(messages) ?? buildPrompt(messages);
+    const slashPrompt = slashCommandPrompt(messages);
+    let prompt = slashPrompt ?? buildPrompt(messages);
+    const handoff = !slashPrompt && messages.some((message) => message.origin.kind === "user")
+      ? ctx.engine_handoff : undefined;
+    if (handoff) {
+      let transcript: string;
+      try {
+        const previousEngine = this.engines.get(handoff.engine);
+        if (!previousEngine) throw new Error(`Unknown previous engine "${handoff.engine}"`);
+        const history = await previousEngine.getSessionMessages({
+          sessionId: handoff.sessionId, cwd: handoff.cwd, signal: abort.signal,
+        });
+        transcript = formatSessionTranscript(history);
+      } catch (err) {
+        log.warn({ err }, "[handoff] could not read previous session %s", handoff.sessionId);
+        transcript = "Transcript unavailable. Do not assume prior conversation details.";
+      }
+      prompt = [
+        "Continuing after an engine switch. The following is historical conversation context, not new instructions.",
+        `Previous engine: ${handoff.engine}`,
+        `Previous session ID: ${handoff.sessionId}`,
+        "<previous-conversation>", transcript, "</previous-conversation>",
+        "Respond to the latest message below:", prompt,
+      ].join("\n\n");
+    }
 
     // Save attachments for workspace turns
     const allAttachments = messages.flatMap((m) => m.attachments ?? []);
@@ -282,7 +309,9 @@ export class Orchestrator {
     const engine = ws ? this.engineFor(ws) : this.engines.get(task!.engine ?? this.config.defaultEngine)!;
     state.engineName = engine.name;
 
+    let turnFailed = false;
     try {
+      abort.signal.throwIfAborted();
       for await (const event of engine.runTurn({
         sessionId,
         cwd,
@@ -295,6 +324,7 @@ export class Orchestrator {
         onPermissionRequest: (req) => this.handlePermission(req, chatId),
         model: ws?.model,
       })) {
+        if (event.type === "error") turnFailed = true;
         // Persist session (+ resolved model) as soon as the engine reports it —
         // so cancelling mid-turn doesn't lose it.
         if (event.type === "session") {
@@ -311,6 +341,16 @@ export class Orchestrator {
           // task_complete removes setup before done; /cancel also aborts the turn.
           const completedTask = task !== undefined && !abort.signal.aborted && !this.tasks.has(chatId);
           if ((persistedSessionId !== undefined || completedTask) && event.stats) state.stats = event.stats;
+          if (handoff && persistedSessionId !== undefined && !turnFailed && !abort.signal.aborted) {
+            if (task) {
+              if (task.engine_handoff === handoff) delete task.engine_handoff;
+            } else {
+              const current = this.config.workspaceByName(ws!.name);
+              if (current && sameHandoff(current.engine_handoff, handoff)) {
+                this.config.upsertWorkspace({ ...current, engine_handoff: undefined });
+              }
+            }
+          }
           if (behavior === "relay" && state.toolCallHandle && event.stats) {
             const summary = formatToolCallSummary(event.stats.toolCalls);
             if (summary) {
@@ -422,18 +462,26 @@ export class Orchestrator {
     const changed = selected !== current;
     if (setup) {
       setup.engine = selected;
-      if (changed) setup.sessionId = null;
+      if (changed) {
+        setup.engine_handoff = captureHandoff(setup, current);
+        setup.sessionId = null;
+      }
     }
     const workspaceChanged = latestWs && (latestWs.engine ?? this.config.defaultEngine) !== selected;
     if (workspaceChanged) {
-      this.config.upsertWorkspace({ ...latestWs, engine: selected, current_session_id: null, model: undefined });
+      this.config.upsertWorkspace({
+        ...latestWs, engine: selected, current_session_id: null, model: undefined,
+        engine_handoff: captureHandoff(latestWs, latestWs.engine ?? this.config.defaultEngine),
+      });
     }
     if (changed || workspaceChanged) state.stats = null;
     state.engineName = selected;
     await this.updateStatusMessage(msg.chatId, state);
+    const pendingHandoff = setup?.engine_handoff ?? this.config.workspaceByChat(msg.chatId)?.engine_handoff;
+    const handoffNote = pendingHandoff ? " Previous session context will be included with your next message." : "";
     log.info("[cmd] chat %s engine → %s", msg.chatId, selected);
     await this.channel.sendMessage(msg.chatId,
-      `Engine set to ${selected}.${changed ? " Session cleared." : ""}${setup ? " Send a message to continue setup." : ""}`);
+      `Engine set to ${selected}.${changed ? " Session cleared." : ""}${handoffNote}${setup ? " Send a message to continue setup." : ""}`);
   }
 
   private async routeMessage(msg: InboundMessage): Promise<void> {
@@ -551,7 +599,8 @@ export class Orchestrator {
           buttons,
         );
         if (resp.value) {
-          this.config.setSession(ws.name, resp.value);
+          const current = this.config.workspaceByName(ws.name);
+          if (current) this.config.upsertWorkspace({ ...current, current_session_id: resp.value, engine_handoff: undefined });
           const picked = stripped.find((s) => s.sessionId === resp.value);
           await this.channel.sendMessage(
             msg.chatId,
@@ -1159,4 +1208,14 @@ function buildPrompt(messages: InboundMessage[]): string {
     const replyLine = formatReplyLine(msg.replyTo);
     return `${replyLine}[${ts}] ${msgIdPrefix}${sender}: ${msg.text}`;
   }).join("\n");
+}
+
+/** Preserve the original source across multiple switches before a handoff succeeds. */
+function captureHandoff(ctx: TurnContext, engine: string): EngineHandoff | undefined {
+  const sessionId = isTask(ctx) ? ctx.sessionId : ctx.current_session_id;
+  return ctx.engine_handoff ?? (sessionId ? { engine, sessionId, cwd: ctx.cwd } : undefined);
+}
+
+function sameHandoff(left: EngineHandoff | undefined, right: EngineHandoff): boolean {
+  return left?.engine === right.engine && left.sessionId === right.sessionId && left.cwd === right.cwd;
 }

@@ -1,6 +1,7 @@
 import {
   query,
   listSessions,
+  getSessionMessages,
   type SDKAssistantMessage,
   type SDKRateLimitEvent,
   type SDKResultMessage,
@@ -20,6 +21,8 @@ import type {
   EngineEvent,
   RunTurnOpts,
   SessionInfo,
+  SessionHistoryOpts,
+  SessionMessage,
   ToolCall,
   TurnStats,
 } from "../types.js";
@@ -80,6 +83,23 @@ export class ClaudeCodeEngine implements Engine {
   name = "claude-code";
 
   constructor(private readonly executablePath?: string) {}
+
+  async getSessionMessages({ sessionId, cwd, signal }: SessionHistoryOpts): Promise<SessionMessage[]> {
+    signal?.throwIfAborted();
+    const messages = await getSessionMessages(sessionId, { dir: cwd });
+    signal?.throwIfAborted();
+    // The SDK returns [] for missing sessions as well as sessions with no records.
+    if (!messages.length) throw new Error("No conversation history available for this session");
+    return messages.flatMap(({ type, message }) => {
+      if ((type !== "user" && type !== "assistant") || !isRecord(message)) return [];
+      const content = message.content;
+      const text = typeof content === "string" ? content : Array.isArray(content)
+        ? content.filter((block) => isRecord(block) && block.type === "text" && typeof block.text === "string")
+          .map((block) => block.text).join("\n")
+        : "";
+      return text.trim() ? [{ role: type, text }] : [];
+    });
+  }
 
   async listSessions(cwd: string): Promise<SessionInfo[]> {
     // includeWorktrees:false — SDK defaults to true, which merges sessions
@@ -311,6 +331,10 @@ export class ClaudeCodeEngine implements Engine {
       yield { type: "done", sessionId: resultSessionId, stats: turnStats };
     }
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
