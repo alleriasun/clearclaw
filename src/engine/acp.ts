@@ -6,6 +6,7 @@ import {
   PROTOCOL_VERSION,
   type Client,
   type SessionNotification,
+  type SessionConfigOption,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type ToolCallContent as AcpToolCallContent,
@@ -95,17 +96,29 @@ export class AcpEngine implements Engine {
 
       // Create or resume session
       let acpSessionId: string;
+      let configOptions: SessionConfigOption[] | null | undefined;
       if (sessionId) {
-        await conn.loadSession({ sessionId, cwd, mcpServers: [] });
+        const loadedSession = await conn.loadSession({ sessionId, cwd, mcpServers: [] });
+        configOptions = loadedSession.configOptions;
         acpSessionId = sessionId;
       } else {
         const newSession = await conn.newSession({ cwd, mcpServers: [] });
         acpSessionId = newSession.sessionId;
+        configOptions = newSession.configOptions;
       }
 
-      // Session ID is known before the turn even starts — persist right away
-      // so a cancelled turn doesn't lose it (ACP has no model concept to report).
-      queue.push({ type: "session", sessionId: acpSessionId });
+      // Persist before model selection so a rejected selection doesn't lose the session.
+      yield { type: "session", sessionId: acpSessionId };
+
+      if (opts.model) {
+        // Categories are optional; accept an advertised "model" ID as a fallback.
+        const modelOption = configOptions?.find((option) => option.category === "model")
+          ?? configOptions?.find((option) => option.id === "model" && !option.category);
+        if (!modelOption) throw new Error(`${this.name} did not advertise a model selector`);
+        await conn.setSessionConfigOption({
+          sessionId: acpSessionId, configId: modelOption.id, value: opts.model,
+        });
+      }
 
       // Now start accepting live events
       live = true;
@@ -173,7 +186,7 @@ export class AcpEngine implements Engine {
       if (!(err instanceof Error && err.name === "AbortError")) {
         yield {
           type: "error",
-          message: err instanceof Error ? err.message : String(err),
+          message: errorMessage(err),
         };
       }
       queue.close();
@@ -271,6 +284,11 @@ export class AcpEngine implements Engine {
 }
 
 // --- Helpers ---
+
+function errorMessage(err: unknown): string {
+  if (err && typeof err === "object" && "message" in err && typeof err.message === "string") return err.message;
+  return String(err);
+}
 
 function spawnAgent(config: SpawnConfig, opts: RunTurnOpts): ChildProcess {
   const extraEnv = typeof config.env === "function" ? config.env(opts) : config.env;
