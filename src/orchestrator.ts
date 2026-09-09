@@ -453,18 +453,16 @@ export class Orchestrator {
         model: ws?.model,
       })) {
         if (event.type === "error") turnFailed = true;
-        // Persist session (+ resolved model) as soon as the engine reports it —
+        // Persist the session as soon as the engine reports it —
         // so cancelling mid-turn doesn't lose it.
         if (event.type === "session") {
-          this.persistSessionId(chatId, task, ws, event.sessionId, event.model);
+          this.persistSessionId(chatId, task, ws, event.sessionId);
           continue;
         }
         // Handle done event inline — task vs workspace need different session storage
         if (event.type === "done") {
           log.info("%s done session=%s", logPrefix, event.sessionId);
-          // Model already persisted from the early "session" event above —
-          // writing it again here from this (possibly stale, if /model ran
-          // mid-turn) turn's resolved model would race and clobber it.
+          // Observed model/usage belongs in stats, never in the model override.
           const persistedSessionId = this.persistSessionId(chatId, task, ws, event.sessionId);
           // task_complete removes setup before done; /cancel also aborts the turn.
           const completedTask = task !== undefined && !abort.signal.aborted && !this.tasks.has(chatId);
@@ -511,13 +509,12 @@ export class Orchestrator {
     }
   }
 
-  /** Task turns keep the session ID in memory; workspace turns persist it (+ resolved model) to config. */
+  /** Task turns keep the session ID in memory; workspace turns persist it to config. */
   private persistSessionId(
     chatId: string,
     task: TaskState | undefined,
     ws: Workspace | undefined,
     sessionId: string,
-    model?: string,
   ): string | undefined {
     if (task) {
       if (this.tasks.get(chatId) !== task) return undefined;
@@ -526,7 +523,7 @@ export class Orchestrator {
       const current = this.config.workspaceByName(ws!.name);
       // Ignore late events if the workspace engine changed during this turn.
       if (!current || (current.engine ?? this.config.defaultEngine) !== (ws!.engine ?? this.config.defaultEngine)) return undefined;
-      this.config.setSession(ws!.name, sessionId, model);
+      this.config.setSession(ws!.name, sessionId);
     }
     return sessionId;
   }
@@ -612,12 +609,12 @@ export class Orchestrator {
     }
     if (changed || workspaceChanged) state.stats = null;
     state.engineName = selected;
-    await this.updateStatusMessage(msg.chatId, state);
     const pendingHandoff = setup?.engine_handoff ?? this.config.workspaceByChat(msg.chatId)?.engine_handoff;
     const handoffNote = pendingHandoff ? " Previous session context will be included with your next message." : "";
     log.info("[cmd] chat %s engine → %s", msg.chatId, selected);
     await this.channel.sendMessage(msg.chatId,
       `Engine set to ${selected}.${changed ? " Session cleared." : ""}${handoffNote}${setup ? " Send a message to continue setup." : ""}`);
+    await this.updateStatusMessage(msg.chatId, state);
   }
 
   private async routeMessage(msg: InboundMessage): Promise<void> {
@@ -685,9 +682,9 @@ export class Orchestrator {
         this.config.clearSession(ws.name);
         state.permissionMode = null;
         state.stats = null;
-        await this.updateStatusMessage(msg.chatId, state);
         log.info("[cmd] session cleared for workspace %s", ws.name);
         await this.channel.sendMessage(msg.chatId, "Session cleared.");
+        await this.updateStatusMessage(msg.chatId, state);
         return;
       }
 
@@ -794,16 +791,23 @@ export class Orchestrator {
         if (!requested) {
           await this.channel.sendMessage(
             msg.chatId,
-            ws.model ? `Current model: ${ws.model}` : "No model override set — using the engine's default.",
+            ws.model ? `Model override: ${ws.model}` : "No model override set. New sessions use the engine's default.",
           );
           return;
         }
-        if (this.engineFor(ws).name !== "claude-code") {
+        if (requested === "default") {
+          this.config.setModel(ws.name, undefined);
+          await this.channel.sendMessage(msg.chatId,
+            "Model override cleared. Your current session is kept; use /new to start with the engine's default.");
+          log.info("[cmd] workspace %s model override cleared", ws.name);
+          return;
+        }
+        if (!["claude-code", "codex"].includes(this.engineFor(ws).name)) {
           await this.channel.sendMessage(msg.chatId, `Model override isn't supported for the "${this.engineFor(ws).name}" engine.`);
           return;
         }
         this.config.setModel(ws.name, requested);
-        await this.channel.sendMessage(msg.chatId, `Model set to ${requested}.`);
+        await this.channel.sendMessage(msg.chatId, `Model set to ${requested} for the next turn.`);
         log.info("[cmd] workspace %s model → %s", ws.name, requested);
         return;
       }
@@ -1479,20 +1483,24 @@ export class Orchestrator {
 
     let text: string;
     if (state.stats) {
-      const pct = state.stats.contextWindow > 0
-        ? Math.round((state.stats.contextUsed / state.stats.contextWindow) * 100)
-        : 0;
+      const usage = state.stats.contextWindow > 0
+        ? `${Math.round((state.stats.contextUsed / state.stats.contextWindow) * 100)}%`
+        : "context unknown";
       const displayName = state.stats.model
         ? formatModelName(state.stats.model)
         : state.engineName ?? "agent";
-      text = `🤖 ${displayName} ${pct}% | 🔒 ${modeLabel}`;
+      text = `🤖 ${displayName} ${usage} | 🔒 ${modeLabel}`;
     } else {
       text = `🔒 ${modeLabel}`;
     }
 
     if (text === state.lastStatusText) return;
-    await this.channel.updateStatus(chatId, text);
-    state.lastStatusText = text;
+    try {
+      await this.channel.updateStatus(chatId, text);
+      state.lastStatusText = text;
+    } catch (err) {
+      log.warn({ err }, "[status] failed to update status for chat %s", chatId);
+    }
   }
 }
 
