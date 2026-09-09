@@ -1,8 +1,8 @@
 # Peer Agents and Shared Memory
 
-Status: Design (brainstormed 2026-06-07, not yet planned)
+The current peer lifecycle is specified in [Projects and peer spawning](peer-spawning.md). Part 1 below is the original peer-design context and is superseded by that maintained spec. Part 2 is a separate, unimplemented shared-memory proposal.
 
-Scope: how ClearClaw lets multiple related agents collaborate, and the shared memory layer that makes them cohere, without introducing an orchestrator agent. This is the "why" story. The implementation plan belongs in docs/plans/.
+Scope: how ClearClaw lets multiple related agents collaborate, and the shared memory layer that makes them cohere, without introducing an orchestrator agent. This is the "why" story.
 
 ## Problem
 
@@ -96,7 +96,7 @@ Mem0, Honcho, claude-mem, and ClawMem are drop-in providers, but all carry SQLit
 
 ## Build sequence
 
-This is direction, not a plan. The implementation plan belongs in docs/plans/.
+This is direction, not a plan.
 
 - Phase 1: peer messaging (the handoff tool), spin-out, and auto-spawned worktree agents. This solves the stated pain and is the smaller build.
 - Phase 2: shared memory, STM capture (per-turn, orchestrator-side), consolidation (size-cap / daily / on-demand) that promotes into Instructions / Memory / KB with a narrated diary, and injection of recent STM + LTM each turn. The coherence layer that makes the peers one mind and gives the switchboard awareness.

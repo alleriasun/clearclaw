@@ -28,8 +28,7 @@ npm run check      # tsc --noEmit (type check only)
 - Interfaces defined in `types.ts`, implementations in their own files
 - Data types use `interface`/`type` + plain objects. Classes only for Channel and Engine implementations
 - ClearClaw is a relay that adds orchestration on top of CLI agents. It owns prompt assembly (framework + user instruction files), onboarding, and permission relay UX. The CLI owns tool execution, settings, and session management. When in doubt about where logic belongs: in the CLI, not here.
-- **Design specs** go in `docs/specs/YYYY-MM-DD-<slug>.md` — context, research, decisions with tradeoffs explored, the "why" story. No file-level implementation details.
-- **Implementation plans** go in `docs/plans/YYYY-MM-DD-<slug>.md` — step-by-step build recipes with exact file paths, code changes, and commands. The "how" recipe.
+- **Design specs** go in `docs/specs/<topic>.md`. Use an ADR-style structure: Status, Context, Decision, Consequences, and relevant alternatives or references. Keep contracts and rationale durable; distinguish accepted decisions from proposed work and supersede decisions explicitly when they change. Update or consolidate an existing topic instead of adding dated phase snapshots. No step-by-step implementation recipes or completed-work logs.
 - When developing through ClearClaw (remote via Telegram/Slack), large file writes will fail because the permission prompt content exceeds chat message limits. Break writes into smaller chunks: create/touch the file first, then append sections via Edit.
 
 ## Docs
@@ -37,5 +36,4 @@ npm run check      # tsc --noEmit (type check only)
 - `docs/ARCHITECTURE.md` — Concepts, file structure, data/permission flows, interfaces, storage, config
 - `docs/TASKS.md` — Backlog (phased). Check this first when asked about tasks, the backlog, or what's on the list. Update it when a task is completed or its status changes.
 - `docs/OVERVIEW.md` — Strategy, rationale, what ClearClaw is and isn't
-- `docs/specs/` — Design specs for complex changes (context, research, decisions)
-- `docs/plans/` — Implementation plans (step-by-step build recipes)
+- `docs/specs/` — Durable topic specs (contracts, constraints, decisions, rationale)
