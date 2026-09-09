@@ -56,7 +56,7 @@ Manual `workspace_create` differs from automatic spawning: it can create the req
 
 An automatic peer inherits behavior and compatible runtime settings from its target Project main. If no main resolves for a pending fallback, runtime inheritance uses the caller. Explicit `engine` and `model` arguments take precedence. The effective engine must be registered.
 
-Model overrides currently require `claude-code`. An inherited model survives only when the selected engine remains Claude Code and matches the inherited engine. An incompatible engine change drops the inherited model; an explicit unsupported model is rejected rather than saved as configuration the adapter ignores.
+Model overrides support `claude-code` and `codex`. An inherited model survives only when the selected engine supports model overrides and matches the inherited engine. An incompatible engine change drops the inherited model; an explicit unsupported model is rejected rather than saved as configuration the adapter ignores.
 
 A manual claim chooses its engine in this order:
 

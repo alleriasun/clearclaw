@@ -117,6 +117,7 @@ function makeHarness(options: {
   } as unknown as Config;
   const engines = new Map([
     ["claude-code", { name: "claude-code" }],
+    ["codex", { name: "codex" }],
     ["kiro", { name: "kiro" }],
   ]) as Map<string, Engine>;
   const orchestrator = new Orchestrator({ channel, engines, config });
@@ -204,11 +205,11 @@ test("spin_out can override the peer engine without inheriting another engine's 
       name: "peer",
       brief: "test brief",
       cwd: externalCwd,
-      engine: "kiro",
+      engine: "codex",
     });
 
     const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
-    assert.equal(peer?.engine, "kiro");
+    assert.equal(peer?.engine, "codex");
     assert.equal(peer?.model, undefined);
   } finally {
     fs.rmSync(externalCwd, { recursive: true, force: true });
@@ -271,6 +272,58 @@ test("spin_out inherits the Project main's model by default", async () => {
     assert.equal(peer?.model, "claude-sonnet-4-6");
   } finally {
     fs.rmSync(externalCwd, { recursive: true, force: true });
+  }
+});
+
+test("Codex spin-outs preserve inherited and explicit models through direct creation and pending claims", async (t) => {
+  for (const peerChats of [true, false]) {
+    for (const explicitModel of [undefined, "gpt-5.6-sol"]) {
+      await t.test(`${peerChats ? "direct" : "pending"}, ${explicitModel ? "override" : "inherited"}`, async () => {
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-codex-peer-"));
+        const harness = makeHarness({
+          workspaces: [workspace({ cwd, project: "ClearClaw", engine: "codex", model: "gpt-6-astra" })],
+          projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+          peerChats,
+        });
+        try {
+          await tool(harness, "spin_out").handler({
+            name: "peer", brief: "test brief", cwd, model: explicitModel,
+          });
+          if (!peerChats) {
+            const pending = harness.pendingSpinOuts[0];
+            assert.equal(pending?.engine, "codex");
+            assert.equal(pending?.model, explicitModel ?? "gpt-6-astra");
+            const create = taskTools(harness).find((candidate) => candidate.name === "workspace_create");
+            assert.ok(create);
+            await create.handler({ name: "peer", cwd, description: "test", spin_out_id: pending!.id });
+          }
+          const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+          assert.equal(peer?.engine, "codex");
+          assert.equal(peer?.model, explicitModel ?? "gpt-6-astra");
+        } finally {
+          fs.rmSync(cwd, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+});
+
+test("workspace_create accepts an explicit Codex model and rejects a kiro model", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-create-model-"));
+  const harness = makeHarness({ workspaces: [workspace()] });
+  const create = taskTools(harness).find((candidate) => candidate.name === "workspace_create");
+  assert.ok(create);
+  try {
+    await assert.rejects(
+      create.handler({ name: "peer", cwd, description: "test", engine: "kiro", model: "gpt-6-astra" }),
+      /Model override isn't supported for the "kiro" engine/,
+    );
+    await create.handler({ name: "peer", cwd, description: "test", engine: "codex", model: "gpt-6-astra" });
+    const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+    assert.equal(peer?.engine, "codex");
+    assert.equal(peer?.model, "gpt-6-astra");
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
 
@@ -805,12 +858,12 @@ test("workspace_create drops a pending model when its engine is overridden", asy
       name: "peer",
       cwd,
       description: "test brief",
-      engine: "kiro",
+      engine: "codex",
       spin_out_id: "pending1",
     });
 
     const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
-    assert.equal(peer?.engine, "kiro");
+    assert.equal(peer?.engine, "codex");
     assert.equal(peer?.model, undefined);
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
