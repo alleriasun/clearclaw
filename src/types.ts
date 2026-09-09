@@ -29,6 +29,8 @@ export interface Channel {
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
   sendFile(chatId: string, buffer: Buffer, filename: string, opts?: SendFileOpts): Promise<void>;
   reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void>;
+  /** Abort a remote in-flight turn when the channel supports it (Grok → interruptAgentRun). */
+  interrupt?(chatId: string): Promise<void>;
   /** Set up platform-specific Project organization around an existing main chat. */
   setupProject?(projectName: string, mainChat: string): Promise<void>;
   /** Create a peer chat and organize it within its Project. Returns an opaque chat ID. */

@@ -9,7 +9,7 @@ Transparent relay between chat channels and CLI agents. See [OVERVIEW.md](OVERVI
 | **Bot** | A chat platform identity (token, username). The transport-layer messenger. E.g., a Telegram bot, a Slack app. | One per ClearClaw instance |
 | **Agent** | An engine personality — defined by configuration in a workspace's `cwd` (e.g., CLAUDE.md, skills, permissions, MCP config for Claude Code). ClearClaw does not model agents; the engine does. | Lives in the workspace's `cwd` |
 | **Channel** | A delivery channel — the platform adapter (Telegram, Slack, etc.) that handles sending/receiving messages, buttons, and typing indicators. | One per platform per instance |
-| **Chat** | A conversation on a platform — a Telegram group, a DM, a Slack channel. Identified by `chat_id` with a platform prefix (e.g., `tg:123456`, `slack:C1234`). Platform names differ (Telegram "group", Slack "channel") but ClearClaw calls them all "chats". | Many per instance |
+| **Chat** | A conversation on a platform — a Telegram group, a DM, a Slack channel, or a Grok agent seat. Identified by `chat_id` with a platform prefix (e.g. `tg:123456`, `slack:C1234`, `grok:<agent-uuid>`). Platform names differ (Telegram "group", Slack "channel") but ClearClaw calls them all "chats". | Many per instance |
 | **Workspace** | A named work context: `cwd` + session + chat binding. The unit of isolation within an instance. | One per chat, many per instance |
 | **Project** | A named body of work with a description and main workspace; groups peer workspaces but owns no session. | Many per instance |
 | **ClearClaw Instance** | One running process: one bot, one owner, multiple workspaces. | Process-level |
@@ -58,6 +58,7 @@ src/
   channel/
     telegram.ts         # grammY Telegram bot
     slack.ts            # Slack Bolt (Socket Mode)
+    grok.ts             # Grok Bot host HTTP gateway (optional CoS front door)
 ```
 
 ## Data Flow
@@ -176,7 +177,7 @@ Channels populate structured user info (`UserInfo`) on every inbound message: a 
 
 Defined in `src/types.ts`. Two interfaces keep the orchestrator decoupled from specific channels and engines:
 
-- **Channel** — EventEmitter. `connect`/`disconnect`, `sendMessage`, `sendInteractive` (buttons), `setTyping`. Emits `"message"` events with `InboundMessage` (includes `UserInfo`). Each channel owns a prefix namespace (`tg:`, `slack:`) and implements `ownsId()` for routing.
+- **Channel** — EventEmitter. `connect`/`disconnect`, `sendMessage`, `sendInteractive` (buttons), `setTyping`. Emits `"message"` events with `InboundMessage` (includes `UserInfo`). Each channel owns a prefix namespace (`tg:`, `slack:`, `grok:`) and implements `ownsId()` for routing.
 - **Engine** — `runTurn()` returns `AsyncIterable<EngineEvent>`. The orchestrator iterates events and routes them to the channel.
 - **Workspace** — `name`, `cwd`, `chat_id`, `current_session_id`
 - **UserInfo** — `name` (display name, always present), `handle` (optional platform handle). Populated by the channel from platform-native user data.
@@ -227,6 +228,8 @@ Both channels implement the same `Channel` interface but differ in platform spec
 
 Both adapters expose `createProjectChat` and `closeProjectChat` directly on `Channel`. Slack also implements `setupProject`, awaited inline during Project registration to initialize its section around the main chat. Slack section handling stays inside the adapter: creation adds its channel, closure archives the channel and removes it from the live User Group. Completed manual section edits are preserved. Telegram validates topic support before creation and closes topics; whole-chat closure is unsupported. Workspace archive closes the bound chat regardless of origin before removing its binding, and reports closure failures without unbinding. Directory ownership remains a separate cleanup decision. There is no startup or per-turn grouping synchronization.
 
+Grok is a third Channel (`src/channel/grok.ts`, prefix `grok:`) for the Grok Bot host HTTP gateway. It duplexes `sendPrompt` / transcript tail / SSE; typing, status, edit, delete, and pin are no-ops. See [Grok channel](channels/grok.md).
+
 The [platform-boundary decision](specs/peer-spawning.md#platform-boundary) explains why Projects use native topics/channels and keep grouping in the adapter. Worktree preparation still has a built-in git default; moving it to caller tooling for different corporate commands and layouts is the [accepted follow-up](specs/peer-spawning.md#follow-up-decision-caller-prepared-worktrees), tracked in [#46](https://github.com/alleriasun/clearclaw/issues/46).
 
 Regular workspace turns expose `project_create` for legacy workspaces that have no Project. It creates a Project with an existing unprojected workspace as main and refuses silent reassignment. This keeps the required Project/main relationship intact while removing manual `config.json` edits.
@@ -249,6 +252,7 @@ Environment variables:
 - `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` — Slack bot + app-level token for Socket Mode. If both Slack and Telegram tokens are set, Slack takes priority.
   - Slack peer spawning creates private channels. Add the `groups:write` bot-token scope under **OAuth & Permissions**, then reinstall the app to the workspace. ClearClaw invites every authorized Slack user to each spawned peer and archives the channel with the peer workspace.
   - Slack initializes a shared sidebar section when a channel-backed Project is created, initially named after the Project, with handle `cc-<project-slug>` (plus a stable hash suffix when that handle is occupied). ClearClaw marks the User Groups it creates and never updates or disables an unmarked group. This requires a paid plan, `usergroups:read` and `usergroups:write`, and workspace User Group permissions that allow everyone to manage groups. Spawn adds its new peer channel and archive removes its channel. Existing group names, members, other channels, and disabled state are preserved; missing groups are not recreated by these peer operations.
+- `GROKBOT_GATEWAY_URL` (or `SAND_GATEWAY_URL`) + `SAND_GATEWAY_TOKEN` — Grok Bot host gateway. Used only when Slack and Telegram tokens are unset. Optional `GROK_RELAY_AGENT_ID` (default `53f49e93-8c14-4c1c-8748-0df28ccbaf69`). See [Grok channel](channels/grok.md). Token is never logged.
 
 **General:**
 - `ALLOWED_USER_IDS` (required) — comma-separated, channel-prefixed user IDs (e.g. `tg:12345,slack:U67890`). Trust boundary. `ALLOWED_USER_ID` accepted as single-user alias.

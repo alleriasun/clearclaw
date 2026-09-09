@@ -18,6 +18,7 @@ ClearClaw reuses what the CLI already has:
 ## What It Does
 
 - Routes messages between your phone and your coding agent through Telegram or Slack
+- Optional Grok Bot gateway channel (`grok:` chat IDs) for a CoS / visibility front door — see [docs/channels/grok.md](docs/channels/grok.md)
 - Permission prompts with diffs, tool status, and feedback — like the terminal, on your phone
 - Maps chat groups to project workspaces — each group = a working directory
 - Personal assistant workspace for non-project conversations
@@ -54,6 +55,11 @@ changing scopes.
 Telegram peer topics require Topics to be enabled manually on a supergroup and
 the bot to be an admin with Manage Topics. Private-chat topics require Threaded
 Mode to be enabled for the bot in BotFather.
+
+For the Grok Bot host gateway (Tailscale/SSH to `:1340`), set
+`GROKBOT_GATEWAY_URL` or `SAND_GATEWAY_URL` plus `SAND_GATEWAY_TOKEN` when
+Telegram/Slack tokens are not set. Optional `GROK_RELAY_AGENT_ID`. Bind
+workspace `chat_id` to `grok:<agent-uuid>`. Never commit the gateway token.
 
 ## Architecture
 
