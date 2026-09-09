@@ -344,7 +344,7 @@ export class Config {
     return removed;
   }
 
-  /** Persist the session ID without changing the user-selected model override. */
+  /** Persist the session ID without changing the saved model setting. */
   setSession(name: string, sessionId: string): void {
     const data = this.read();
     const ws = data.workspaces.find((w) => w.name === name);

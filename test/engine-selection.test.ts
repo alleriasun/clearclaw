@@ -510,7 +510,7 @@ for (const model of [undefined, "chosen-model"]) {
     const h = harness(t);
     h.workspace({ engine: "codex", model });
     await h.route("/model");
-    assert.match(h.messages.join("\n"), model ? /Model override: chosen-model/ : /No model override set/);
+    assert.match(h.messages.join("\n"), model ? /Saved model: chosen-model/ : /No model override set/);
     assert.equal(h.calls.length, 0);
   });
 }
@@ -601,3 +601,31 @@ test("/model default can clear an override for an engine without model selection
   assert.doesNotMatch(h.messages.join("\n"), /isn't supported|Internal error/);
   assert.equal(h.calls.length, 0);
 });
+
+for (const previousValue of [undefined, "legacy-resolved-model"]) {
+  test(`legacy config preserves ${previousValue ? "its saved model" : "engine defaults"} until explicitly changed`, async (t) => {
+    const h = harness(t);
+    const file = path.join(h.config.homeWorkspacePath, "..", "config.json");
+    const data = JSON.parse(fs.readFileSync(file, "utf8"));
+    data.workspaces = [{ name: "legacy", chat_id: chatId, cwd: h.config.homeWorkspacePath,
+      engine: "claude-code", current_session_id: "legacy-session", model: previousValue }];
+    fs.writeFileSync(file, JSON.stringify(data));
+    const beforeRead = fs.readFileSync(file, "utf8");
+    await h.route("/model");
+    assert.equal(fs.readFileSync(file, "utf8"), beforeRead, "reading does not migrate or rewrite the saved config");
+    assert.match(h.messages.at(-1)!, previousValue ? /Saved model: legacy-resolved-model/ : /No model override set/);
+    h.runTurn("claude-code", async function* () {
+      yield { type: "session", sessionId: "legacy-session", model: "new-reported-model" };
+      yield { type: "done", sessionId: "legacy-session" };
+    });
+    await h.route("Continue");
+    await h.drain();
+    assert.equal(h.calls[0].opts.model, previousValue);
+    assert.equal(h.config.workspaceByChat(chatId)?.model, previousValue);
+    await h.route("/model default");
+    await h.route("Continue with defaults");
+    await h.drain();
+    assert.equal(h.calls[1].opts.model, undefined);
+    assert.equal(h.config.workspaceByChat(chatId)?.model, undefined);
+  });
+}
