@@ -69,7 +69,7 @@ function harness(t: TestContext) {
     editMessage: async () => {},
     reactToMessage: async () => {},
   } as unknown as Channel;
-  const engines = new Map<string, Engine>(["claude-code", "codex"].map((name) => [name, {
+  const engines = new Map<string, Engine>(["claude-code", "codex", "kiro"].map((name) => [name, {
     name,
     listSessions: async () => [],
     getSessionMessages: async () => [],
@@ -489,9 +489,10 @@ for (const used of [0, 250]) {
   });
 }
 
-test("Codex /model saves an override natively and applies it to the existing session's next turn", async (t) => {
+for (const engine of ["codex", "kiro"]) {
+test(`${engine} /model saves a choice and passes it to the existing session's next turn`, async (t) => {
   const h = harness(t);
-  h.workspace({ engine: "codex", current_session_id: "existing-codex", model: undefined });
+  h.workspace({ engine, current_session_id: "existing-codex", model: undefined });
   await h.route("/model chosen-model");
   assert.equal(h.calls.length, 0);
   assert.match(h.messages.join("\n"), /Model set to chosen-model/);
@@ -500,10 +501,12 @@ test("Codex /model saves an override natively and applies it to the existing ses
   await h.route("Continue");
   await h.drain();
   assert.equal(h.calls.length, 1);
-  assert.equal(h.calls[0].engine, "codex");
+  assert.equal(h.calls[0].engine, engine);
   assert.equal(h.calls[0].opts.model, "chosen-model");
   assert.equal(h.calls[0].opts.sessionId, "existing-codex");
 });
+
+}
 
 for (const model of [undefined, "chosen-model"]) {
   test(`Codex /model reports ${model ? "the configured override" : "no configured override"} without running an engine`, async (t) => {
