@@ -1,9 +1,18 @@
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { App, LogLevel } from "@slack/bolt";
 import type { KnownBlock } from "@slack/types";
 import type { MessageElement } from "@slack/web-api/dist/types/response/ConversationsHistoryResponse.js";
 import log from "../logger.js";
 import type { Attachment, Channel, ChatType, Button, ButtonResponse, ReplyContext, SendFileOpts, MessageOpts, UserInfo } from "../types.js";
+
+interface SlackUserGroup {
+  id?: string;
+  description?: string;
+  handle?: string;
+  date_delete?: number;
+  prefs?: { channels?: string[]; groups?: string[] };
+}
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
@@ -15,10 +24,12 @@ export class SlackChannel extends EventEmitter implements Channel {
     "🙏": "pray", "💪": "muscle", "⚡": "zap", "🌟": "star2",
   };
 
-  private app: App;
+  private app!: App;
   private botToken: string;
+  private appToken: string;
   private botUserId: string | undefined;
   private isAuthorized: (userId: string) => boolean;
+  private authorizedUserIds: () => string[];
   private onUnauthorizedDM?: (chatId: string, user: UserInfo) => void;
   private pendingButtonCallbacks = new Map<string, (triggerId: string) => void>(); // actionId → resolve
   private pendingModalCallbacks = new Map<string, (text: string) => void>(); // modal callbackId → resolve
@@ -30,17 +41,20 @@ export class SlackChannel extends EventEmitter implements Channel {
     appToken: string,
     isAuthorized: (userId: string) => boolean,
     onUnauthorizedDM?: (chatId: string, user: UserInfo) => void,
+    authorizedUserIds: () => string[] = () => [],
   ) {
     super();
     this.botToken = botToken;
+    this.appToken = appToken;
     this.isAuthorized = isAuthorized;
+    this.authorizedUserIds = authorizedUserIds;
     this.onUnauthorizedDM = onUnauthorizedDM;
-    this.app = new App({
-      token: botToken, appToken, socketMode: true, logLevel: LogLevel.ERROR,
-    });
   }
 
   async connect(): Promise<void> {
+    this.app = new App({
+      token: this.botToken, appToken: this.appToken, socketMode: true, logLevel: LogLevel.ERROR,
+    });
     this.app.event("message", async ({ event }) => {
       const subtype = (event as { subtype?: string }).subtype;
 
@@ -183,6 +197,110 @@ export class SlackChannel extends EventEmitter implements Channel {
     await this.app.stop();
   }
   ownsId(chatId: string): boolean { return chatId.startsWith("slack:"); }
+
+  async setupProject(projectName: string, mainChat: string): Promise<void> {
+    await this.updateProjectSection(projectName, mainChat, "initialize");
+  }
+
+  async createProjectChat(projectName: string, _anchor: string, title: string): Promise<string> {
+    const users = this.authorizedSlackUsers();
+    if (users.length === 0) {
+      throw new Error("Cannot create Slack peer: no authorized Slack users to invite");
+    }
+
+    const result = await this.app.client.conversations.create({
+      name: slackChannelName(title),
+      is_private: true,
+    });
+    const channel = result.channel?.id;
+    if (!channel) throw new Error("Slack created a peer channel without returning its ID");
+
+    try {
+      await this.app.client.conversations.invite({
+        channel,
+        users: users.join(","),
+      });
+    } catch (err) {
+      await this.app.client.conversations.archive({ channel }).catch((archiveErr) => {
+        log.warn({ err: archiveErr }, "[channel] failed to archive Slack peer after invite failure");
+      });
+      throw err;
+    }
+
+    await this.updateProjectSection(projectName, `slack:${channel}`, "add");
+    return `slack:${channel}`;
+  }
+
+  async closeProjectChat(chatId: string, projectName?: string): Promise<void> {
+    try {
+      await this.app.client.conversations.archive({
+        channel: this.slackId(chatId),
+      });
+    } catch (err) {
+      const code = slackErrorCode(err);
+      if (code !== "already_archived" && code !== "channel_not_found") throw err;
+    }
+    if (projectName) await this.updateProjectSection(projectName, chatId, "remove");
+  }
+
+  /** Apply one lifecycle change to live Slack preferences; never restore a config snapshot. */
+  private async updateProjectSection(
+    projectName: string,
+    chatId: string,
+    action: "initialize" | "add" | "remove",
+  ): Promise<void> {
+    const channel = this.slackId(chatId);
+    if (!channel.startsWith("C") && !channel.startsWith("G")) return;
+
+    try {
+      const result = await this.app.client.apiCall("usergroups.list", {
+        include_disabled: true,
+      }) as { usergroups?: SlackUserGroup[] };
+      const groups = result.usergroups ?? [];
+      const description = slackUserGroupDescription(projectName);
+      // The marker survives manual name/handle changes. Without it, leave the group alone.
+      const group = groups.find((candidate) => candidate.description === description);
+      if (group) {
+        if (!group.id || group.date_delete) return;
+        const current = [...new Set([...(group.prefs?.channels ?? []), ...(group.prefs?.groups ?? [])])];
+        const channels = action === "remove"
+          ? current.filter((id) => id !== channel)
+          : [...new Set([...current, channel])];
+        if (channels.length === current.length && channels.every((id, i) => id === current[i])) return;
+        await this.app.client.apiCall("usergroups.update", {
+          usergroup: group.id,
+          channels: channels.join(","),
+        });
+        return;
+      }
+      // A deleted group is a user choice, not something spawning should repair.
+      if (action !== "initialize") return;
+      const users = this.authorizedSlackUsers();
+      if (users.length === 0) throw new Error("Cannot create Slack project section: no authorized Slack users");
+      const baseHandle = slackUserGroupHandle(projectName);
+      const handle = groups.some((candidate) => candidate.handle === baseHandle)
+        ? slackUserGroupCollisionHandle(projectName)
+        : baseHandle;
+      if (groups.some((candidate) => candidate.handle === handle)) {
+        throw new Error(`Slack User Group handle "${handle}" is owned by another group`);
+      }
+      const created = await this.app.client.apiCall("usergroups.create", {
+        name: projectName,
+        handle,
+        description,
+        channels: channel,
+        enable_section: true,
+      }) as { usergroup?: SlackUserGroup };
+      if (!created.usergroup?.id) throw new Error("Slack created a project section without returning its User Group ID");
+      await this.app.client.apiCall("usergroups.users.update", {
+        usergroup: created.usergroup.id,
+        users: users.join(","),
+      });
+    } catch (err) {
+      log.warn({ err }, "[channel] failed to %s Slack project section for %s", action, projectName);
+    }
+  }
+
   async sendMessage(
     chatId: string,
     text: string,
@@ -471,6 +589,15 @@ export class SlackChannel extends EventEmitter implements Channel {
     return chatId.replace(/^slack:/, "");
   }
 
+  private authorizedSlackUsers(): string[] {
+    return [...new Set(
+      this.authorizedUserIds()
+        .filter((id) => id.startsWith("slack:"))
+        .map((id) => id.slice("slack:".length))
+        .filter(Boolean),
+    )];
+  }
+
   /** Download a file from Slack using bot token auth. */
   private async downloadFile(url: string): Promise<Buffer> {
     const resp = await fetch(url, {
@@ -528,6 +655,47 @@ function markdownBlock(text: string): KnownBlock[] {
 // The markdown block caps at 12,000 chars. We split at this limit so each chunk
 // fits the block; the text fallback (notification preview) can safely be longer.
 const MAX_TEXT = 12000;
+
+function slackChannelName(title: string): string {
+  const name = title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, 80)
+    .replace(/[-_]+$/g, "");
+  if (!name) throw new Error(`Cannot derive a valid Slack channel name from "${title}"`);
+  return name;
+}
+
+function slackUserGroupHandle(projectName: string): string {
+  const slug = slackChannelName(projectName)
+    .slice(0, 77)
+    .replace(/[-_]+$/g, "");
+  return `cc-${slug}`;
+}
+
+function slackUserGroupCollisionHandle(projectName: string): string {
+  const hash = createHash("sha256").update(projectName).digest("hex").slice(0, 6);
+  const slug = slackChannelName(projectName)
+    .slice(0, 70)
+    .replace(/[-_]+$/g, "");
+  return `cc-${slug}-${hash}`;
+}
+
+function slackUserGroupDescription(projectName: string): string {
+  const hash = createHash("sha256").update(projectName).digest("hex").slice(0, 16);
+  return `Managed by ClearClaw (${hash})`;
+}
+
+function slackErrorCode(err: unknown): string | undefined {
+  if (typeof err !== "object" || err === null || !("data" in err)) return undefined;
+  const data = (err as { data?: unknown }).data;
+  if (typeof data !== "object" || data === null || !("error" in data)) return undefined;
+  const code = (data as { error?: unknown }).error;
+  return typeof code === "string" ? code : undefined;
+}
 
 function splitMessage(text: string): string[] {
   if (text.length <= MAX_TEXT) return [text];

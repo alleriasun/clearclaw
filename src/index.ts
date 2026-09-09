@@ -50,7 +50,12 @@ async function runDaemon(): Promise<void> {
     });
   };
 
-  const channel = createChannel(config.channel!, (userId) => config.isAuthorized(userId), onUnauthorizedDM);
+  const channel = createChannel(
+    config.channel!,
+    (userId) => config.isAuthorized(userId),
+    onUnauthorizedDM,
+    () => config.listAuthorizedUserIds(),
+  );
 
   const enginePaths = Object.fromEntries(
     Object.entries(config.engines).map(([name, entry]) => [name, entry.path]),
@@ -149,6 +154,7 @@ async function runSetup(): Promise<void> {
       config.channel!,
       (userId) => config.isAuthorized(userId),
       (chatId, user) => resolveFirstDM({ chatId, user }),
+      () => config.listAuthorizedUserIds(),
     );
 
     console.log("Connecting...");
@@ -196,9 +202,16 @@ function createChannel(
   ch: ChannelConfig,
   isAuthorized: (userId: string) => boolean,
   onUnauthorizedDM: (chatId: string, user: UserInfo) => void,
+  authorizedUserIds: () => string[],
 ): Channel {
   if (ch.type === "slack") {
-    return new SlackChannel(ch.botToken, ch.appToken, isAuthorized, onUnauthorizedDM);
+    return new SlackChannel(
+      ch.botToken,
+      ch.appToken,
+      isAuthorized,
+      onUnauthorizedDM,
+      authorizedUserIds,
+    );
   }
   return new TelegramChannel(ch.botToken, isAuthorized, onUnauthorizedDM);
 }
@@ -212,5 +225,3 @@ switch (process.argv[2]) {
     console.log(`Usage: clearclaw <command>\n\nCommands:\n  setup     Interactive first-run setup\n  daemon    Start the relay daemon\n  approve   Approve a pairing code\n\nRun 'clearclaw setup' to get started.`);
     process.exit(process.argv[2] ? 1 : 0);
 }
-
-
