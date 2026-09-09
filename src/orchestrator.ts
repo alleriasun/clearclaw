@@ -1475,7 +1475,7 @@ export class Orchestrator {
     if (state.stats) {
       const usage = state.stats.contextWindow > 0
         ? `${Math.round((state.stats.contextUsed / state.stats.contextWindow) * 100)}%`
-        : "context unknown";
+        : "usage n/a";
       const displayName = state.stats.model
         ? formatModelName(state.stats.model)
         : state.engineName ?? "agent";

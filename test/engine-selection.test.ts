@@ -466,14 +466,14 @@ for (const command of ["/engine codex", "/new"]) {
   });
 }
 
-test("unknown context usage shows the engine and context unknown instead of a fabricated percentage", async (t) => {
+test("unknown context usage shows the engine and usage n/a instead of a fabricated percentage", async (t) => {
   const h = harness(t);
   const state = h.internals.chat(chatId);
   state.engineName = "codex";
   state.stats = { model: null, contextUsed: 0, contextWindow: 0, toolCalls: {} };
   await h.internals.updateStatusMessage(chatId, state);
   assert.match(h.statuses[0], /codex/);
-  assert.match(h.statuses[0], /context unknown/i);
+  assert.match(h.statuses[0], /usage n\/a/i);
   assert.doesNotMatch(h.statuses[0], /\d+%/);
 });
 
@@ -485,7 +485,7 @@ for (const used of [0, 250]) {
     state.stats = { model: "claude-opus", contextUsed: used, contextWindow: 1000, toolCalls: {} };
     await h.internals.updateStatusMessage(chatId, state);
     assert.match(h.statuses[0], new RegExp(` ${used / 10}%`));
-    assert.doesNotMatch(h.statuses[0], /context unknown/i);
+    assert.doesNotMatch(h.statuses[0], /usage n\/a/i);
   });
 }
 
