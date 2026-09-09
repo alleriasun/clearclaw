@@ -275,87 +275,61 @@ test("spin_out inherits the Project main's model by default", async () => {
   }
 });
 
-test("Codex spin-outs preserve inherited and explicit models through direct creation and pending claims", async (t) => {
-  for (const peerChats of [true, false]) {
-    for (const explicitModel of [undefined, "gpt-5.6-sol"]) {
-      await t.test(`${peerChats ? "direct" : "pending"}, ${explicitModel ? "override" : "inherited"}`, async () => {
-        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-codex-peer-"));
-        const harness = makeHarness({
-          workspaces: [workspace({ cwd, project: "ClearClaw", engine: "codex", model: "gpt-6-astra" })],
-          projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
-          peerChats,
-        });
-        try {
-          await tool(harness, "spin_out").handler({
-            name: "peer", brief: "test brief", cwd, model: explicitModel,
+test("ACP spin-outs preserve inherited and explicit models through direct creation and pending claims", async (t) => {
+  for (const engine of ["codex", "kiro"]) {
+    for (const peerChats of [true, false]) {
+      for (const explicitModel of [undefined, "selected-model"]) {
+        await t.test(`${engine}, ${peerChats ? "direct" : "pending"}, ${explicitModel ? "override" : "inherited"}`, async () => {
+          const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-acp-peer-"));
+          const harness = makeHarness({
+            workspaces: [workspace({ cwd, project: "ClearClaw", engine, model: "inherited-model" })],
+            projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
+            peerChats,
           });
-          if (!peerChats) {
-            const pending = harness.pendingSpinOuts[0];
-            assert.equal(pending?.engine, "codex");
-            assert.equal(pending?.model, explicitModel ?? "gpt-6-astra");
-            const create = taskTools(harness).find((candidate) => candidate.name === "workspace_create");
-            assert.ok(create);
-            await create.handler({ name: "peer", cwd, description: "test", spin_out_id: pending!.id });
+          try {
+            await tool(harness, "spin_out").handler({
+              name: "peer", brief: "test brief", cwd, model: explicitModel,
+            });
+            if (!peerChats) {
+              const pending = harness.pendingSpinOuts[0];
+              assert.equal(pending?.engine, engine);
+              assert.equal(pending?.model, explicitModel ?? "inherited-model");
+              const create = taskTools(harness).find((candidate) => candidate.name === "workspace_create");
+              assert.ok(create);
+              await create.handler({ name: "peer", cwd, description: "test", spin_out_id: pending!.id });
+            }
+            const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
+            assert.equal(peer?.engine, engine);
+            assert.equal(peer?.model, explicitModel ?? "inherited-model");
+          } finally {
+            fs.rmSync(cwd, { recursive: true, force: true });
           }
-          const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
-          assert.equal(peer?.engine, "codex");
-          assert.equal(peer?.model, explicitModel ?? "gpt-6-astra");
-        } finally {
-          fs.rmSync(cwd, { recursive: true, force: true });
-        }
-      });
+        });
+      }
     }
   }
 });
 
-test("workspace_create accepts an explicit Codex model and rejects a kiro model", async () => {
+test("workspace_create accepts a registered ACP engine's model and rejects an unknown engine", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-create-model-"));
   const harness = makeHarness({ workspaces: [workspace()] });
   const create = taskTools(harness).find((candidate) => candidate.name === "workspace_create");
   assert.ok(create);
   try {
     await assert.rejects(
-      create.handler({ name: "peer", cwd, description: "test", engine: "kiro", model: "gpt-6-astra" }),
-      /Model override isn't supported for the "kiro" engine/,
+      create.handler({ name: "peer", cwd, description: "test", engine: "unknown", model: "selected-model" }),
+      /Unknown engine "unknown"/,
     );
-    await create.handler({ name: "peer", cwd, description: "test", engine: "codex", model: "gpt-6-astra" });
+    await create.handler({ name: "peer", cwd, description: "test", engine: "kiro", model: "selected-model" });
     const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
-    assert.equal(peer?.engine, "codex");
-    assert.equal(peer?.model, "gpt-6-astra");
+    assert.equal(peer?.engine, "kiro");
+    assert.equal(peer?.model, "selected-model");
   } finally {
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
 
-test("spin_out drops a stale model from an engine without model support", async () => {
-  const externalCwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-stale-model-"));
-  const main = workspace({
-    cwd: externalCwd,
-    project: "ClearClaw",
-    engine: "kiro",
-    model: "claude-opus-4-6",
-  });
-  const harness = makeHarness({
-    workspaces: [main],
-    projects: [{ name: "ClearClaw", description: "test", main_workspace: "self" }],
-  });
-
-  try {
-    await tool(harness, "spin_out").handler({
-      name: "peer",
-      brief: "test brief",
-      cwd: externalCwd,
-    });
-
-    const peer = harness.workspaces.find((candidate) => candidate.name === "peer");
-    assert.equal(peer?.engine, "kiro");
-    assert.equal(peer?.model, undefined);
-  } finally {
-    fs.rmSync(externalCwd, { recursive: true, force: true });
-  }
-});
-
-test("spin_out rejects a model override for an engine without model support", async () => {
+test("spin_out rejects a model override for an unknown engine", async () => {
   const main = workspace({ project: "ClearClaw", engine: "kiro" });
   const harness = makeHarness({
     workspaces: [main],
@@ -365,11 +339,11 @@ test("spin_out rejects a model override for an engine without model support", as
   const result = await tool(harness, "spin_out").handler({
     name: "peer",
     brief: "test brief",
-    engine: "kiro",
-    model: "opus",
+    engine: "unknown",
+    model: "selected-model",
   });
 
-  assert.match(result.content[0]!.text, /Model override isn't supported for the "kiro" engine/);
+  assert.match(result.content[0]!.text, /Unknown engine "unknown"/);
   assert.deepEqual(harness.channelCalls.createProjectChat, []);
 });
 

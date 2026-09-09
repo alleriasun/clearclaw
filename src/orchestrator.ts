@@ -265,14 +265,11 @@ export class Orchestrator {
     if (!this.engines.has(effectiveEngine)) {
       return { error: `Unknown engine "${effectiveEngine}". Available: ${[...this.engines.keys()].join(", ")}` };
     }
-    if (requested.model && !["claude-code", "codex"].includes(effectiveEngine)) {
-      return { error: `Model override isn't supported for the "${effectiveEngine}" engine.` };
-    }
     return {
       runtime: {
         engine,
         model: requested.model
-          ?? (["claude-code", "codex"].includes(effectiveEngine) && effectiveEngine === baseEngine
+          ?? (effectiveEngine === baseEngine
             ? baseWorkspace?.model
             : undefined),
       },
@@ -802,10 +799,6 @@ export class Orchestrator {
           log.info("[cmd] workspace %s model override cleared", ws.name);
           return;
         }
-        if (!["claude-code", "codex"].includes(this.engineFor(ws).name)) {
-          await this.channel.sendMessage(msg.chatId, `Model override isn't supported for the "${this.engineFor(ws).name}" engine.`);
-          return;
-        }
         this.config.setModel(ws.name, requested);
         await this.channel.sendMessage(msg.chatId, `Model set to ${requested} for the next turn.`);
         log.info("[cmd] workspace %s model → %s", ws.name, requested);
@@ -1060,7 +1053,7 @@ export class Orchestrator {
           engine: z.string().optional()
             .describe("Engine to use (e.g. 'claude-code', 'kiro'). Defaults to the engine selected for setup, then the claimed spin-out engine, then the server default."),
           model: z.string().optional()
-            .describe("Model override for Claude Code or Codex. When claiming a spin-out, defaults to its chosen model."),
+            .describe("Model choice for the selected engine, validated when the next turn starts. When claiming a spin-out, defaults to its chosen model."),
           spin_out_id: z.string().optional()
             .describe("Pending spin-out id to claim: after creation, its brief is delivered to this workspace as a peer message from the originating workspace"),
         }, async (args) => {
@@ -1074,14 +1067,11 @@ export class Orchestrator {
           const effectiveEngine = engine ?? this.config.defaultEngine;
           const pendingEngine = pending?.engine ?? this.config.defaultEngine;
           const model = args.model
-            ?? (["claude-code", "codex"].includes(effectiveEngine) && effectiveEngine === pendingEngine
+            ?? (effectiveEngine === pendingEngine
               ? pending?.model
               : undefined);
           if (!this.engines.has(effectiveEngine)) {
             throw new Error(`Unknown engine "${effectiveEngine}". Available: ${[...this.engines.keys()].join(", ")}`);
-          }
-          if (model && !["claude-code", "codex"].includes(effectiveEngine)) {
-            throw new Error(`Model override isn't supported for the "${effectiveEngine}" engine.`);
           }
           fs.mkdirSync(args.cwd, { recursive: true });
           this.config.upsertWorkspace({
@@ -1237,7 +1227,7 @@ export class Orchestrator {
         ),
         tool(
           "spin_out",
-          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. One-tap spawning is available when the target project resolves, its main workspace exists, and the channel supports Project chat lifecycle; otherwise this registers a pending brief the user claims by creating a group. The peer inherits its Project main's engine and model by default; pass engine and/or model to override them. Model overrides require the claude-code or codex engine. Pass an existing cwd when external tooling prepared the worktree: the path must already exist, and ClearClaw will never create or remove it. Omit cwd to let ClearClaw create and own a standard git worktree for plain git repos. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
+          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. One-tap spawning is available when the target project resolves, its main workspace exists, and the channel supports Project chat lifecycle; otherwise this registers a pending brief the user claims by creating a group. The peer inherits its Project main's engine and model by default; pass engine and/or model to override them. Model choices are validated by the selected engine when its next turn starts. Pass an existing cwd when external tooling prepared the worktree: the path must already exist, and ClearClaw will never create or remove it. Omit cwd to let ClearClaw create and own a standard git worktree for plain git repos. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
           {
             name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
             brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
@@ -1245,7 +1235,7 @@ export class Orchestrator {
             branch: z.string().optional().describe("Git branch used only when ClearClaw creates the worktree (cwd omitted). Conventional name (e.g. 'feat/x', 'fix/y', 'chore/z'); defaults to 'feat/<name>'."),
             into: z.string().optional().describe("Target project name to spawn into; defaults to your own project"),
             engine: z.string().optional().describe("Engine for the peer (e.g. 'claude-code', 'kiro'); defaults to the Project main's engine"),
-            model: z.string().optional().describe("Claude Code or Codex model override for the peer; defaults to the Project main's model when using the same engine"),
+            model: z.string().optional().describe("Model choice for the peer; defaults to the Project main's model when using the same engine and is validated when the next turn starts"),
           },
           async (args) => {
             const currentSelf = this.config.workspaceByChat(chatId) ?? self;
