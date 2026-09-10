@@ -147,6 +147,30 @@ export class Orchestrator {
     return true;
   }
 
+  /**
+   * Everything creation can reject without touching the platform. Runs before the
+   * confirmation, so the user is never asked to approve a doomed spawn, and again
+   * inside creation, where it is the authoritative check.
+   */
+  private validateNewWorkspace(
+    args: { name: string; cwd: string },
+    project: Project | undefined,
+  ): string | null {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(args.name)) {
+      return "Use a short workspace name containing letters, numbers, hyphens, or underscores.";
+    }
+    if (this.config.workspaceByName(args.name) || this.creatingWorkspaces.has(args.name)) {
+      return `Workspace "${args.name}" already exists or is being created. Pick another name.`;
+    }
+    if (!project && this.config.projectByName(args.name)) {
+      return `Project "${args.name}" already exists. Pass its name as join_project to put this peer in it.`;
+    }
+    if (!path.isAbsolute(args.cwd) || !fs.existsSync(args.cwd) || !fs.statSync(args.cwd).isDirectory()) {
+      return `cwd "${args.cwd}" must be an existing directory with an absolute path. Prepare it with your own tooling, then retry.`;
+    }
+    return null;
+  }
+
   /** Shared creation path for standalone projects and peers, with optional manual binding. */
   private async createWorkspace(
     chatId: string,
@@ -158,21 +182,13 @@ export class Orchestrator {
     runtime: { engine?: string; model?: string },
   ) {
     const result = (text: string) => ({ content: [{ type: "text" as const, text }] });
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(args.name)) {
-      return result("Use a short workspace name containing letters, numbers, hyphens, or underscores.");
-    }
-    if (this.config.workspaceByName(args.name) || this.creatingWorkspaces.has(args.name)) {
-      return result(`Workspace "${args.name}" already exists or is being created. Pick another name.`);
-    }
-    if (!project && this.config.projectByName(args.name)) return result(`Project "${args.name}" already exists. Pass its name as join_project to put this peer in it.`);
+    const invalid = this.validateNewWorkspace(args, project);
+    if (invalid) return result(invalid);
     const description = args.description ?? args.brief.split("\n")[0].slice(0, 160);
     const destination = project ?? { name: args.name, main_workspace: args.name, description };
     const anchor = mainWs.chat_id ?? chatId;
     if (!args.manual && (!this.channel.ownsId(anchor) || !this.channel.createProjectChat || !this.channel.closeProjectChat)) {
       return result("Automatic chat creation is unavailable for this destination. Retry with a manual chat, then use /connect <workspace> in that chat.");
-    }
-    if (!path.isAbsolute(args.cwd) || !fs.existsSync(args.cwd) || !fs.statSync(args.cwd).isDirectory()) {
-      return result(`Spawn failed: cwd "${args.cwd}" must be an existing directory with an absolute path. Prepare it with your own tooling, then retry.`);
     }
     this.creatingWorkspaces.add(args.name);
     const cwd = args.cwd;
@@ -1114,6 +1130,8 @@ export class Orchestrator {
           if (!base) return { content: [{ type: "text" as const, text: `Project "${project!.name}" has no main workspace.` }] };
           const resolved = this.peerRuntime(base, args);
           if (resolved.error) return { content: [{ type: "text" as const, text: resolved.error }] };
+          const invalid = this.validateNewWorkspace(args, project);
+          if (invalid) return { content: [{ type: "text" as const, text: invalid }] };
           const runtime = resolved.runtime!;
           const automatic = !!(this.channel.createProjectChat && this.channel.closeProjectChat
             && (!base.chat_id || this.channel.ownsId(base.chat_id)));
@@ -1126,7 +1144,7 @@ export class Orchestrator {
           if (response.value !== "spawn" && response.value !== "manual") return { content: [{ type: "text" as const, text: "Workspace creation cancelled." }] };
           return this.createWorkspace(chatId, currentSelf.name, project, base, { ...args, manual: response.value === "manual" }, runtime);
         }),
-        tool("workspace_archive", "Archive a workspace: try to close its bound chat, then unbind it even if chat closure fails. Reports any closure error. Removes a git worktree only when ClearClaw created and owns it; externally managed worktrees stay in place. Cannot archive 'default'.", {
+        tool("workspace_archive", "Archive a workspace: try to close its bound chat, then unbind it even if chat closure fails. Reports any closure error. Always leaves the workspace directory on disk; clean that up with your own tooling. Cannot archive 'default'.", {
           name: z.string().describe("Workspace to archive"),
         }, async (args) => {
           if (args.name === "default") {
