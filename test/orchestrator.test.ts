@@ -716,6 +716,44 @@ test("workspace_create gives a peer its own project when the caller has none", a
   }
 });
 
+test("workspace_create names a new project independently of its main workspace", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-named-project-"));
+  const harness = makeHarness({ workspaces: [workspace()] });
+
+  try {
+    await tool(harness, "workspace_create").handler({
+      name: "main", brief: "test brief", cwd, project: "projectxxx",
+    });
+
+    assert.equal(harness.workspaces.find((c) => c.name === "main")?.project, "projectxxx");
+    assert.equal(harness.projects.find((c) => c.name === "projectxxx")?.main_workspace, "main");
+    assert.equal(harness.projects.some((c) => c.name === "main"), false);
+    assert.deepEqual(harness.channelCalls.createProjectChat, [{ projectName: "projectxxx", anchor: "test:self", title: "main" }]);
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("workspace_create joins an existing project by name rather than creating one", async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-join-named-"));
+  const harness = makeHarness({
+    workspaces: [workspace({ project: "alpha" })],
+    projects: [{ name: "alpha", description: "test", main_workspace: "self" }],
+  });
+
+  try {
+    await tool(harness, "workspace_create").handler({
+      name: "peer", brief: "test brief", cwd, project: "alpha",
+    });
+
+    assert.equal(harness.workspaces.find((c) => c.name === "peer")?.project, "alpha");
+    assert.equal(harness.projects.length, 1, "joining must not create a second project");
+    assert.equal(harness.projects[0].main_workspace, "self", "joining must not steal the main");
+  } finally {
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("workspace_create rejects a project whose main workspace is missing", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-missing-main-"));
   const harness = makeHarness({
