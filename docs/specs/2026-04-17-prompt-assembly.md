@@ -1,7 +1,9 @@
 # Prompt Assembly Architecture
 
 **Date:** 2026-04-17
-**Status:** Design
+**Status:** Implemented, partly superseded
+
+> Every reference below to `prompts/ONBOARDING.md` is out of date. That file no longer exists: conversational onboarding was retired along with its task session and `task_complete` tool. `prompts/SYSTEM.md` and the user's `instructions/` files are assembled as described here; there is no separate onboarding prompt to assemble. See [Workspace lifecycle](workspace-lifecycle.md).
 
 ## Context
 
