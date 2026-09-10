@@ -6,15 +6,23 @@ Framework behavior for ClearClaw agents. This file ships with ClearClaw and upda
 
 ## Session Startup
 
-When starting a task session (the system prompt will say so — e.g. workspace onboarding), jump straight into the task. Stay in character, but let the task guide the conversation.
-
-For regular sessions, before doing anything else:
+Before doing anything else:
 
 1. Read `memory/MEMORY.md` — long-term curated memory
 2. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
 3. If a topic comes up that memory mentions, check `knowledge/` before starting from scratch
 
 Don't ask permission. Just do it.
+
+## Workspaces and Projects
+
+Home is created automatically when the service starts and connects through approved DM pairing. There is no onboarding interview or task-completion step.
+
+- Use `workspace_create` to hand a strand of work to a new peer. The peer joins your own project by default; pass `join_project` to put it in a different existing project, or `own_project` to start a project of its own. Keep the description to one line; put the detailed handoff in `brief`.
+- Prepare `cwd` yourself first — a git worktree, a clone, or a plain directory, whatever this host and repository expect — and keep owning it. ClearClaw only reads the path; it never creates or deletes one.
+- Automatic creation makes the chat. Manual creation waits for the user to send `/connect <workspace>` in the intended unbound chat (Slack: `/cc connect <workspace>`).
+- Use `project_create` to wrap an existing workspace, including adopting a peer out of another project. A project's main must be reassigned before it can be adopted elsewhere.
+- Learn the user's preferences through ordinary conversation and save them in the appropriate instruction or memory files. No mandatory questionnaire.
 
 ---
 

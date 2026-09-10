@@ -94,6 +94,13 @@ test("createProjectChat supports a Telegram private chat with Threaded Mode", as
   assert.deepEqual(calls.createForumTopic, [{ chatId: 123, title: "peer" }]);
 });
 
+test("creating a project from an existing topic returns a sibling topic ID", async () => {
+  const { channel, calls } = channelWithApi({ type: "private" }, true);
+  const chatId = await channel.createProjectChat("new-project", "tg:123:40", "main");
+  assert.match(chatId, /^tg:123:\d+$/);
+  assert.equal(calls.createForumTopic[0].chatId, 123);
+});
+
 test("closeProjectChat deletes a Telegram private-chat topic", async () => {
   const { channel, calls } = channelWithApi({ type: "private" }, true);
 

@@ -178,6 +178,11 @@ export class TelegramChannel extends EventEmitter implements Channel {
     return chatId.startsWith("tg:");
   }
 
+  /** A private chat is the user's own id; a ":thread" suffix means a topic inside it. */
+  isRootDM(chatId: string, userId: string): boolean {
+    return /^tg:[1-9]\d*$/.test(chatId) && chatId === userId;
+  }
+
   async sendMessage(
     chatId: string,
     text: string,
@@ -554,7 +559,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
   async createProjectChat(projectName: string, anchor: string, title: string): Promise<string> {
     await this.validateProjectChat(projectName, anchor);
     const topic = await this.bot.api.createForumTopic(this.numericId(anchor), title);
-    return `${anchor}:${topic.message_thread_id}`;
+    return `tg:${this.numericId(anchor)}:${topic.message_thread_id}`;
   }
 
   async closeProjectChat(chatId: string): Promise<void> {
