@@ -127,6 +127,10 @@ Other notable SDK `query()` options beyond what ClearClaw currently uses:
 | `debug` | `boolean` | Enable debug logging |
 | `stderr` | `(data: string) => void` | Callback for stderr output (useful with `debug: true`) |
 
+## ClearClaw tools over MCP
+
+The orchestrator creates one MCP server per turn with handlers bound to the current chat. Claude Code uses the SDK's in-process transport. An ACP agent connects to that same server instance through a Streamable HTTP transport inside the daemon, bound to an ephemeral loopback port and protected by a per-turn bearer token. Transport choice follows the agent's advertised `mcpCapabilities`, not its name: an agent that does not advertise HTTP is handed no servers and runs toolless, as all ACP engines did before. Both new and resumed sessions receive the fresh endpoint; completion, failure, or cancellation closes it. Tool definitions and handler-level confirmations are shared, without a separate tool process. History replay receives no live tools.
+
 ## Prompt Assembly
 
 `assemblePrompt()` in `src/prompt.ts` reads `.md` files from two directories per-turn and concatenates them into a single string:

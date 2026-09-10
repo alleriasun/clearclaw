@@ -10,9 +10,11 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type ToolCallContent as AcpToolCallContent,
+  type McpServer,
 } from "@agentclientprotocol/sdk";
 import log from "../logger.js";
 import { AsyncQueue } from "./async-queue.js";
+import { serveMcpOverHttp, type McpBridge } from "./mcp-http.js";
 import type { SpawnConfig } from "./registry.js";
 import type {
   Engine,
@@ -43,15 +45,29 @@ export class AcpEngine implements Engine {
     } = opts;
 
     let proc: ChildProcess | undefined;
+    const bridges: McpBridge[] = [];
     const queue = new AsyncQueue<EngineEvent>();
     const toolCalls: Record<string, number> = {};
     let contextUsed = 0;
     let contextWindow = 0;
     // tool_call events carry content that requestPermission lacks — cache by ID
     const pendingTools = new Map<string, ToolCall>();
+    // ACP 0.16 does not reject pending setup requests when the process exits.
+    let stop!: (reason: Error) => void;
+    const stopped = new Promise<never>((_resolve, reject) => { stop = reject; });
+    void stopped.catch(() => {});
+    let cancelSession: (() => void) | undefined;
+    const onAbort = () => {
+      cancelSession?.();
+      stop(new DOMException("Turn cancelled", "AbortError"));
+      queue.close();
+    };
 
     try {
+      signal?.throwIfAborted();
+      signal?.addEventListener("abort", onAbort, { once: true });
       proc = spawnAgent(this.spawnConfig, opts);
+      proc.once("error", stop);
 
       // Log stderr for debugging
       proc.stderr?.on("data", (chunk: Buffer) => {
@@ -61,6 +77,7 @@ export class AcpEngine implements Engine {
       // If the process dies unexpectedly, close the queue
       proc.on("exit", (code) => {
         log.info("[acp:%s] process exited with code %d", this.name, code ?? -1);
+        stop(new Error(`ACP process exited during session setup (${code ?? "signal"})`));
         queue.close();
       });
 
@@ -95,22 +112,51 @@ export class AcpEngine implements Engine {
       const conn = new ClientSideConnection((_agent) => client, stream);
 
       // Initialize and read agent capabilities
-      const initResponse = await conn.initialize({
+      const initResponse = await Promise.race([conn.initialize({
         protocolVersion: PROTOCOL_VERSION,
         clientInfo: { name: "clearclaw", version: "0.4.0" },
         clientCapabilities: {},
-      });
+      }), stopped]);
       const supportsImages = initResponse.agentCapabilities?.promptCapabilities?.image ?? false;
+
+      // Hand the agent every server it advertises a transport for; skip the rest.
+      const httpCapable = initResponse.agentCapabilities?.mcpCapabilities?.http ?? false;
+      const mcpServers: McpServer[] = [];
+      for (const [name, server] of Object.entries(opts.mcpServers ?? {})) {
+        signal?.throwIfAborted();
+        if (server.type === "sdk" || server.type === "http") {
+          // ponytail: agents without HTTP MCP run toolless, as every ACP engine did before.
+          if (!httpCapable) {
+            log.warn("[acp:%s] skipping MCP server %s: agent does not support HTTP", this.name, name);
+            continue;
+          }
+          if (server.type === "sdk") {
+            const bridge = await serveMcpOverHttp(name, server);
+            bridges.push(bridge);
+            mcpServers.push(bridge.config);
+          } else {
+            mcpServers.push({ type: "http", name, url: server.url,
+              headers: Object.entries(server.headers ?? {}).map(([name, value]) => ({ name, value })) });
+          }
+        } else if (server.type === "sse") {
+          // ClearClaw never configures SSE; no reason to build a passthrough for it.
+          log.warn("[acp:%s] skipping MCP server %s: SSE is not supported", this.name, name);
+        } else {
+          mcpServers.push({ name, command: server.command, args: server.args ?? [],
+            env: Object.entries(server.env ?? {}).map(([name, value]) => ({ name, value })) });
+        }
+      }
+      signal?.throwIfAborted();
 
       // Create or resume session
       let acpSessionId: string;
       let configOptions: SessionConfigOption[] | null | undefined;
       if (sessionId) {
-        const loadedSession = await conn.loadSession({ sessionId, cwd, mcpServers: [] });
+        const loadedSession = await Promise.race([conn.loadSession({ sessionId, cwd, mcpServers }), stopped]);
         configOptions = loadedSession.configOptions;
         acpSessionId = sessionId;
       } else {
-        const newSession = await conn.newSession({ cwd, mcpServers: [] });
+        const newSession = await Promise.race([conn.newSession({ cwd, mcpServers }), stopped]);
         acpSessionId = newSession.sessionId;
         configOptions = newSession.configOptions;
       }
@@ -119,23 +165,24 @@ export class AcpEngine implements Engine {
       yield { type: "session", sessionId: acpSessionId };
 
       if (opts.model) {
+        signal?.throwIfAborted();
         // Categories are optional; accept an advertised "model" ID as a fallback.
         const modelOption = configOptions?.find((option) => option.category === "model")
           ?? configOptions?.find((option) => option.id === "model" && !option.category);
         if (!modelOption) throw new Error(`${this.name} did not advertise a model selector`);
-        await conn.setSessionConfigOption({
+        await Promise.race([conn.setSessionConfigOption({
           sessionId: acpSessionId, configId: modelOption.id, value: opts.model,
-        });
+        }), stopped]);
       }
 
       // Now start accepting live events
       live = true;
 
       // Wire cancellation
-      const onAbort = () => {
+      cancelSession = () => {
         conn.cancel({ sessionId: acpSessionId }).catch(() => {});
       };
-      signal?.addEventListener("abort", onAbort, { once: true });
+      signal?.throwIfAborted();
 
       // Build prompt content blocks: text + any image attachments
       const promptBlocks: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [
@@ -187,11 +234,8 @@ export class AcpEngine implements Engine {
 
       // Yield events as they arrive
       yield* queue;
-
-      // Cleanup
-      signal?.removeEventListener("abort", onAbort);
     } catch (err) {
-      if (!(err instanceof Error && err.name === "AbortError")) {
+      if (!signal?.aborted && !(err instanceof Error && err.name === "AbortError")) {
         yield {
           type: "error",
           message: errorMessage(err),
@@ -199,8 +243,13 @@ export class AcpEngine implements Engine {
       }
       queue.close();
     } finally {
+      signal?.removeEventListener("abort", onAbort);
       if (proc && !proc.killed) {
         proc.kill();
+      }
+      const closed = await Promise.allSettled(bridges.map((bridge) => bridge.close()));
+      for (const result of closed) {
+        if (result.status === "rejected") log.error({ err: result.reason }, "[mcp] failed to close turn transport");
       }
     }
   }
