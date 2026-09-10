@@ -30,7 +30,7 @@ The **main workspace** supplies the Project's spawn destination, directory basel
 
 ### Proposal and handoff
 
-`workspace_create` is the single creation operation. It targets the Project named by `join_project`, otherwise the caller's own Project; `own_project` instead starts a Project named after the workspace, with that workspace as its main. It resolves the Project main and runtime before proposing the handoff. The main chat is the spawn destination; there is no separate spawn-surface registry or global catch-all.
+`workspace_create` is the single creation operation. It targets the Project named by `project`, otherwise the caller's own. A name that matches no existing Project creates it, with the new workspace as its main; the confirmation distinguishes joining a Project from creating one. It resolves the Project main and runtime before proposing the handoff. The main chat is the spawn destination; there is no separate spawn-surface registry or global catch-all.
 
 When the Project, main workspace, and channel's Project lifecycle capability are available, the user chooses **Create chat**, **Manual chat**, or **Cancel**. Automatic creation makes the platform chat with its lifecycle grouping update, persists the workspace, and queues the brief as a peer message.
 

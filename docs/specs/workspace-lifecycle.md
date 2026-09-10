@@ -24,7 +24,7 @@ The platform supplies user and chat IDs on incoming messages. Setup or `approve`
 
 ### Creation from ordinary conversations
 
-`workspace_create` is the single creation operation, available in every connected workspace conversation. It creates the workspace, its chat, and its first conversation in one call. Membership defaults to the caller's own project; `join_project` names a different existing one, and `own_project` starts a new project with this peer as its main. Unknown projects are errors, not implicit project creation.
+`workspace_create` is the single creation operation, available in every connected workspace conversation. It creates the workspace, its chat, and its first conversation in one call. Membership defaults to the caller's own project. A single `project` argument names the destination: an existing project is joined, and any other name creates that project with this peer as its main. Project names are independent of workspace names, as `home`/`default` already are. Unknown projects are errors, not implicit project creation.
 
 `cwd` and `brief` are both required. The caller prepares the directory using whatever this host and repository expect and keeps owning it; ClearClaw only reads the path. Requiring a brief means a new peer always wakes with its goal, decisions, and scope rather than an empty conversation.
 

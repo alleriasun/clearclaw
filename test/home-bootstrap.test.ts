@@ -151,7 +151,7 @@ test("only a root DM reaches home; topics, groups and other users do not", async
 test("one call creates an independent project and chat and runs its brief with a fresh session", async (t) => {
   const h = harness(t); await h.start(); h.config.connectHomeWorkspace("tg:123");
   h.config.setSession("default", "private-home-session");
-  const result = await h.tool("workspace_create").handler({ name: "apog", cwd: h.root, description: "Apog development", brief: "Build Apog", own_project: true });
+  const result = await h.tool("workspace_create").handler({ name: "apog", cwd: h.root, description: "Apog development", brief: "Build Apog", project: "apog" });
   const apog = h.config.workspaceByName("apog")!;
   assert.equal(apog.project, "apog");
   assert.equal(h.config.projectByName("apog")?.main_workspace, "apog");
@@ -169,7 +169,7 @@ test("one call creates an independent project and chat and runs its brief with a
 test("manual workspace survives restart and connects without sharing home or allowing a rebind", async (t) => {
   const h = harness(t); await h.start(); h.config.connectHomeWorkspace("tg:123");
   h.press("manual");
-  await h.tool("workspace_create").handler({ name: "manual", cwd: h.root, description: "Manual project", brief: "The saved brief", own_project: true });
+  await h.tool("workspace_create").handler({ name: "manual", cwd: h.root, description: "Manual project", brief: "The saved brief", project: "manual" });
   h.press("spawn");
   assert.equal(h.created.length, 0);
   assert.equal(h.config.workspaceByName("manual")?.chat_id, null);
@@ -189,7 +189,7 @@ test("manual workspace survives restart and connects without sharing home or all
 
 test("failed and cancelled first turns retain the brief for retry", async (t) => {
   const h = harness(t); await h.start(); h.config.connectHomeWorkspace("tg:123");
-  await h.tool("workspace_create").handler({ name: "retry", cwd: h.root, description: "Retry", brief: "Do not lose this", own_project: true });
+  await h.tool("workspace_create").handler({ name: "retry", cwd: h.root, description: "Retry", brief: "Do not lose this", project: "retry" });
   const chatId = h.config.workspaceByName("retry")!.chat_id!;
   h.engine.runTurn = async function* (opts) {
     h.calls.push(opts); yield { type: "error", message: "Temporary failure" }; yield { type: "done", sessionId: "failed-session" };
@@ -209,7 +209,7 @@ test("failed and cancelled first turns retain the brief for retry", async (t) =>
 
 test("failed chat creation leaves no new workspace or project", async (t) => {
   const h = harness(t); await h.start(); h.config.connectHomeWorkspace("tg:123");
-  const args = { name: "new", cwd: h.root, description: "New project", brief: "New work", own_project: true };
+  const args = { name: "new", cwd: h.root, description: "New project", brief: "New work", project: "new" };
   h.channel.createProjectChat = async () => { throw new Error("Missing permission"); };
   const result = await h.tool("workspace_create").handler(args);
   assert.match(result.content[0].text, /Missing permission/);
@@ -235,7 +235,7 @@ test("a scheduled prompt still runs in home's normal session", async (t) => {
 test("a message arriving during project setup receives the brief only once", async (t) => {
   const h = harness(t); await h.start(); h.config.connectHomeWorkspace("tg:123");
   h.channel.setupProject = async (_name, chatId) => { await h.route(chatId, "Start now"); };
-  await h.tool("workspace_create").handler({ name: "early", cwd: h.root, description: "Early message", brief: "Unique first brief", own_project: true });
+  await h.tool("workspace_create").handler({ name: "early", cwd: h.root, description: "Early message", brief: "Unique first brief", project: "early" });
   await h.drain(h.config.workspaceByName("early")!.chat_id!);
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].prompt.match(/Unique first brief/g)?.length, 1);
@@ -250,7 +250,7 @@ test("creation rollback does not close a chat connected elsewhere during the pla
     await h.route("tg:123:90", "/connect other");
     return "tg:123:90";
   };
-  const result = await h.tool("workspace_create").handler({ name: "raced", cwd: h.root, description: "Race", brief: "Raced work", own_project: true });
+  const result = await h.tool("workspace_create").handler({ name: "raced", cwd: h.root, description: "Race", brief: "Raced work", project: "raced" });
   assert.match(result.content[0].text, /already connected/);
   assert.equal(h.config.workspaceByChat("tg:123:90")?.name, "other");
   assert.equal(h.config.workspaceByName("raced"), undefined);
@@ -260,7 +260,7 @@ test("creation rollback does not close a chat connected elsewhere during the pla
 test("an unbound manual workspace can be archived without a platform closure", async (t) => {
   const h = harness(t); await h.start(); h.config.connectHomeWorkspace("tg:123");
   h.press("manual");
-  await h.tool("workspace_create").handler({ name: "unused", cwd: h.root, description: "Unused", brief: "Never started", own_project: true });
+  await h.tool("workspace_create").handler({ name: "unused", cwd: h.root, description: "Unused", brief: "Never started", project: "unused" });
   h.press("spawn");
   h.channel.sendInteractive = async () => ({ value: "yes" });
   h.channel.closeProjectChat = async () => { assert.fail("An unbound workspace has no chat to close"); };

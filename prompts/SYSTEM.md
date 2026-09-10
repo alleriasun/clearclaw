@@ -18,7 +18,7 @@ Don't ask permission. Just do it.
 
 Home is created automatically when the service starts and connects through approved DM pairing. There is no onboarding interview or task-completion step.
 
-- Use `workspace_create` to hand a strand of work to a new peer. The peer joins your own project by default; pass `join_project` to put it in a different existing project, or `own_project` to start a project of its own. Keep the description to one line; put the detailed handoff in `brief`.
+- Use `workspace_create` to hand a strand of work to a new peer. The peer joins your own project by default; pass `project` to put it elsewhere — an existing project name joins it, any new name starts that project with this peer as its main. Keep the description to one line; put the detailed handoff in `brief`.
 - Prepare `cwd` yourself first — a git worktree, a clone, or a plain directory, whatever this host and repository expect — and keep owning it. ClearClaw only reads the path; it never creates or deletes one.
 - Automatic creation makes the chat. Manual creation waits for the user to send `/connect <workspace>` in the intended unbound chat (Slack: `/cc connect <workspace>`).
 - Use `project_create` to wrap an existing workspace, including adopting a peer out of another project. A project's main must be reassigned before it can be adopted elsewhere.
