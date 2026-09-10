@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted. Supersedes the conversational onboarding and task-session portions of the dated onboarding specs. Pairing remains the authorization mechanism. Scheduling remains independent.
+Accepted. Pairing remains the authorization mechanism. Scheduling remains independent.
+
+Supersedes and replaces three dated onboarding specs, now removed:
+
+- `2026-03-19-onboarding.md` — first-install flow. Its durable half, `clearclaw setup` plus pairing, is live and documented in the README; its workspace-provisioning half is retired with onboarding.
+- `2026-03-28-telegram-automated-onboarding.md` — proposed driving a user account through TDLib to create and configure groups. Never built. ClearClaw creates forum topics through the Bot API instead, so the friction it addressed no longer exists.
+- `2026-04-12-chat-workspace-onboarding.md` — the conversational onboarding session, its task state, and `task_complete`. Removed entirely; `workspace_create` now works from any connected chat.
 
 ## Context
 
