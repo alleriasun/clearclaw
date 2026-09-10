@@ -8,7 +8,7 @@ This record preserves the architectural choices and their consequences. Update i
 
 ## Context
 
-Related work often needs a separate conversation and working directory. A peer is an ongoing workspace the human can steer directly, with its own engine session. It receives a distilled brief and can communicate with existing workspaces through `message_peer`.
+Related work often needs a separate conversation and working directory. A peer is an ongoing workspace the human can steer directly, with its own engine session. It receives a distilled brief and can communicate with existing workspaces through `message_workspace`, in any project.
 
 ClearClaw supplies transport and lifecycle operations. The human and agents decide what work belongs together. A peer is not a subordinate agent whose result must return to a supervisor, and spawning does not introduce an agent that plans or assigns everyone's work. Workspace chats provide separate contexts without requiring a separate bot identity for every agent.
 
@@ -38,7 +38,7 @@ Missing Projects or mains are errors. When automatic creation is unavailable, th
 
 Manual creation saves a workspace with a null chat ID and a persisted first brief. The user connects it through `/connect <workspace>` (Slack: `/cc connect <workspace>`) in an authorized unbound chat. The brief runs in the normal workspace session and is retained until a successful non-aborted turn. New manual workspaces keep their intended Project membership.
 
-The brief conveys the goal, decisions the human has already made, and scope. Implementation choices stay with the receiving workspace unless the human has specified them. Subsequent communication is explicit and symmetric through `message_peer`; sending does not synchronously wait for a reply.
+The brief conveys the goal, decisions the human has already made, and scope. Implementation choices stay with the receiving workspace unless the human has specified them. Subsequent communication is explicit and symmetric through `message_workspace`; sending does not synchronously wait for a reply. `list_workspaces` supplies the names, scoped to a Project or across all of them.
 
 ### Directory contract
 

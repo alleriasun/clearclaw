@@ -1045,20 +1045,45 @@ export class Orchestrator {
     if (this.config.workspaceByChat(chatId)) {
       const self = this.config.workspaceByChat(chatId);
       const peers = this.config.listWorkspaces().filter((w) => w.name !== self?.name);
-      const peerList = peers.length ? peers.map((w) => `"${w.name}"`).join(", ") : "(none)";
       const projectNames = this.config.listProjects().map((p) => `"${p.name}"`).join(", ") || "(none)";
       tools.push(
         tool(
-          "message_peer",
-          `Send a message to another of your workspaces. It is delivered as a turn there and rendered in that chat; it can reply by calling message_peer back. Reachable workspaces: ${peerList}.`,
+          "list_workspaces",
+          "List workspaces with their project, focus, and whether a chat is connected. Covers every project by default; pass project to scope it. Use this to find a name for message_workspace.",
           {
-            workspace: z.string().describe("Target workspace name (one of the reachable workspaces)"),
+            project: z.string().optional().describe("Only list workspaces in this project; omit for all projects"),
+          },
+          async (args) => {
+            const all = this.config.listWorkspaces();
+            const listed = args.project ? all.filter((w) => w.project === args.project) : all;
+            if (listed.length === 0) {
+              const known = this.config.listProjects().map((p) => p.name).join(", ") || "(none)";
+              return { content: [{ type: "text" as const, text: args.project
+                ? `No workspaces in project "${args.project}". Known projects: ${known}.`
+                : "No workspaces." }] };
+            }
+            const lines = listed
+              .map((w) => [
+                w.name === self?.name ? `${w.name} (you)` : w.name,
+                `project: ${w.project ?? "(none)"}`,
+                w.chat_id ? "connected" : "awaiting /connect",
+                w.description ? `— ${w.description}` : "",
+              ].filter(Boolean).join(" | "))
+              .sort();
+            return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          },
+        ),
+        tool(
+          "message_workspace",
+          "Send a message to another workspace, in any project. It is delivered as a turn there and rendered in that chat; it can reply by calling message_workspace back. Use list_workspaces to find a name.",
+          {
+            workspace: z.string().describe("Target workspace name; see list_workspaces"),
             message: z.string().describe("The message to send"),
           },
           async (args) => {
             const target = this.config.workspaceByName(args.workspace);
             if (!target) {
-              return { content: [{ type: "text" as const, text: `No workspace named "${args.workspace}". Reachable: ${peerList}.` }] };
+              return { content: [{ type: "text" as const, text: `No workspace named "${args.workspace}". Call list_workspaces to see the ${peers.length} reachable.` }] };
             }
             if (self && target.name === self.name) {
               return { content: [{ type: "text" as const, text: "Cannot message yourself." }] };
@@ -1069,7 +1094,7 @@ export class Orchestrator {
               return { content: [{ type: "text" as const, text: `Failed to deliver to "${target.name}".` }] };
             }
             await this.channel.sendMessage(chatId, `→ sent to ${target.name}: ${args.message}`);
-            log.info("[tool] message_peer: %s → %s", fromName, target.name);
+            log.info("[tool] message_workspace: %s → %s", fromName, target.name);
             return { content: [{ type: "text" as const, text: `Delivered to ${target.name}.` }] };
           },
         ),
@@ -1110,7 +1135,7 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: `Project "${args.name}" created with "${main.name}" as its main workspace.` }] };
           },
         ),
-        tool("workspace_create", `Hand a strand of work to a NEW peer agent with its own chat, directory, and conversation. The peer joins your own project by default. Pass project to put it somewhere else: name an existing project to join it, or any new name to start that project with this peer as its main. Known projects: ${projectNames}. Prepare cwd yourself first — create a git worktree, clone, or plain directory the way this host and repository expect, and keep owning it; ClearClaw only reads the path and never creates or deletes it. The brief is the peer's first message: goal, decisions already made, and scope, leaving unstated implementation choices open. For an existing workspace use message_peer instead.`, {
+        tool("workspace_create", `Hand a strand of work to a NEW peer agent with its own chat, directory, and conversation. The peer joins your own project by default. Pass project to put it somewhere else: name an existing project to join it, or any new name to start that project with this peer as its main. Known projects: ${projectNames}. Prepare cwd yourself first — create a git worktree, clone, or plain directory the way this host and repository expect, and keep owning it; ClearClaw only reads the path and never creates or deletes it. The brief is the peer's first message: goal, decisions already made, and scope, leaving unstated implementation choices open. For an existing workspace use message_workspace instead.`, {
           name: z.string().min(1).describe("Unique short workspace name"),
           cwd: z.string().min(1).describe("Absolute path to a directory you have already prepared"),
           brief: z.string().min(1).describe("Goal, agreed decisions, and scope; delivered as the peer's first message"),

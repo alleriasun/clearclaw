@@ -157,6 +157,65 @@ function initRepo(): string {
 }
 
 
+test("list_workspaces covers every project and marks the caller and unconnected workspaces", async () => {
+  const harness = makeHarness({
+    workspaces: [
+      workspace({ project: "alpha", description: "the trunk" }),
+      workspace({ name: "peer", chat_id: "test:peer", project: "beta", description: "a strand" }),
+      workspace({ name: "pending", chat_id: null, project: "beta" }),
+    ],
+    projects: [
+      { name: "alpha", description: "a", main_workspace: "self" },
+      { name: "beta", description: "b", main_workspace: "peer" },
+    ],
+  });
+
+  const all = (await tool(harness, "list_workspaces").handler({})).content[0]!.text;
+  assert.match(all, /self \(you\) \| project: alpha \| connected \| — the trunk/);
+  assert.match(all, /peer \| project: beta \| connected \| — a strand/);
+  assert.match(all, /pending \| project: beta \| awaiting \/connect/);
+
+  const scoped = (await tool(harness, "list_workspaces").handler({ project: "beta" })).content[0]!.text;
+  assert.equal(scoped.includes("self"), false, "scoping to a project must exclude other projects");
+  assert.match(scoped, /peer/);
+  assert.match(scoped, /pending/);
+});
+
+test("list_workspaces names the known projects when a scope matches nothing", async () => {
+  const harness = makeHarness({
+    workspaces: [workspace({ project: "alpha" })],
+    projects: [{ name: "alpha", description: "a", main_workspace: "self" }],
+  });
+
+  const result = await tool(harness, "list_workspaces").handler({ project: "nope" });
+  assert.match(result.content[0]!.text, /No workspaces in project "nope"/);
+  assert.match(result.content[0]!.text, /Known projects: alpha/);
+});
+
+test("message_workspace reaches a workspace in another project", async () => {
+  const harness = makeHarness({
+    workspaces: [
+      workspace({ project: "alpha" }),
+      workspace({ name: "far", chat_id: "test:far", project: "beta" }),
+    ],
+    projects: [
+      { name: "alpha", description: "a", main_workspace: "self" },
+      { name: "beta", description: "b", main_workspace: "far" },
+    ],
+  });
+
+  const result = await tool(harness, "message_workspace").handler({ workspace: "far", message: "hello" });
+  assert.match(result.content[0]!.text, /Delivered to far/);
+});
+
+test("message_workspace points an unknown name at list_workspaces", async () => {
+  const harness = makeHarness({ workspaces: [workspace(), workspace({ name: "peer", chat_id: "test:peer" })] });
+
+  const result = await tool(harness, "message_workspace").handler({ workspace: "ghost", message: "hello" });
+  assert.match(result.content[0]!.text, /No workspace named "ghost"/);
+  assert.match(result.content[0]!.text, /list_workspaces/);
+});
+
 test("workspace_create documents that cwd remains caller-owned", () => {
   const harness = makeHarness({ workspaces: [workspace()] });
   const create = tool(harness, "workspace_create");

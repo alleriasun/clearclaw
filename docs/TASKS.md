@@ -81,7 +81,7 @@
 
 [Projects and peer spawning](specs/peer-spawning.md) is the maintained lifecycle spec.
 
-- [x] Explicit peer messaging through `message_peer`
+- [x] Explicit cross-workspace messaging through `message_workspace`
 - [x] Spin-out proposals, automatic spawning, and manual brief claims
 - [x] Project creation for new and existing unprojected workspaces
 - [x] Telegram topics and Slack private channels with Project grouping
