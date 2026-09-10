@@ -10,7 +10,7 @@ import { formatPlanUsage, recordPlanUsage } from "./plan-usage.js";
 
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
-import { formatSessionTranscript } from "./engine/session-transcript.js";
+import { formatSessionTranscript, stripPromptPrefix } from "./engine/session-transcript.js";
 import { Scheduler } from "./scheduler.js";
 import type { Config, Project, ScheduleEntry } from "./config.js";
 import type {
@@ -681,10 +681,11 @@ export class Orchestrator {
           return;
         }
         const MAX_BTN = 45;
-        // Strip ClearClaw's "[User (@handle)]: " prefix from SDK summaries
+        // SDK summaries are the session's first prompt verbatim, which for a
+        // ClearClaw-started session is our own bracketed framing. Drop it.
         const stripped = sessions.map((s) => ({
           ...s,
-          summary: s.summary.replace(/^\[.*?\]:\s*/, ""),
+          summary: stripPromptPrefix(s.summary),
         }));
         // Build detailed list for message body
         const listing = stripped.map((s, i) => {
