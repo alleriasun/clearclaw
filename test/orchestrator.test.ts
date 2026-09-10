@@ -23,6 +23,7 @@ interface Harness {
     closeProjectChat: Array<{ chatId: string; projectName?: string }>;
     createProjectChat: Array<{ projectName: string; anchor: string; title: string }>;
     messages: string[];
+    sendInteractive: string[];
     setupProject: Array<{ projectName: string; chatId: string }>;
   };
   config: Config;
@@ -46,6 +47,7 @@ function makeHarness(options: {
     closeProjectChat: [] as Array<{ chatId: string; projectName?: string }>,
     createProjectChat: [] as Array<{ projectName: string; anchor: string; title: string }>,
     messages: [] as string[],
+    sendInteractive: [] as string[],
     setupProject: [] as Array<{ projectName: string; chatId: string }>,
   };
   const channel = {
@@ -55,7 +57,10 @@ function makeHarness(options: {
     on: () => {},
     ownsId: (chatId: string) => chatId.startsWith("test:"),
     isRootDM: (chatId: string, userId: string) => chatId === userId,
-    sendInteractive: async () => ({ value: options.interactiveResponse ?? (options.peerChats === false ? "manual" : "spawn") }),
+    sendInteractive: async (_chatId: string, text: string) => {
+      channelCalls.sendInteractive.push(text);
+      return { value: options.interactiveResponse ?? (options.peerChats === false ? "manual" : "spawn") };
+    },
     sendMessage: async (_chatId: string, text: string) => {
       channelCalls.messages.push(text);
       return ["message-id"];
@@ -363,6 +368,7 @@ test("workspace_create rejects a missing explicit cwd without creating a chat or
 
     assert.match(result.content[0]!.text, /must be an existing directory/);
     assert.equal(fs.existsSync(missingCwd), false);
+    assert.deepEqual(harness.channelCalls.sendInteractive, [], "a doomed spawn is never put to the user");
     assert.deepEqual(harness.channelCalls.createProjectChat, []);
     assert.equal(harness.workspaces.some((candidate) => candidate.name === "peer"), false);
   } finally {
