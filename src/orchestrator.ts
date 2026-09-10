@@ -154,7 +154,7 @@ export class Orchestrator {
    */
   private validateNewWorkspace(
     args: { name: string; cwd: string },
-    project: Project | undefined,
+    newProjectName: string | undefined,
   ): string | null {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(args.name)) {
       return "Use a short workspace name containing letters, numbers, hyphens, or underscores.";
@@ -162,8 +162,8 @@ export class Orchestrator {
     if (this.config.workspaceByName(args.name) || this.creatingWorkspaces.has(args.name)) {
       return `Workspace "${args.name}" already exists or is being created. Pick another name.`;
     }
-    if (!project && this.config.projectByName(args.name)) {
-      return `Project "${args.name}" already exists. Pass its name as join_project to put this peer in it.`;
+    if (newProjectName && this.config.projectByName(newProjectName)) {
+      return `Project "${newProjectName}" already exists. Name it as project to put this peer in it.`;
     }
     if (!path.isAbsolute(args.cwd) || !fs.existsSync(args.cwd) || !fs.statSync(args.cwd).isDirectory()) {
       return `cwd "${args.cwd}" must be an existing directory with an absolute path. Prepare it with your own tooling, then retry.`;
@@ -176,16 +176,17 @@ export class Orchestrator {
     chatId: string,
     fromName: string,
     project: Project | undefined,
+    newProjectName: string | undefined,
     mainWs: Workspace,
     args: { name: string; brief: string; description?: string; cwd: string;
       manual?: boolean; behavior?: "assistant" | "relay" },
     runtime: { engine?: string; model?: string },
   ) {
     const result = (text: string) => ({ content: [{ type: "text" as const, text }] });
-    const invalid = this.validateNewWorkspace(args, project);
+    const invalid = this.validateNewWorkspace(args, newProjectName);
     if (invalid) return result(invalid);
     const description = args.description ?? args.brief.split("\n")[0].slice(0, 160);
-    const destination = project ?? { name: args.name, main_workspace: args.name, description };
+    const destination = project ?? { name: newProjectName!, main_workspace: args.name, description };
     const anchor = mainWs.chat_id ?? chatId;
     if (!args.manual && (!this.channel.ownsId(anchor) || !this.channel.createProjectChat || !this.channel.closeProjectChat)) {
       return result("Automatic chat creation is unavailable for this destination. Retry with a manual chat, then use /connect <workspace> in that chat.");
@@ -198,7 +199,7 @@ export class Orchestrator {
     try {
       if (!args.manual) createdChatId = await this.channel.createProjectChat!(destination.name, anchor, args.name);
       // Chat creation awaits the platform. Recheck config before committing our records.
-      if (this.config.workspaceByName(args.name) || (!project && this.config.projectByName(args.name))) {
+      if (this.config.workspaceByName(args.name) || (newProjectName && this.config.projectByName(newProjectName))) {
         throw new Error("The workspace or project name was taken during chat creation. Retry with another name.");
       }
       if (createdChatId && this.config.workspaceByChat(createdChatId)) throw new Error("The created chat is already connected to another workspace.");
@@ -1109,40 +1110,39 @@ export class Orchestrator {
             return { content: [{ type: "text" as const, text: `Project "${args.name}" created with "${main.name}" as its main workspace.` }] };
           },
         ),
-        tool("workspace_create", `Hand a strand of work to a NEW peer agent with its own chat, directory, and conversation. The peer joins your own project by default. Use join_project to put it in a different existing project, or own_project to start a project of its own with this peer as its main. Known projects: ${projectNames}. Prepare cwd yourself first — create a git worktree, clone, or plain directory the way this host and repository expect, and keep owning it; ClearClaw only reads the path and never creates or deletes it. The brief is the peer's first message: goal, decisions already made, and scope, leaving unstated implementation choices open. For an existing workspace use message_peer instead.`, {
-          name: z.string().min(1).describe("Unique short workspace name; also names the project when own_project is set"),
+        tool("workspace_create", `Hand a strand of work to a NEW peer agent with its own chat, directory, and conversation. The peer joins your own project by default. Pass project to put it somewhere else: name an existing project to join it, or any new name to start that project with this peer as its main. Known projects: ${projectNames}. Prepare cwd yourself first — create a git worktree, clone, or plain directory the way this host and repository expect, and keep owning it; ClearClaw only reads the path and never creates or deletes it. The brief is the peer's first message: goal, decisions already made, and scope, leaving unstated implementation choices open. For an existing workspace use message_peer instead.`, {
+          name: z.string().min(1).describe("Unique short workspace name"),
           cwd: z.string().min(1).describe("Absolute path to a directory you have already prepared"),
           brief: z.string().min(1).describe("Goal, agreed decisions, and scope; delivered as the peer's first message"),
           description: z.string().optional().describe("One-line focus; defaults to the first 160 characters of the brief's first line"),
-          join_project: z.string().optional().describe("Existing project to put this peer in; defaults to your own"),
-          own_project: z.boolean().optional().describe("Start a new project for this peer instead of joining an existing one"),
+          project: z.string().optional().describe("Existing project to join, or a new project name to create with this peer as its main; defaults to your own project"),
           behavior: z.enum(["assistant", "relay"]).optional(),
           engine: z.string().optional(),
           model: z.string().optional(),
         }, async (args) => {
           const currentSelf = this.config.workspaceByChat(chatId);
           if (!currentSelf) return { content: [{ type: "text" as const, text: "The source workspace is no longer connected." }] };
-          // A legacy caller with no project of its own has nothing to join, so the peer gets one.
-          const targetName = args.own_project ? undefined : args.join_project ?? currentSelf.project;
-          const project = targetName ? this.config.projectByName(targetName) : undefined;
-          if (targetName && !project) return { content: [{ type: "text" as const, text: `No project named "${targetName}". Pass own_project to start a new one.` }] };
+          // An unknown name creates that project; a legacy caller with none falls back to the workspace name.
+          const requested = args.project ?? currentSelf.project;
+          const project = requested ? this.config.projectByName(requested) : undefined;
+          const newProjectName = project ? undefined : requested ?? args.name;
           const base = project ? this.config.workspaceByName(project.main_workspace) : currentSelf;
           if (!base) return { content: [{ type: "text" as const, text: `Project "${project!.name}" has no main workspace.` }] };
           const resolved = this.peerRuntime(base, args);
           if (resolved.error) return { content: [{ type: "text" as const, text: resolved.error }] };
-          const invalid = this.validateNewWorkspace(args, project);
+          const invalid = this.validateNewWorkspace(args, newProjectName);
           if (invalid) return { content: [{ type: "text" as const, text: invalid }] };
           const runtime = resolved.runtime!;
           const automatic = !!(this.channel.createProjectChat && this.channel.closeProjectChat
             && (!base.chat_id || this.channel.ownsId(base.chat_id)));
-          const destination = project ? `project "${project.name}"` : `new project "${args.name}"`;
+          const destination = project ? `project "${project.name}"` : `new project "${newProjectName}"`;
           const response = await this.channel.sendInteractive(chatId,
             `Create workspace "${args.name}" at ${args.cwd} in ${destination} using ${runtime.engine ?? this.config.defaultEngine}${runtime.model ? ` / ${runtime.model}` : ""}?\n\n${args.brief.slice(0, 300)}${automatic ? "" : "\nAutomatic chat creation is unavailable for this destination."}`,
             [[...(automatic ? [{ label: "Create chat", value: "spawn" }] : []),
               { label: "Manual chat", value: "manual" }, { label: "Cancel", value: "cancel" }]],
           );
           if (response.value !== "spawn" && response.value !== "manual") return { content: [{ type: "text" as const, text: "Workspace creation cancelled." }] };
-          return this.createWorkspace(chatId, currentSelf.name, project, base, { ...args, manual: response.value === "manual" }, runtime);
+          return this.createWorkspace(chatId, currentSelf.name, project, newProjectName, base, { ...args, manual: response.value === "manual" }, runtime);
         }),
         tool("workspace_archive", "Archive a workspace: try to close its bound chat, then unbind it even if chat closure fails. Reports any closure error. Always leaves the workspace directory on disk; clean that up with your own tooling. Cannot archive 'default'.", {
           name: z.string().describe("Workspace to archive"),
