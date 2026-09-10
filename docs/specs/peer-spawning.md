@@ -40,6 +40,14 @@ Manual creation saves a workspace with a null chat ID and a persisted first brie
 
 The brief conveys the goal, decisions the human has already made, and scope. Implementation choices stay with the receiving workspace unless the human has specified them. Subsequent communication is explicit and symmetric through `message_workspace`; sending does not synchronously wait for a reply. `list_workspaces` supplies the names, scoped to a Project or across all of them.
 
+### Messaging
+
+Peer messaging is a switchboard, not a hierarchy. All workspaces are the same mind in different rooms; "peer" describes the topology, not a separate identity. A message is delivered as an ordinary turn in the target's chat, queued behind whatever it is already doing and run under its own permission behavior. Sending does not block for a reply; the target answers by calling the tool back, which is the same operation in the other direction. There is no reply channel, no request/response pairing, and no way for one workspace to drive another.
+
+Provenance is a single discriminated union, `MessageOrigin`, with a case per source: user, scheduler, and peer. It replaced a `boolean` flag plus synthetic user IDs, which encoded provenance in values that also meant other things. The union is the reason a peer message cannot be mistaken for a user message when assembling a prompt or deciding permissions, and the compiler finds every reader when a case is added.
+
+`list_workspaces` supplies names and Project membership; `message_workspace` reaches any of them, in any Project. Neither is restricted to the caller's Project, because the workspace graph is flat even though Projects group it.
+
 ### Directory contract
 
 `cwd` is required and must already exist as an absolute path. ClearClaw reads it and nothing more: it never creates, moves, or deletes a workspace directory, on creation, rollback, or archive.
