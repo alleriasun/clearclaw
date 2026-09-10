@@ -1,6 +1,6 @@
 # Spec: Multi-engine support via ACP (Kiro + future engines)
 
-**Status: Shipped.** Core implementation landed on main. See `docs/plans/2026-03-19-acp-engine-impl.md` for the build recipe.
+**Status: Shipped.** Core implementation landed on main.
 
 ## Context
 
