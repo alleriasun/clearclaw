@@ -6,12 +6,12 @@ import { z } from "zod";
 import log from "./logger.js";
 import { saveFile } from "./files.js";
 import { assemblePrompt } from "./prompt.js";
-import { repoRootOf, createWorktree, removeWorktree } from "./worktree.js";
+
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
 import { formatSessionTranscript } from "./engine/session-transcript.js";
 import { Scheduler } from "./scheduler.js";
-import type { Config, PendingSpinOut, Project, ScheduleEntry } from "./config.js";
+import type { Config, Project, ScheduleEntry } from "./config.js";
 import type {
   Channel,
   Engine,
@@ -52,20 +52,6 @@ interface ChatState {
   debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
-interface TaskState {
-  engine?: string;
-  engine_handoff?: EngineHandoff;
-  sessionId: string | null;
-  cwd: string;
-  prompt: string;
-}
-
-type TurnContext = Workspace | TaskState;
-
-function isTask(ctx: TurnContext): ctx is TaskState {
-  return "prompt" in ctx;
-}
-
 const MODE_OPTIONS: { label: string; value: PermissionMode }[] = [
   { label: "Default", value: "default" },
   { label: "Accept Edits", value: "acceptEdits" },
@@ -82,7 +68,7 @@ export class Orchestrator {
   private engines: Map<string, Engine>;
   private config: Config;
   private chats = new Map<string, ChatState>();
-  private tasks = new Map<string, TaskState>();
+  private creatingWorkspaces = new Set<string>();
   private scheduler: Scheduler | null = null;
 
   constructor(opts: OrchestratorOpts) {
@@ -117,6 +103,7 @@ export class Orchestrator {
   }
 
   async start(): Promise<void> {
+    this.config.ensureHomeWorkspace();
     this.channel.on("message", (msg) => {
       this.routeMessage(msg).catch((err) => {
         log.error({ err }, "[orchestrator] unhandled message error");
@@ -124,6 +111,7 @@ export class Orchestrator {
     });
 
     await this.channel.connect();
+    for (const ws of this.config.listWorkspaces()) this.deliverInitialBrief(ws.name);
     log.info("ClearClaw ready.");
 
     this.scheduler = new Scheduler(this.config, (msg) => this.deliverToWorkspace("default", msg.origin, msg.text));
@@ -145,7 +133,7 @@ export class Orchestrator {
   /** Deliver a synthetic message to a named workspace and trigger its turn. */
   public deliverToWorkspace(workspaceName: string, origin: MessageOrigin, text: string): boolean {
     const ws = this.config.workspaceByName(workspaceName);
-    if (!ws) {
+    if (!ws?.chat_id || !this.channel.ownsId(ws.chat_id)) {
       log.warn("[deliver] workspace '%s' not found", workspaceName);
       return false;
     }
@@ -159,100 +147,106 @@ export class Orchestrator {
     return true;
   }
 
-  /** Spawn a peer workspace into a project: worktree (if the project's repo is git) + a new chat + brief delivery. Best-effort rollback on failure. */
-  private async spawnPeer(
+  /** Shared creation path for standalone projects and peers, with optional manual binding. */
+  private async createWorkspace(
     chatId: string,
     fromName: string,
-    project: Project,
+    project: Project | undefined,
     mainWs: Workspace,
-    args: { name: string; brief: string; cwd?: string; branch?: string },
+    args: { name: string; brief: string; description?: string; cwd: string;
+      manual?: boolean; behavior?: "assistant" | "relay" },
     runtime: { engine?: string; model?: string },
   ) {
-    const channel = this.channel;
-    if (!channel.createProjectChat || !channel.closeProjectChat) {
-      throw new Error("Channel does not support peer chat creation and closure");
+    const result = (text: string) => ({ content: [{ type: "text" as const, text }] });
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(args.name)) {
+      return result("Use a short workspace name containing letters, numbers, hyphens, or underscores.");
     }
-    if (this.config.workspaceByName(args.name)) {
-      return { content: [{ type: "text" as const, text: `Workspace "${args.name}" already exists. Pick another name.` }] };
+    if (this.config.workspaceByName(args.name) || this.creatingWorkspaces.has(args.name)) {
+      return result(`Workspace "${args.name}" already exists or is being created. Pick another name.`);
     }
-    const hasExplicitCwd = args.cwd !== undefined;
-    if (hasExplicitCwd && (!fs.existsSync(args.cwd!) || !fs.statSync(args.cwd!).isDirectory())) {
-      return {
-        content: [{
-          type: "text" as const,
-          text: `Spawn failed: explicit cwd "${args.cwd}" must be an existing directory. ClearClaw will not create it; prepare it with your own tooling, then retry.`,
-        }],
-      };
+    if (!project && this.config.projectByName(args.name)) return result(`Project "${args.name}" already exists. Pass its name as join_project to put this peer in it.`);
+    const description = args.description ?? args.brief.split("\n")[0].slice(0, 160);
+    const destination = project ?? { name: args.name, main_workspace: args.name, description };
+    const anchor = mainWs.chat_id ?? chatId;
+    if (!args.manual && (!this.channel.ownsId(anchor) || !this.channel.createProjectChat || !this.channel.closeProjectChat)) {
+      return result("Automatic chat creation is unavailable for this destination. Retry with a manual chat, then use /connect <workspace> in that chat.");
     }
-    let cwd = args.cwd;
-    let ownsWorktree: boolean | undefined = hasExplicitCwd ? false : undefined;
-    let createdChatId: string | undefined;
+    if (!path.isAbsolute(args.cwd) || !fs.existsSync(args.cwd) || !fs.statSync(args.cwd).isDirectory()) {
+      return result(`Spawn failed: cwd "${args.cwd}" must be an existing directory with an absolute path. Prepare it with your own tooling, then retry.`);
+    }
+    this.creatingWorkspaces.add(args.name);
+    const cwd = args.cwd;
+    let createdChatId: string | null = null;
+    let registered = false;
+    let createdProject = false;
     try {
-      if (!cwd) {
-        const repoRoot = repoRootOf(mainWs.cwd);
-        if (repoRoot) {
-          cwd = createWorktree(repoRoot, args.name, undefined, args.branch);
-          ownsWorktree = true;
-        } else {
-          cwd = mainWs.cwd;
-        }
+      if (!args.manual) createdChatId = await this.channel.createProjectChat!(destination.name, anchor, args.name);
+      // Chat creation awaits the platform. Recheck config before committing our records.
+      if (this.config.workspaceByName(args.name) || (!project && this.config.projectByName(args.name))) {
+        throw new Error("The workspace or project name was taken during chat creation. Retry with another name.");
       }
-      createdChatId = await channel.createProjectChat(project.name, mainWs.chat_id, args.name);
+      if (createdChatId && this.config.workspaceByChat(createdChatId)) throw new Error("The created chat is already connected to another workspace.");
+      if (project && !this.config.projectByName(project.name)) throw new Error("The target project was archived during chat creation.");
       this.config.upsertWorkspace({
-        name: args.name,
-        cwd,
-        chat_id: createdChatId,
-        current_session_id: null,
-        behavior: mainWs.behavior,
-        engine: runtime.engine,
-        model: runtime.model,
-        project: project.name,
-        description: args.brief,
-        spawnedFrom: fromName,
-        owns_worktree: ownsWorktree,
+        name: args.name, cwd, chat_id: createdChatId, current_session_id: null,
+        behavior: args.behavior ?? mainWs.behavior, engine: runtime.engine, model: runtime.model,
+        project: destination.name, description, spawnedFrom: fromName,
+        pending_brief: { fromWorkspace: fromName, text: args.brief },
       });
-      this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: fromName }, args.brief);
-      await this.channel.sendMessage(chatId, `🌱 Spawned "${args.name}" in ${project.name}.`);
-      log.info("[tool] spin_out: spawned %s (cwd %s) in project %s", args.name, cwd, project.name);
-      return { content: [{ type: "text" as const, text: `Spawned workspace "${args.name}" at ${cwd}; brief delivered.` }] };
+      registered = true;
+      if (!project) {
+        this.config.addProject(destination);
+        createdProject = true;
+      }
     } catch (err) {
-      // Best-effort rollback so a failed spawn leaves nothing behind.
-      if (createdChatId) {
-        await channel.closeProjectChat(createdChatId, project.name).catch(() => { /* best effort */ });
+      if (createdProject) this.config.removeProject(destination.name);
+      if (registered) this.config.removeWorkspace(args.name);
+      if (createdChatId && !this.config.workspaceByChat(createdChatId)) {
+        await this.channel.closeProjectChat!(createdChatId, destination.name).catch(() => {});
       }
-      if (ownsWorktree && cwd) {
-        try { removeWorktree(cwd); } catch { /* best effort */ }
-      }
-      const detail = err instanceof Error ? err.message : String(err);
-      return { content: [{ type: "text" as const, text: `Spawn failed: ${detail}. You can retry with a different name, or register the brief for a manual group instead.` }] };
+      return result(`Spawn failed: ${err instanceof Error ? err.message : String(err)}. Retry with a manual chat if automatic chat creation is unavailable.`);
+    } finally {
+      this.creatingWorkspaces.delete(args.name);
     }
+    // Once registered, notification failures must not roll back a workspace or a delivered brief.
+    if (!project && createdChatId) {
+      await this.channel.setupProject?.(destination.name, createdChatId).catch((err) => log.warn({ err }, "[project] optional setup failed"));
+    }
+    const delivered = this.deliverInitialBrief(args.name);
+    const note = createdChatId
+      ? (delivered ? "; brief delivered." : ".")
+      : `. In the intended chat, send /connect ${args.name}.`;
+    log.info("[workspace] created %s in %s", args.name, destination.name);
+    return result(`Spawned workspace "${args.name}" at ${cwd}${note}`);
   }
 
-  /** Register a pending spin-out brief (1b fallback) for the user to claim by creating a new group. */
-  private async registerSpinOutBrief(
-    chatId: string,
-    fromName: string,
-    args: { name: string; brief: string; cwd?: string },
-    fallbackReason: string,
-    runtime: { engine?: string; model?: string },
-  ) {
-    const entry: PendingSpinOut = {
-      id: crypto.randomUUID().slice(0, 8),
-      fromWorkspace: fromName,
-      name: args.name,
-      brief: args.brief,
-      suggestedCwd: args.cwd,
-      engine: runtime.engine,
-      model: runtime.model,
-      createdAt: Date.now(),
-    };
-    this.config.addSpinOut(entry);
-    const effectiveEngine = runtime.engine ?? this.config.defaultEngine;
-    const runtimeLabel = runtime.model ? `${effectiveEngine} / ${runtime.model}` : effectiveEngine;
-    log.info("[tool] spin_out: %s registered from %s using %s; pending-brief fallback because %s",
-      entry.id, fromName, runtimeLabel, fallbackReason);
-    await this.channel.sendMessage(chatId, `🌱 Spin-out "${args.name}" registered (${entry.id}) using ${runtimeLabel} because ${fallbackReason}. Create a new group, add me to it, and I'll offer to pick this up there.`);
-    return { content: [{ type: "text" as const, text: `Spin-out ${entry.id} registered using ${runtimeLabel} because ${fallbackReason}. The user creates a new group chat and adds the bot; onboarding there claims the brief.` }] };
+  private deliverInitialBrief(name: string): boolean {
+    const ws = this.config.workspaceByName(name);
+    if (!ws?.chat_id || !ws.pending_brief) return false;
+    // An existing or queued ordinary turn already includes the saved brief.
+    const state = this.chats.get(ws.chat_id);
+    if (state?.busy || state?.messageQueue.length) return false;
+    const brief = ws.pending_brief;
+    return this.deliverToWorkspace(name, { kind: "peer", workspaceName: brief.fromWorkspace }, brief.text);
+  }
+
+  /** An unbound chat can connect without starting a temporary agent or sharing home's session. */
+  private async connectWorkspace(msg: InboundMessage, name?: string): Promise<void> {
+    const reply = (text: string) => this.channel.sendMessage(msg.chatId, text);
+    if (!name) { await reply("Usage: /connect <workspace>. Create a workspace with a manual chat from home first."); return; }
+    const existing = this.config.workspaceByChat(msg.chatId);
+    if (existing) { await reply(`This chat is already connected to "${existing.name}".`); return; }
+    const ws = this.config.workspaceByName(name);
+    if (!ws) { await reply(`No workspace named "${name}". Create it from home with a manual chat first.`); return; }
+    if (name === "default") { await reply("Home connects automatically through an authorized private DM."); return; }
+    if (ws.chat_id) { await reply(`Workspace "${name}" already has a chat. Existing bindings cannot be replaced by /connect.`); return; }
+    if (this.chat(msg.chatId).busy) { await reply("A turn is running. Wait for it to finish before connecting."); return; }
+    this.config.upsertWorkspace({ ...ws, chat_id: msg.chatId });
+    if (ws.project && this.config.projectByName(ws.project)?.main_workspace === ws.name) {
+      await this.channel.setupProject?.(ws.project, msg.chatId).catch((err) => log.warn({ err }, "[project] optional setup failed"));
+    }
+    this.deliverInitialBrief(name);
+    await reply(`Connected this chat to workspace "${name}".`);
   }
 
   private peerRuntime(
@@ -276,15 +270,14 @@ export class Orchestrator {
     };
   }
 
-  /** Effective behavior: tasks→assistant, workspace→explicit setting or home→assistant / project→relay. */
-  private effectiveBehavior(ctx: TurnContext): "assistant" | "relay" {
-    if (isTask(ctx)) return "assistant";
+  /** Effective behavior: Explicit setting or home→assistant / project→relay. */
+  private effectiveBehavior(ctx: Workspace): "assistant" | "relay" {
     if (ctx.behavior !== undefined) return ctx.behavior;
     return ctx.cwd === this.config.homeWorkspacePath ? "assistant" : "relay";
   }
 
-  /** Enqueue a message and drain — immediately for relay, debounced for assistant/task. */
-  private enqueueMessage(msg: InboundMessage, ctx: TurnContext, state: ChatState): void {
+  /** Enqueue a message and drain — immediately for relay, debounced for assistant. */
+  private enqueueMessage(msg: InboundMessage, ctx: Workspace, state: ChatState): void {
     log.info("[msg] %s: %s", senderLabel(msg.origin), msg.text.slice(0, 80));
     state.messageQueue.push(msg);
     if (state.busy) return;
@@ -313,8 +306,8 @@ export class Orchestrator {
     const state = this.chat(chatId);
     if (state.messageQueue.length === 0 || state.busy) return;
 
-    const ctx: TurnContext | undefined =
-      this.tasks.get(chatId) ?? this.config.workspaceByChat(chatId);
+    const ctx: Workspace | undefined =
+      this.config.workspaceByChat(chatId);
     if (!ctx) return;
 
     const messages = [...state.messageQueue];
@@ -346,13 +339,17 @@ export class Orchestrator {
   private async executeTurn(
     chatId: string,
     messages: InboundMessage[],
-    ctx: TurnContext,
+    ctx: Workspace,
     state: ChatState,
   ): Promise<void> {
-    const task = isTask(ctx) ? ctx : undefined;
-    const ws = isTask(ctx) ? undefined : ctx;
+    const ws = ctx;
+    const initialBrief = slashCommandPrompt(messages) ? undefined : ws.pending_brief;
+    if (initialBrief && !messages.some((m) => m.origin.kind === "peer"
+      && m.origin.workspaceName === initialBrief.fromWorkspace && m.text === initialBrief.text)) {
+      messages = [{ chatId, chatType: "group", origin: { kind: "peer", workspaceName: initialBrief.fromWorkspace }, text: initialBrief.text }, ...messages];
+    }
 
-    const turnCwd = task ? task.cwd : ws!.cwd;
+    const turnCwd = ws.cwd;
     if (!fs.existsSync(turnCwd)) {
       log.warn("[turn] aborting: cwd does not exist: %s", turnCwd);
       await this.channel.sendMessage(chatId, `⚠️ Can't start: this workspace's directory doesn't exist:\n${turnCwd}\nLikely an un-created worktree. Create it (e.g. \`git worktree add "${turnCwd}" -b <branch>\`) or fix the workspace cwd, then retry.`).catch(() => {});
@@ -367,9 +364,9 @@ export class Orchestrator {
       ? "assistant" as const
       : this.effectiveBehavior(ctx);
     const turnState = { staySilent: false, replyToMessageId: null as string | null };
-    const sessionId = task ? task.sessionId : ws!.current_session_id;
-    const cwd = task ? task.cwd : ws!.cwd;
-    const logPrefix = task ? "[task-turn]" : "[turn]";
+    const sessionId = ws.current_session_id;
+    const cwd = ws.cwd;
+    const logPrefix = "[turn]";
 
     log.info("%s start session=%s msgs=%d cwd=%s", logPrefix, sessionId ?? "new", messages.length, cwd);
     await this.channel.setTyping(chatId, true);
@@ -385,9 +382,7 @@ export class Orchestrator {
         `⚠️ Running without ${skipped.join(", ")} — unreadable (cloud placeholder or I/O timeout).`,
       ).catch(() => {});
     }
-    const appendSystemPrompt = task
-      ? (assembledPrompt ? `${assembledPrompt}\n\n${task.prompt}` : task.prompt)
-      : assembledPrompt;
+    const appendSystemPrompt = assembledPrompt;
 
     const slashPrompt = slashCommandPrompt(messages);
     let prompt = slashPrompt ?? buildPrompt(messages);
@@ -438,7 +433,7 @@ export class Orchestrator {
       tools: this.buildMcpTools(chatId, behavior, turnState),
     });
 
-    const engine = ws ? this.engineFor(ws) : this.engines.get(task!.engine ?? this.config.defaultEngine)!;
+    const engine = this.engineFor(ws);
     state.engineName = engine.name;
 
     let turnFailed = false;
@@ -460,25 +455,26 @@ export class Orchestrator {
         // Persist the session as soon as the engine reports it —
         // so cancelling mid-turn doesn't lose it.
         if (event.type === "session") {
-          this.persistSessionId(chatId, task, ws, event.sessionId);
+          this.persistSessionId(ws, event.sessionId);
           continue;
         }
-        // Handle done event inline — task vs workspace need different session storage
+        // Persist completion only while the workspace still belongs to this turn.
         if (event.type === "done") {
           log.info("%s done session=%s", logPrefix, event.sessionId);
           // Observed model/usage belongs in stats, never in the model override.
-          const persistedSessionId = this.persistSessionId(chatId, task, ws, event.sessionId);
-          // task_complete removes setup before done; /cancel also aborts the turn.
-          const completedTask = task !== undefined && !abort.signal.aborted && !this.tasks.has(chatId);
-          if ((persistedSessionId !== undefined || completedTask) && event.stats) state.stats = event.stats;
+          const persistedSessionId = this.persistSessionId(ws, event.sessionId);
+          if (persistedSessionId !== undefined && event.stats) state.stats = event.stats;
+          if (initialBrief && persistedSessionId !== undefined && !turnFailed && !abort.signal.aborted) {
+            const current = this.config.workspaceByName(ws.name);
+            if (current?.pending_brief?.text === initialBrief.text
+              && current.pending_brief.fromWorkspace === initialBrief.fromWorkspace) {
+              this.config.upsertWorkspace({ ...current, pending_brief: undefined });
+            }
+          }
           if (handoff && persistedSessionId !== undefined && !turnFailed && !abort.signal.aborted) {
-            if (task) {
-              if (task.engine_handoff === handoff) delete task.engine_handoff;
-            } else {
-              const current = this.config.workspaceByName(ws!.name);
-              if (current && sameHandoff(current.engine_handoff, handoff)) {
-                this.config.upsertWorkspace({ ...current, engine_handoff: undefined });
-              }
+            const current = this.config.workspaceByName(ws.name);
+            if (current && sameHandoff(current.engine_handoff, handoff)) {
+              this.config.upsertWorkspace({ ...current, engine_handoff: undefined });
             }
           }
           if (behavior === "relay" && state.toolCallHandle && event.stats) {
@@ -506,74 +502,36 @@ export class Orchestrator {
       if (!turnState.staySilent) {
         await this.channel.setTyping(chatId, false);
       }
-      // Task cancel already sent "Setup cancelled" from /cancel handler
-      if (cancelled && !task) {
+      if (cancelled) {
         await this.channel.sendMessage(chatId, "Turn cancelled.");
       }
     }
   }
 
-  /** Task turns keep the session ID in memory; workspace turns persist it to config. */
-  private persistSessionId(
-    chatId: string,
-    task: TaskState | undefined,
-    ws: Workspace | undefined,
-    sessionId: string,
-  ): string | undefined {
-    if (task) {
-      if (this.tasks.get(chatId) !== task) return undefined;
-      task.sessionId = sessionId;
-    } else {
-      const current = this.config.workspaceByName(ws!.name);
-      // Ignore late events if the workspace engine changed during this turn.
-      if (!current || (current.engine ?? this.config.defaultEngine) !== (ws!.engine ?? this.config.defaultEngine)) return undefined;
-      this.config.setSession(ws!.name, sessionId);
-    }
+  private persistSessionId(ws: Workspace, sessionId: string): string | undefined {
+    const current = this.config.workspaceByName(ws.name);
+    // Ignore late events after an archive, rebind, or engine switch.
+    if (!current || current.chat_id !== ws.chat_id
+      || (current.engine ?? this.config.defaultEngine) !== (ws.engine ?? this.config.defaultEngine)) return undefined;
+    this.config.setSession(ws.name, sessionId);
     return sessionId;
   }
 
-  /** Create setup state without starting an engine turn. */
-  private createOnboardingTask(msg: InboundMessage): TaskState {
-    const chatType = msg.chatType === "dm" ? "DM" : "group";
-    const promptLines = [
-      "THIS IS A TASK SESSION — not a regular conversation.",
-      "Do NOT follow the 'Every Session' startup routine. Do NOT read MEMORY.md or daily notes. Do NOT greet the user.",
-      `This is a ${chatType} chat. Home workspace path: ${this.config.homeWorkspacePath}`,
-      "Follow the Workspace Onboarding instructions in the system prompt.",
-    ];
-    const spinOuts = this.config.listSpinOuts();
-    if (spinOuts.length > 0) {
-      promptLines.push(
-        "",
-        "Pending spin-outs (if this chat was created for one, offer to claim it via workspace_create's spin_out_id):",
-        ...spinOuts.map((s) => `- ${s.id}: "${s.name}" from workspace ${s.fromWorkspace}${s.suggestedCwd ? `, suggested cwd ${s.suggestedCwd}` : ""}${s.engine ? `, engine ${s.engine}` : ""}${s.model ? `, model ${s.model}` : ""} — ${s.brief.slice(0, 200)}`),
-      );
-    }
-    const newTask: TaskState = {
-      sessionId: null,
-      cwd: this.config.homeWorkspacePath,
-      prompt: promptLines.join("\n"),
-    };
-    this.tasks.set(msg.chatId, newTask);
-    log.info("[task] onboarding started for chat %s", msg.chatId);
-    return newTask;
-  }
-
-  /** Native engine selection must remain available when setup's engine cannot run. */
+  /** Native selection works even when the workspace's engine cannot run. */
   private async selectEngine(msg: InboundMessage, requested?: string): Promise<void> {
     const state = this.chat(msg.chatId);
+    const ws = this.config.workspaceByChat(msg.chatId);
+    if (!ws) {
+      await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat. Use /connect <workspace> first.");
+      return;
+    }
     if (state.busy) {
       await this.channel.sendMessage(msg.chatId, "A turn is running. Use /cancel first, then /engine once it stops.");
       return;
     }
-    const task = this.tasks.get(msg.chatId);
-    const ws = this.config.workspaceByChat(msg.chatId);
-    const current = task
-      ? task.engine ?? this.config.defaultEngine
-      : ws?.engine ?? this.config.defaultEngine;
+    const current = ws.engine ?? this.config.defaultEngine;
     const selected = requested ?? (await this.channel.sendInteractive(
-      msg.chatId,
-      `Current engine: ${current}`,
+      msg.chatId, `Current engine: ${current}`,
       [[...this.engines.keys()].map((name) => ({ label: name === current ? `✓ ${name}` : name, value: name }))],
     )).value;
     if (!selected) return;
@@ -581,43 +539,26 @@ export class Orchestrator {
       await this.channel.sendMessage(msg.chatId, `Unknown engine "${selected}". Available: ${[...this.engines.keys()].join(", ")}`);
       return;
     }
-    // The picker awaits user input: a turn, /cancel, or workspace update may have intervened.
     if (state.busy) {
       await this.channel.sendMessage(msg.chatId, "A turn is running. Use /cancel first, then /engine once it stops.");
       return;
     }
-    const latestTask = this.tasks.get(msg.chatId);
-    const latestWs = this.config.workspaceByChat(msg.chatId);
-    const latestEngine = latestTask
-      ? latestTask.engine ?? this.config.defaultEngine
-      : latestWs?.engine ?? this.config.defaultEngine;
-    if (latestTask !== task || latestWs?.name !== ws?.name || latestEngine !== current) {
-      await this.channel.sendMessage(msg.chatId, "Setup or engine changed while choosing. Run /engine again.");
+    const latest = this.config.workspaceByChat(msg.chatId);
+    if (!latest || latest.name !== ws.name || (latest.engine ?? this.config.defaultEngine) !== current) {
+      await this.channel.sendMessage(msg.chatId, "Workspace or engine changed while choosing. Run /engine again.");
       return;
     }
-    const setup = latestTask ?? (!latestWs ? this.createOnboardingTask(msg) : undefined);
     const changed = selected !== current;
-    if (setup) {
-      setup.engine = selected;
-      if (changed) {
-        setup.engine_handoff = captureHandoff(setup, current);
-        setup.sessionId = null;
-      }
+    if (changed) {
+      this.config.upsertWorkspace({ ...latest, engine: selected, current_session_id: null, model: undefined,
+        engine_handoff: captureHandoff(latest, current) });
+      state.stats = null;
     }
-    const workspaceChanged = latestWs && (latestWs.engine ?? this.config.defaultEngine) !== selected;
-    if (workspaceChanged) {
-      this.config.upsertWorkspace({
-        ...latestWs, engine: selected, current_session_id: null, model: undefined,
-        engine_handoff: captureHandoff(latestWs, latestWs.engine ?? this.config.defaultEngine),
-      });
-    }
-    if (changed || workspaceChanged) state.stats = null;
     state.engineName = selected;
-    const pendingHandoff = setup?.engine_handoff ?? this.config.workspaceByChat(msg.chatId)?.engine_handoff;
-    const handoffNote = pendingHandoff ? " Previous session context will be included with your next message." : "";
+    const handoffNote = this.config.workspaceByChat(msg.chatId)?.engine_handoff
+      ? " Previous session context will be included with your next message." : "";
     log.info("[cmd] chat %s engine → %s", msg.chatId, selected);
-    await this.channel.sendMessage(msg.chatId,
-      `Engine set to ${selected}.${changed ? " Session cleared." : ""}${handoffNote}${setup ? " Send a message to continue setup." : ""}`);
+    await this.channel.sendMessage(msg.chatId, `Engine set to ${selected}.${changed ? " Session cleared." : ""}${handoffNote}`);
     await this.updateStatusMessage(msg.chatId, state);
   }
 
@@ -626,20 +567,20 @@ export class Orchestrator {
       // routeMessage only handles channel-emitted messages, which are always user-originated.
       if (msg.origin.kind !== "user") return; // unreachable; documents + type-narrows the invariant
       const { user } = msg.origin;
+      if (!this.config.isAuthorized(user.id)) return;
+      if (this.channel.isRootDM(msg.chatId, user.id) && !this.config.workspaceByChat(msg.chatId)) {
+        this.config.connectHomeWorkspace(msg.chatId);
+      }
+      const connect = msg.text.match(/^\/connect(?:\s+(\S+))?$/);
+      if (connect) {
+        await this.connectWorkspace(msg, connect[1]);
+        return;
+      }
 
       const state = this.chat(msg.chatId);
 
-      // Native controls run before task/workspace dispatch, without a model call.
-      // /cancel — abort running turn or clear active task
+      // Native controls run without a model call.
       if (msg.text === "/cancel") {
-        const task = this.tasks.get(msg.chatId);
-        if (task) {
-          this.tasks.delete(msg.chatId);
-          if (state.abort) state.abort.abort();
-          log.info("[cmd] task cancelled for chat %s", msg.chatId);
-          await this.channel.sendMessage(msg.chatId, "Setup cancelled.");
-          return;
-        }
         if (state.abort) {
           state.abort.abort();
           log.info("[cmd] turn cancelled");
@@ -773,7 +714,7 @@ export class Orchestrator {
         return;
       }
 
-      // /engine [name] — select an engine, including before/during setup.
+      // /engine [name] — select the workspace engine.
       const engineMatch = msg.text.match(/^\/engine(?:\s+(\S+))?$/);
       if (engineMatch) {
         if (!this.config.isAuthorized(user.id)) {
@@ -812,21 +753,9 @@ export class Orchestrator {
         return;
       }
 
-      // Only non-control messages reach the active task or workspace engine.
-      const existingTask = this.tasks.get(msg.chatId);
-      if (existingTask) {
-        this.enqueueMessage(msg, existingTask, state);
-        return;
-      }
-
       if (!ws) {
-        if (this.config.isAuthorized(user.id)) {
-          const newTask = this.createOnboardingTask(msg);
-          this.enqueueMessage(msg, newTask, state);
-        } else {
-          log.info("[msg] no workspace for chat %s", msg.chatId);
-          await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.");
-        }
+        await this.channel.sendMessage(msg.chatId,
+          "No workspace linked to this chat. Create a workspace with a manual chat from home or another workspace, then send /connect <workspace> here.");
         return;
       }
 
@@ -928,7 +857,7 @@ export class Orchestrator {
         }
 
         case "done":
-          // Handled inline in executeTurn (task vs workspace need different session storage)
+          // Handled inline in executeTurn for session persistence.
           break;
 
         case "error":
@@ -1048,78 +977,8 @@ export class Orchestrator {
       }),
     ];
 
-    // Task tools — only available during task turns
-    if (this.tasks.has(chatId)) {
-      tools.push(
-        tool("workspace_create", "Create a new workspace and its project, and link it to the current chat. Every workspace belongs to a project; this creates the project with the new workspace as its main.", {
-          name: z.string().describe("Workspace name (unique, e.g. 'myproject'); also used as the project name"),
-          cwd: z.string().describe("Absolute path to the workspace directory"),
-          description: z.string().describe("What this project is about — a short shared-context summary"),
-          behavior: z.enum(["assistant", "relay"]).optional()
-            .describe("Workspace behavior mode"),
-          engine: z.string().optional()
-            .describe("Engine to use (e.g. 'claude-code', 'kiro'). Defaults to the engine selected for setup, then the claimed spin-out engine, then the server default."),
-          model: z.string().optional()
-            .describe("Model choice for the selected engine, validated when the next turn starts. When claiming a spin-out, defaults to its chosen model."),
-          spin_out_id: z.string().optional()
-            .describe("Pending spin-out id to claim: after creation, its brief is delivered to this workspace as a peer message from the originating workspace"),
-        }, async (args) => {
-          if (this.config.workspaceByName(args.name)) {
-            throw new Error(`Workspace "${args.name}" already exists. Choose a different name.`);
-          }
-          const pending = args.spin_out_id
-            ? this.config.listSpinOuts().find((candidate) => candidate.id === args.spin_out_id)
-            : undefined;
-          const engine = args.engine ?? this.tasks.get(chatId)?.engine ?? pending?.engine;
-          const effectiveEngine = engine ?? this.config.defaultEngine;
-          const pendingEngine = pending?.engine ?? this.config.defaultEngine;
-          const model = args.model
-            ?? (effectiveEngine === pendingEngine
-              ? pending?.model
-              : undefined);
-          if (!this.engines.has(effectiveEngine)) {
-            throw new Error(`Unknown engine "${effectiveEngine}". Available: ${[...this.engines.keys()].join(", ")}`);
-          }
-          fs.mkdirSync(args.cwd, { recursive: true });
-          this.config.upsertWorkspace({
-            name: args.name,
-            cwd: args.cwd,
-            chat_id: chatId,
-            current_session_id: null,
-            behavior: args.behavior,
-            engine,
-            model,
-            project: args.name,
-            description: args.description,
-          });
-          this.config.addProject({ name: args.name, description: args.description, main_workspace: args.name });
-          await this.channel.setupProject?.(args.name, chatId).catch((err) =>
-            log.warn({ err }, "[project] platform setup failed for %s", args.name));
-          log.info("[tool] workspace_create: %s → %s engine=%s model=%s (chat %s)",
-            args.name, args.cwd, engine ?? "default", model ?? "default", chatId);
-          if (args.spin_out_id) {
-            if (!pending) {
-              return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created, but no pending spin-out "${args.spin_out_id}" was found.` }] };
-            }
-            this.config.removeSpinOut(pending.id);
-            this.deliverToWorkspace(args.name, { kind: "peer", workspaceName: pending.fromWorkspace }, pending.brief);
-            log.info("[tool] workspace_create: claimed spin-out %s from %s", pending.id, pending.fromWorkspace);
-            return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created at ${args.cwd}, linked to this chat. Spin-out brief from ${pending.fromWorkspace} will arrive after task_complete — call it now.` }] };
-          }
-          return { content: [{ type: "text" as const, text: `Workspace "${args.name}" created at ${args.cwd}, linked to this chat.` }] };
-        }),
-        tool("task_complete", "Signal that the current task is complete", {
-          message: z.string().optional().describe("Summary of what was accomplished"),
-        }, async (args) => {
-          this.tasks.delete(chatId);
-          log.info("[tool] task_complete: chat %s — %s", chatId, args.message ?? "done");
-          return { content: [{ type: "text" as const, text: "Task completed." }] };
-        }),
-      );
-    }
-
-    // Scheduler tools — available in workspace turns (not task turns)
-    if (!this.tasks.has(chatId) && this.scheduler) {
+    // Scheduled prompts run in normal workspace sessions.
+    if (this.scheduler) {
       const sched = this.scheduler;
       tools.push(
         tool("schedule_create", "Create a scheduled prompt. Accepts a cron expression for recurring, or an ISO timestamp for one-off (auto-deleted after firing). For timestamps, check current time first to ensure correctness.", {
@@ -1165,8 +1024,8 @@ export class Orchestrator {
       );
     }
 
-    // Cross-workspace handoff — available in workspace turns (not task turns), independent of the scheduler
-    if (!this.tasks.has(chatId)) {
+    // Workspace tools are available in every workspace conversation.
+    if (this.config.workspaceByChat(chatId)) {
       const self = this.config.workspaceByChat(chatId);
       const peers = this.config.listWorkspaces().filter((w) => w.name !== self?.name);
       const peerList = peers.length ? peers.map((w) => `"${w.name}"`).join(", ") : "(none)";
@@ -1199,11 +1058,11 @@ export class Orchestrator {
         ),
         tool(
           "project_create",
-          `Create a Project around an existing workspace so it can become a spin_out target. The chosen main workspace must not already belong to another Project. Defaults to the current workspace. Existing Projects: ${projectNames}.`,
+          `Create a Project around an existing workspace so it can host peers. A workspace that is a peer of another Project is adopted out of it; one that is its Project's main cannot be (reassign that main first). Defaults to the current workspace. Existing Projects: ${projectNames}.`,
           {
             name: z.string().describe("New Project name"),
             description: z.string().describe("What the Project is about"),
-            main_workspace: z.string().optional().describe("Existing unprojected workspace to make the Project main; defaults to the current workspace"),
+            main_workspace: z.string().optional().describe("Existing workspace to make the Project main; must not be another Project's main. Defaults to the current workspace"),
           },
           async (args) => {
             if (this.config.projectByName(args.name)) {
@@ -1217,8 +1076,10 @@ export class Orchestrator {
             if (!main) {
               return { content: [{ type: "text" as const, text: `No workspace named "${mainName}".` }] };
             }
-            if (main.project) {
-              return { content: [{ type: "text" as const, text: `Workspace "${main.name}" already belongs to project "${main.project}".` }] };
+            // A peer can be adopted out of its project; its main cannot — that would orphan the project.
+            const currentProject = this.config.listProjects().find((p) => p.main_workspace === main.name);
+            if (currentProject) {
+              return { content: [{ type: "text" as const, text: `Workspace "${main.name}" already belongs to project "${currentProject.name}" as its main. Reassign that project's main via project_update first, or archive it.` }] };
             }
             this.config.upsertWorkspace({ ...main, project: args.name });
             this.config.addProject({
@@ -1226,79 +1087,45 @@ export class Orchestrator {
               description: args.description,
               main_workspace: main.name,
             });
-            await this.channel.setupProject?.(args.name, main.chat_id).catch((err) =>
+            if (main.chat_id) await this.channel.setupProject?.(args.name, main.chat_id).catch((err) =>
               log.warn({ err }, "[project] platform setup failed for %s", args.name));
             log.info("[tool] project_create: %s (main %s)", args.name, main.name);
             return { content: [{ type: "text" as const, text: `Project "${args.name}" created with "${main.name}" as its main workspace.` }] };
           },
         ),
-        tool(
-          "spin_out",
-          `Propose splitting a related-but-separate strand of work into its own NEW peer workspace. One-tap spawning is available when the target project resolves, its main workspace exists, and the channel supports Project chat lifecycle; otherwise this registers a pending brief the user claims by creating a group. The peer inherits its Project main's engine and model by default; pass engine and/or model to override them. Model choices are validated by the selected engine when its next turn starts. Pass an existing cwd when external tooling prepared the worktree: the path must already exist, and ClearClaw will never create or remove it. Omit cwd to let ClearClaw create and own a standard git worktree for plain git repos. Defaults to your own project; pass "into" to spawn into another. Write the brief as a distilled handoff: convey the goal, the decisions the user has already made, and the scope, not the implementation. Leave schema, file layout, and approach for the receiving agent to design with the user; pass through detailed design only when the user has clearly specified it, never invent it. Known projects: ${projectNames}. (To hand a strand to an EXISTING workspace, use message_peer instead.)`,
-          {
-            name: z.string().describe("Suggested workspace name (short, e.g. 'myapp-perf')"),
-            brief: z.string().describe("Distilled brief delivered to the new workspace as its first message"),
-            cwd: z.string().min(1).optional().describe("Existing working directory prepared by the caller. It must already exist; ClearClaw never creates or removes an explicitly provided path. Omit to let ClearClaw create and manage a standard git worktree when possible."),
-            branch: z.string().optional().describe("Git branch used only when ClearClaw creates the worktree (cwd omitted). Conventional name (e.g. 'feat/x', 'fix/y', 'chore/z'); defaults to 'feat/<name>'."),
-            into: z.string().optional().describe("Target project name to spawn into; defaults to your own project"),
-            engine: z.string().optional().describe("Engine for the peer (e.g. 'claude-code', 'kiro'); defaults to the Project main's engine"),
-            model: z.string().optional().describe("Model choice for the peer; defaults to the Project main's model when using the same engine and is validated when the next turn starts"),
-          },
-          async (args) => {
-            const currentSelf = this.config.workspaceByChat(chatId) ?? self;
-            const fromName = currentSelf?.name ?? "unknown";
-            const targetName = args.into ?? currentSelf?.project;
-            const project = targetName ? this.config.projectByName(targetName) : undefined;
-            const mainWs = project ? this.config.workspaceByName(project.main_workspace) : undefined;
-            const resolved = this.peerRuntime(mainWs ?? currentSelf, args);
-            if (resolved.error) {
-              return { content: [{ type: "text" as const, text: resolved.error }] };
-            }
-            const runtime = resolved.runtime!;
-            const effectiveEngine = runtime.engine ?? this.config.defaultEngine;
-            const runtimeLabel = runtime.model ? `${effectiveEngine} / ${runtime.model}` : effectiveEngine;
-            let fallbackReason: string;
-
-            if (project && mainWs && this.channel.createProjectChat && this.channel.closeProjectChat) {
-              const resp = await this.channel.sendInteractive(
-                chatId,
-                `🌱 Spin out "${args.name}" into ${project.name} using ${runtimeLabel}?\n\n${args.brief.slice(0, 300)}`,
-                [[
-                  { label: `Spawn in ${project.name}`, value: "spawn" },
-                  { label: "Manual group", value: "manual" },
-                  { label: "Cancel", value: "cancel" },
-                ]],
-              );
-              if (resp.value === "cancel") {
-                return { content: [{ type: "text" as const, text: "Spin-out cancelled by the user." }] };
-              }
-              if (resp.value === "spawn") {
-                return this.spawnPeer(chatId, fromName, project, mainWs, args, runtime);
-              }
-              fallbackReason = resp.value === "manual"
-                ? "the user selected a manual group"
-                : "one-tap spawning was not selected";
-            } else if (!project) {
-              fallbackReason = args.into
-                ? `no project "${args.into}" resolved for workspace "${fromName}"`
-                : `no project resolved for workspace "${fromName}"`;
-            } else if (!mainWs) {
-              fallbackReason = `project "${project.name}" has no main workspace "${project.main_workspace}"`;
-            } else {
-              fallbackReason = `channel "${this.channel.name}" lacks peer chat creation or closure`;
-            }
-            return this.registerSpinOutBrief(chatId, fromName, args, fallbackReason, runtime);
-          },
-        ),
-        tool(
-          "spin_out_cancel",
-          "Cancel a pending spin-out that has not been claimed yet.",
-          { id: z.string().describe("Pending spin-out id") },
-          async (args) => {
-            const removed = this.config.removeSpinOut(args.id);
-            return { content: [{ type: "text" as const, text: removed ? `Spin-out ${args.id} cancelled.` : `No pending spin-out "${args.id}".` }] };
-          },
-        ),
+        tool("workspace_create", `Hand a strand of work to a NEW peer agent with its own chat, directory, and conversation. The peer joins your own project by default. Use join_project to put it in a different existing project, or own_project to start a project of its own with this peer as its main. Known projects: ${projectNames}. Prepare cwd yourself first — create a git worktree, clone, or plain directory the way this host and repository expect, and keep owning it; ClearClaw only reads the path and never creates or deletes it. The brief is the peer's first message: goal, decisions already made, and scope, leaving unstated implementation choices open. For an existing workspace use message_peer instead.`, {
+          name: z.string().min(1).describe("Unique short workspace name; also names the project when own_project is set"),
+          cwd: z.string().min(1).describe("Absolute path to a directory you have already prepared"),
+          brief: z.string().min(1).describe("Goal, agreed decisions, and scope; delivered as the peer's first message"),
+          description: z.string().optional().describe("One-line focus; defaults to the first 160 characters of the brief's first line"),
+          join_project: z.string().optional().describe("Existing project to put this peer in; defaults to your own"),
+          own_project: z.boolean().optional().describe("Start a new project for this peer instead of joining an existing one"),
+          behavior: z.enum(["assistant", "relay"]).optional(),
+          engine: z.string().optional(),
+          model: z.string().optional(),
+        }, async (args) => {
+          const currentSelf = this.config.workspaceByChat(chatId);
+          if (!currentSelf) return { content: [{ type: "text" as const, text: "The source workspace is no longer connected." }] };
+          // A legacy caller with no project of its own has nothing to join, so the peer gets one.
+          const targetName = args.own_project ? undefined : args.join_project ?? currentSelf.project;
+          const project = targetName ? this.config.projectByName(targetName) : undefined;
+          if (targetName && !project) return { content: [{ type: "text" as const, text: `No project named "${targetName}". Pass own_project to start a new one.` }] };
+          const base = project ? this.config.workspaceByName(project.main_workspace) : currentSelf;
+          if (!base) return { content: [{ type: "text" as const, text: `Project "${project!.name}" has no main workspace.` }] };
+          const resolved = this.peerRuntime(base, args);
+          if (resolved.error) return { content: [{ type: "text" as const, text: resolved.error }] };
+          const runtime = resolved.runtime!;
+          const automatic = !!(this.channel.createProjectChat && this.channel.closeProjectChat
+            && (!base.chat_id || this.channel.ownsId(base.chat_id)));
+          const destination = project ? `project "${project.name}"` : `new project "${args.name}"`;
+          const response = await this.channel.sendInteractive(chatId,
+            `Create workspace "${args.name}" at ${args.cwd} in ${destination} using ${runtime.engine ?? this.config.defaultEngine}${runtime.model ? ` / ${runtime.model}` : ""}?\n\n${args.brief.slice(0, 300)}${automatic ? "" : "\nAutomatic chat creation is unavailable for this destination."}`,
+            [[...(automatic ? [{ label: "Create chat", value: "spawn" }] : []),
+              { label: "Manual chat", value: "manual" }, { label: "Cancel", value: "cancel" }]],
+          );
+          if (response.value !== "spawn" && response.value !== "manual") return { content: [{ type: "text" as const, text: "Workspace creation cancelled." }] };
+          return this.createWorkspace(chatId, currentSelf.name, project, base, { ...args, manual: response.value === "manual" }, runtime);
+        }),
         tool("workspace_archive", "Archive a workspace: try to close its bound chat, then unbind it even if chat closure fails. Reports any closure error. Removes a git worktree only when ClearClaw created and owns it; externally managed worktrees stay in place. Cannot archive 'default'.", {
           name: z.string().describe("Workspace to archive"),
         }, async (args) => {
@@ -1318,19 +1145,19 @@ export class Orchestrator {
           }
           const resp = await this.channel.sendInteractive(
             chatId,
-            `Archive workspace "${args.name}" (${target.cwd})? Its registration will be removed even if closing its chat fails.${target.spawnedFrom && target.owns_worktree === true ? " Its ClearClaw-owned worktree will also be removed, including uncommitted files." : " Its directory will be left in place."}`,
+            `Archive workspace "${args.name}" (${target.cwd})? Its registration will be removed even if closing its chat fails. Its directory is left in place.`,
             [[{ label: "Archive", value: "yes" }, { label: "Cancel", value: "no" }]],
           );
           if (resp.value !== "yes") {
             return { content: [{ type: "text" as const, text: "Archive cancelled by the user." }] };
           }
-          if (!this.channel.ownsId(target.chat_id) || !this.channel.closeProjectChat) {
+          if (target.chat_id && (!this.channel.ownsId(target.chat_id) || !this.channel.closeProjectChat)) {
             return { content: [{ type: "text" as const, text: "Cannot archive: this channel cannot close the workspace's chat." }] };
           }
           // Whole Telegram chats and deleted topics can be impossible to close.
           let archiveNote = "";
           try {
-            await this.channel.closeProjectChat(target.chat_id, target.project);
+            if (target.chat_id) await this.channel.closeProjectChat!(target.chat_id, target.project);
           } catch (err) {
             const reason = err instanceof Error ? err.message : String(err);
             log.warn("[tool] workspace_archive: chat closure failed, unbinding anyway: %s", reason);
@@ -1339,17 +1166,7 @@ export class Orchestrator {
           this.config.removeWorkspace(args.name);
           const removedProject = project?.main_workspace === args.name ? project : undefined;
           if (removedProject) this.config.removeProject(removedProject.name);
-          if (target.spawnedFrom) {
-            if (target.owns_worktree === true) {
-              try { removeWorktree(target.cwd); } catch (err) {
-                log.warn("[tool] workspace_archive: worktree removal failed, leaving directory: %s", err instanceof Error ? err.message : String(err));
-              }
-            } else if (target.owns_worktree === false) {
-              archiveNote += " External worktree left in place; clean up with your own tooling.";
-            } else {
-              archiveNote += " Workspace directory left in place because ClearClaw does not own it.";
-            }
-          }
+          archiveNote += " Its directory is left in place; clean up with your own tooling.";
           log.info("[tool] workspace_archive: %s", args.name);
           return { content: [{ type: "text" as const, text: `Workspace "${args.name}" archived.${archiveNote}` }] };
         }),
@@ -1364,6 +1181,9 @@ export class Orchestrator {
           }
           if (args.main_workspace && !this.config.workspaceByName(args.main_workspace)) {
             return { content: [{ type: "text" as const, text: `No workspace named "${args.main_workspace}".` }] };
+          }
+          if (args.main_workspace && this.config.workspaceByName(args.main_workspace)?.project !== proj.name) {
+            return { content: [{ type: "text" as const, text: `Choose a main workspace that already belongs to project "${proj.name}".` }] };
           }
           this.config.addProject({
             name: proj.name,
@@ -1577,8 +1397,8 @@ function buildPrompt(messages: InboundMessage[]): string {
 }
 
 /** Preserve the original source across multiple switches before a handoff succeeds. */
-function captureHandoff(ctx: TurnContext, engine: string): EngineHandoff | undefined {
-  const sessionId = isTask(ctx) ? ctx.sessionId : ctx.current_session_id;
+function captureHandoff(ctx: Workspace, engine: string): EngineHandoff | undefined {
+  const sessionId = ctx.current_session_id;
   return ctx.engine_handoff ?? (sessionId ? { engine, sessionId, cwd: ctx.cwd } : undefined);
 }
 

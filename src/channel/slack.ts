@@ -198,6 +198,11 @@ export class SlackChannel extends EventEmitter implements Channel {
   }
   ownsId(chatId: string): boolean { return chatId.startsWith("slack:"); }
 
+  /** Slack DM conversation ids start with D; channels start with C or G. */
+  isRootDM(chatId: string, userId: string): boolean {
+    return /^slack:D[A-Z0-9]+$/.test(chatId) && userId.startsWith("slack:");
+  }
+
   async setupProject(projectName: string, mainChat: string): Promise<void> {
     await this.updateProjectSection(projectName, mainChat, "initialize");
   }

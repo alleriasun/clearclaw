@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the peer lifecycle. Moving worktree preparation out of the tool is an accepted follow-up direction, tracked in [#46](https://github.com/alleriasun/clearclaw/issues/46), and is not yet implemented.
+Accepted for the peer lifecycle, including caller-prepared working directories.
 
 This record preserves the architectural choices and their consequences. Update its status or supersede the decision when those choices change; execution plans and verification logs belong outside the spec.
 
@@ -18,54 +18,41 @@ A new strand normally gets a new workspace; a true continuation can use an exist
 
 ### Model
 
-A **Workspace** binds a unique name, working directory, chat, and current engine session. Its optional `project` identifies the Project it belongs to. `engine`, `model`, and `behavior` control its runtime. `description` records what it is working on.
+A **Workspace** binds a unique name, working directory, optional chat, and current engine session. A null chat waits for pairing or manual connection. Its optional `project` identifies the Project it belongs to. `engine`, `model`, and `behavior` control its runtime. `description` records what it is working on.
 
 A **Project** has a unique name, a description, and a `main_workspace`. It holds shared context and identifies the spawning baseline; it has no engine session. Project names need not match workspace names.
 
-The **main workspace** supplies the Project's spawn destination, directory baseline, and default runtime. Automatically spawned **peers** join that Project and record their originating workspace in `spawnedFrom`. Chat closure does not depend on that provenance. Worktree ownership is a separate field, `owns_worktree`.
+The **main workspace** supplies the Project's spawn destination, directory baseline, and default runtime. Spawned **peers** join that Project and record their originating workspace in `spawnedFrom`. Chat closure does not depend on that provenance.
 
-New onboarding creates a Project with the new workspace as main. Existing workspaces may remain unprojected. `project_create` adopts an existing unprojected workspace, defaulting to the caller, and rejects duplicate Projects or silent reassignment. This avoids forced migration and Projects with no main.
+`workspace_create` creates a new Project and its main workspace together from any connected workspace conversation, or joins an existing Project when explicitly requested. `project_create` wraps an existing workspace, including adopting a peer out of another Project; it refuses any workspace referenced as a Project main. See [Workspace lifecycle](workspace-lifecycle.md) for startup, pairing, and manual binding.
 
-`Project.description` and `Workspace.description` are editable context. A spawned peer's brief becomes its description. These fields are stored but are not currently injected into prompts as shared project memory.
+`Project.description` and `Workspace.description` are editable context. A peer has a separate one-line description; if omitted, it defaults to the first 160 characters of the brief’s first line. These fields are stored but are not currently injected into prompts as shared project memory.
 
 ### Proposal and handoff
 
-`spin_out` targets the Project selected by `into`, otherwise the caller's Project. It resolves the Project main and runtime before proposing the handoff. The main chat is the spawn destination; there is no separate spawn-surface registry or global catch-all.
+`workspace_create` is the single creation operation. It targets the Project named by `join_project`, otherwise the caller's own Project; `own_project` instead starts a Project named after the workspace, with that workspace as its main. It resolves the Project main and runtime before proposing the handoff. The main chat is the spawn destination; there is no separate spawn-surface registry or global catch-all.
 
-When the Project, main workspace, and channel's Project lifecycle capability are available, the user chooses **Spawn**, **Manual group**, or **Cancel**. Automatic spawning selects a directory, creates the platform chat with its lifecycle grouping update, persists the peer, and queues the brief as a peer message.
+When the Project, main workspace, and channel's Project lifecycle capability are available, the user chooses **Create chat**, **Manual chat**, or **Cancel**. Automatic creation makes the platform chat with its lifecycle grouping update, persists the workspace, and queues the brief as a peer message.
 
-If a prerequisite is missing, or the user chooses a manual group, ClearClaw persists a pending brief and reports the reason. A failed automatic spawn reports failure; it does not silently create a pending claim. `spin_out_cancel` removes an unclaimed brief.
+Missing Projects or mains are errors. When automatic creation is unavailable, the user can choose a manual workspace. A failed automatic attempt reports the platform error without silently creating another registration.
 
-A pending record carries an ID, originating workspace, suggested name and cwd, brief, chosen runtime, and creation time. In a new chat, onboarding claims it through `workspace_create(spin_out_id)` and then finishes with `task_complete`, allowing the queued brief to run as a workspace turn. Manual onboarding creates a new Project around that workspace; it does not attach the claim to the originating Project. The suggested cwd is a default for onboarding, not a prepared worktree.
+Manual creation saves a workspace with a null chat ID and a persisted first brief. The user connects it through `/connect <workspace>` (Slack: `/cc connect <workspace>`) in an authorized unbound chat. The brief runs in the normal workspace session and is retained until a successful non-aborted turn. New manual workspaces keep their intended Project membership.
 
 The brief conveys the goal, decisions the human has already made, and scope. Implementation choices stay with the receiving workspace unless the human has specified them. Subsequent communication is explicit and symmetric through `message_peer`; sending does not synchronously wait for a reply.
 
-### Current directory contract
+### Directory contract
 
-Until the follow-up extraction is implemented, automatic spawning distinguishes an explicit cwd from an omitted one:
+`cwd` is required and must already exist as an absolute path. ClearClaw reads it and nothing more: it never creates, moves, or deletes a workspace directory, on creation, rollback, or archive.
 
-- An explicit `cwd` must be an existing directory. ClearClaw does not create it and records `owns_worktree: false`. The caller's tooling owns its preparation and cleanup.
-- With cwd omitted, a git-backed main gets a standard worktree. ClearClaw records `owns_worktree: true`. The caller may choose a branch; the default is `feat/<name>`.
-- With cwd omitted for a non-git main, the peer reuses the main's cwd. No worktree is owned.
-
-An absent ownership field also covers legacy workspaces whose ownership is unknown. A path that resembles a ClearClaw worktree is not evidence of ownership. Rollback and archive remove only worktrees explicitly marked as owned.
-
-Manual `workspace_create` differs from automatic spawning: it can create the requested directory, but it does not create a git worktree. An agent that wants worktree isolation must prepare it before claiming the brief.
+The caller prepares the directory using whatever its repository expects, whether a git worktree, a clone, or a plain folder, and keeps owning its cleanup. A path that resembles a ClearClaw worktree carries no special meaning.
 
 ### Runtime selection
 
-An automatic peer inherits behavior and compatible runtime settings from its target Project main. If no main resolves for a pending fallback, runtime inheritance uses the caller. Explicit `engine` and `model` arguments take precedence. The effective engine must be registered.
+An automatic peer inherits behavior and compatible runtime settings from its target Project main. Standalone workspace creation inherits from the caller. Explicit `engine` and `model` arguments take precedence. The effective engine must be registered.
 
 Model choices are passed to the selected engine without an engine-name allowlist. An inherited model survives only when the selected engine matches the inherited engine; changing engines drops that inherited choice. ACP validates an explicit saved choice against the session's advertised configuration when the next turn starts. If no model selector is advertised or the choice is rejected, the turn errors before prompting.
 
-A manual claim chooses its engine in this order:
-
-1. Explicit `workspace_create.engine`.
-2. The engine selected for the onboarding task, including native `/engine` selection.
-3. The pending spin-out's engine.
-4. The server default.
-
-An explicit model wins; otherwise the pending model survives only for a compatible Claude Code engine. This preserves the proposed runtime while allowing the human to change it during setup.
+Manual workspaces retain the selected runtime. Legacy pending claims use an explicit engine/model first, otherwise their saved engine and compatible model, with server defaults for absent choices. There is no onboarding engine selection state.
 
 ### Platform boundary
 
@@ -85,20 +72,18 @@ Section failures are best-effort and do not fail the peer lifecycle. Removing au
 
 ### Archive
 
-`workspace_archive` asks for confirmation and refuses to archive the home workspace. It also refuses a Project main while that Project has live peers. Removing the last main removes its Project. Archive closes the bound chat regardless of who created it, then removes the workspace and any emptied Project. If chat closure fails or is unsupported, the workspace stays bound and the tool reports the error. Directory cleanup remains separate: for spawned workspaces, a worktree is removed only when ownership is explicit. External and unknown-ownership directories remain in place.
+`workspace_archive` asks for confirmation and refuses to archive the home workspace. It also refuses a Project main while that Project has live peers. Removing the last main removes its Project. Archive closes the bound chat regardless of who created it, then removes the workspace and any emptied Project. A same-channel closure failure is reported while registration cleanup continues. Cross-channel or missing-capability targets remain protected. An unbound workspace has no chat to close. Directory cleanup remains the caller's: archive always leaves the directory on disk and says so.
 
 ## Consequences
 
 Peers gain independent sessions and native chats without adding a supervising agent or a platform-specific Project schema. Explicit ownership protects caller-managed directories, while preparation remains a separate responsibility. Model compatibility rules deliberately limit overrides to engines that consume them.
 
-Cleanup is best-effort. Spawn rollback attempts to close and detach a created chat and remove an owned worktree, but it does not undo a workspace record already persisted or a brief already queued. Archive closes the chat before removing config records and attempting owned-directory cleanup. Failures can therefore require manual reconciliation; these operations are not atomic transactions.
-
-Owned-worktree cleanup safely deletes the branch only if git considers it merged. It force-removes the worktree itself, so uncommitted changes can be lost even when unmerged commits remain on a preserved branch. Ownership is not a cleanliness check.
+Cleanup is best-effort. Spawn rollback attempts to close and detach a created chat, and removes any records persisted by the failed creation. It never touches the directory. Once creation has committed, notification failures do not roll back the workspace or its brief. A created chat subsequently bound to another workspace is preserved during rollback. Archive closes the chat before removing config records. Failures can therefore require manual reconciliation; these operations are not atomic transactions.
 
 Two additional limits matter when choosing a Project main:
 
-- Telegram creation currently assumes an unqualified main chat ID. Making a main inside an existing topic can produce a four-part ID that sending and closing interpret incorrectly.
-- `project_update` checks that a replacement main exists, but does not move workspace membership or reorder grouping. Reassignment requires attention to those separate records.
+- Telegram Projects created from another topic use the same root chat as their platform container.
+- `project_update` requires the replacement main to belong to that Project. Reassignment does not reorder platform grouping.
 
 ## Alternatives considered
 
@@ -108,13 +93,13 @@ Two additional limits matter when choosing a Project main:
 - A supervising agent with subordinate workers would centralize work assignment and results. Independent peer workspaces retain direct human steering of each strand.
 - A separate spawn-surface registry would add another routing model. A Project's main already supplies the destination and defaults.
 - Mapping every peer to a message thread would impose one platform's conversation model on the others. Platform-native topics and channels preserve the workspace experience.
-- Adding more repository-specific worktree rules to the relay would expand its filesystem policy. Caller preparation is the chosen follow-up boundary instead.
+- Adding repository-specific worktree rules to the relay would expand its filesystem policy. Caller preparation is the chosen boundary instead.
 
-## Follow-up decision: caller-prepared worktrees
+## Decision: caller-prepared worktrees
 
-Move worktree preparation out of the `spin_out` tool call. Corporate repositories can require different commands and repository/folder layouts, so coupling those conventions to spawning adds complexity without improving the relay's core job. Agents or caller tooling should prepare the directory using that repository's workflow, then give ClearClaw an existing cwd. ClearClaw retains chat creation, workspace binding, runtime selection, and brief delivery.
+Worktree preparation is out of the creation tool. Corporate repositories can require different commands and repository/folder layouts, so coupling those conventions to spawning added complexity without improving the relay's core job. Agents or caller tooling prepare the directory using that repository's workflow, then give ClearClaw an existing cwd. ClearClaw retains chat creation, workspace binding, runtime selection, and brief delivery.
 
-This direction is accepted; implementation is tracked in [#46: Move worktree preparation out of spin_out](https://github.com/alleriasun/clearclaw/issues/46). The current built-in worktree behavior above remains until that work lands.
+Implemented; this closes [#46](https://github.com/alleriasun/clearclaw/issues/46).
 
 The helper or skill, approval timing for preparation versus spawning, tool-operation granularity, and migration of existing owned worktrees remain design choices for the follow-up. Manual claims must respect the same prepared-directory boundary. Branch names are already caller-selectable, so extraction does not require another naming convention.
 

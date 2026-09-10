@@ -79,6 +79,8 @@ async function runApprove(args: string[]): Promise<void> {
   }
 
   config.approveUser(pairing.userId, pairing.userName);
+  // Pairings only originate from a root DM, so this chat is home's destination.
+  config.connectHomeWorkspace(pairing.chatId);
   console.log(`Approved ${pairing.userName} (${pairing.userId})`);
 }
 
@@ -144,6 +146,7 @@ async function runSetup(): Promise<void> {
     ]);
     console.log("Saved to ~/.clearclaw/config.json\n");
     config.resolve();
+    config.ensureHomeWorkspace();
 
     let resolveFirstDM!: (info: { chatId: string; user: UserInfo }) => void;
     const firstDM = new Promise<{ chatId: string; user: UserInfo }>((r) => {
@@ -189,6 +192,8 @@ async function runSetup(): Promise<void> {
     }
 
     config.approveUser(pairing.userId, pairing.userName);
+    // Pairings only originate from a root DM, so this chat is home's destination.
+  config.connectHomeWorkspace(pairing.chatId);
     console.log(`  Approved ${pairing.userName} (${pairing.userId})`);
     await channel.sendMessage(chatId, "You're approved! The bot is being set up — you'll be able to chat soon.");
     console.log("\nSetup complete! Start the daemon:\n  clearclaw daemon\n");

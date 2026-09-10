@@ -11,10 +11,8 @@ import type { Channel, Engine, InboundMessage, RunTurnOpts, SessionHistoryOpts, 
 const chatId = "test:handoff";
 const oldSession = "old-legacy-session-for-handoff-test";
 interface Handoff { engine: string; sessionId: string; cwd: string }
-interface Task { sessionId: string | null; engine?: string; cwd: string; prompt: string; engine_handoff?: Handoff }
 interface Internals {
   deliverToWorkspace(name: string, origin: InboundMessage["origin"], text: string): boolean;
-  tasks: Map<string, Task>;
   chat(id: string): { debounceTimer: ReturnType<typeof setTimeout> | null };
   routeMessage(msg: InboundMessage): Promise<void>;
   processQueuedMessages(id: string): Promise<void>;
@@ -46,6 +44,7 @@ function harness(t: TestContext) {
   const historyCalls: Array<{ engine: string; opts: SessionHistoryOpts }> = [];
   const channel = {
     name: "test", ownsId: (id: string) => id.startsWith("test:"),
+    isRootDM: (id: string, userId: string) => id === userId,
     sendMessage: async (_id: string, text: string) => { messages.push(text); return ["message"]; },
     sendInteractive: async () => ({ value: "resumed-session" }),
     updateStatus: async () => {}, setTyping: async () => {}, editMessage: async () => {},
@@ -188,20 +187,6 @@ for (const command of ["/new", "/resume"]) {
     assert.equal(h.calls[0].opts.sessionId, command === "/new" ? null : "resumed-session");
   });
 }
-
-test("onboarding task switches carry context without changing setup instructions", async (t) => {
-  const h = harness(t);
-  const task: Task = { sessionId: oldSession, engine: "legacy-test", cwd: h.config.homeWorkspacePath, prompt: "Original setup instructions" };
-  h.internals.tasks.set(chatId, task);
-  await h.route("/engine codex");
-  assert.equal(task.engine_handoff?.sessionId, oldSession);
-  assert.equal(task.sessionId, null);
-  await h.turn("Finish setup");
-  assert.ok(h.calls[0].opts.prompt.includes(oldSession));
-  assert.match(h.calls[0].opts.prompt, /Finish setup/);
-  assert.equal(task.prompt, "Original setup instructions");
-  assert.equal(task.engine_handoff, undefined);
-});
 
 test("a pass-through slash command neither receives nor consumes pending context", async (t) => {
   const h = harness(t);
