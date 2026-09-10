@@ -39,7 +39,7 @@ Workspaces and Projects are persisted in `config.json`. The workspace fields are
 | `chat_id` | The chat (Telegram group, DM, Slack channel, etc.) mapped to this workspace |
 | `behavior`, `engine`, `model` | Optional workspace runtime settings |
 | `project`, `description` | Optional Project membership and workspace context |
-| `spawnedFrom`, `owns_worktree` | Spawn provenance and explicit worktree ownership |
+| `spawnedFrom` | Spawn provenance: the workspace this peer came from |
 
 A Project stores `name`, `description`, and `main_workspace`. Its main supplies the spawn destination and default runtime; automatic peers join that Project. Legacy workspaces can remain unprojected or opt in with `project_create`. See the [Projects and peer spawning decision](specs/peer-spawning.md) for the context, contracts, alternatives, and consequences of this model.
 
@@ -131,7 +131,7 @@ Other notable SDK `query()` options beyond what ClearClaw currently uses:
 
 `assemblePrompt()` in `src/prompt.ts` reads `.md` files from two directories per-turn and concatenates them into a single string:
 
-- **`prompts/`** (framework, bundled in repo) — `SYSTEM.md` (core behavior) + `ONBOARDING.md` (workspace setup flow)
+- **`prompts/`** (framework, bundled in repo) — `SYSTEM.md` (core behavior and workspace tool guidance)
 - **`~/.clearclaw/workspace/instructions/`** (user, all optional) — `IDENTITY.md`, `USER.md`, `TOOLS.md`
 
 Framework content first, user content appended. Applied to all workspaces. Files read fresh every turn — edits take effect on the next message.
@@ -154,13 +154,23 @@ Claude Code stores sessions at `~/.claude/projects/{encoded-cwd-path}/sessions/`
 - **Terminal-mobile handoff:** A terminal session and a mobile session for the same CWD share the same session store. Start in the terminal, continue via Telegram, pick it back up in the terminal.
 - **Session commands:** `/new` clears the stored session ID. Default behavior is resume.
 - **Command feedback:** `/engine` and `/new` save their changes and send confirmation before updating the pinned status. Status failures are logged without turning a successful command into an error. Unknown context usage is shown as `usage n/a`, rather than a measured zero.
-- **Control routing:** Native commands are handled before onboarding and workspace message dispatch. `/mode`, `/cancel`, and `/engine` work during setup; workspace-only commands report when no workspace is linked instead of reaching the setup model.
+- **Control routing:** Native commands run before workspace message dispatch. Authorized unbound chats receive connection guidance without invoking a model. `/connect <workspace>` binds an unbound workspace to the current unbound chat; existing bindings are never replaced.
 - **Workspace updates:** The `workspace_update` agent tool edits descriptions only. Runtime changes use `/engine`, `/model`, and `/behavior` in the workspace's own chat; workspace creation can still select its initial runtime.
-- **Engine:** `/engine` opens the engine picker; `/engine <name>` selects directly. Both work before a workspace exists and during idle onboarding, without invoking a model. Setup uses the selected engine and carries it into `workspace_create` (explicit tool argument, then setup selection, then claimed spin-out engine, then server default). Changing engines clears the old session and workspace model override. A running turn must be cancelled and finish before switching; the picker rechecks state after the selection. `/cancel` clears an onboarding task, including its engine choice.
+- **Engine:** `/engine` opens the picker; `/engine <name>` selects directly in a connected workspace, without invoking a model. Changing engines clears the old session and saved model while retaining a history handoff. A running turn must be cancelled and finish before switching; the picker rechecks the workspace and engine after selection.
 - **Engine handoff:** Changing engines keeps a reference to the previous engine, session ID, and cwd. The next ordinary user turn includes that ID and all available user/assistant conversation text, without a ClearClaw character cap. Each engine retrieves a message array through `getSessionMessages`: Claude uses its SDK, and ACP agents replay `session/load` without a prompt. Formatting stays separate. System prompts remain unchanged; unavailable history is marked explicitly. Workspace handoffs survive restarts and failed/cancelled turns and are consumed after successful completion. `/new` and choosing a session with `/resume` discard the pending handoff. Repeated switches before delivery retain the original source; scheduler/peer-only turns leave it pending.
 - **Model:** `/model <name>` saves a per-workspace model choice, applied by the selected engine on the next turn; `/model` alone shows the saved model setting. ACP engines use the model selector advertised during session creation/loading; missing selectors and rejected choices error before prompting. The command saves intent without starting an engine to probe its options. `/model default` clears the override and keeps the current session; `/new` starts a session using the engine's configured default. Resumed sessions may retain their previously selected model. The session ID is captured from the engine's first message so cancellation does not lose it. New session model reports belong to usage stats and do not change the saved setting. Older versions stored both explicit choices and reported models in `Workspace.model`; their origins cannot be recovered. Existing saved values are retained because previous versions already passed them to the engine. Use `/model default` to clear such a value, then `/new` for a fresh engine-default session.
-- **Peer runtime:** `spin_out` inherits the Project main's engine and compatible model by default. Callers may select another engine or model per peer. Manual spin-out claims preserve that runtime choice.
+- **Peer runtime:** `workspace_create` inherits the Project main's engine and compatible model by default. Callers may select another engine or model per peer. Manual creation preserves that runtime choice.
 - **Turn isolation:** One message at a time per workspace. Concurrent turns across different workspaces are allowed.
+
+## Workspace creation and binding
+
+The daemon ensures the `default` workspace and its project exist before connecting the channel. Home starts with `chat_id: null`; approved pairing supplies the owner's root DM destination. Existing authorized/env-configured installations bind on the first authorized root DM. Existing home bindings, identity files, runtime choices, and project metadata are preserved.
+
+`workspace_create` is the single creation operation, available in every connected workspace conversation. The peer joins the caller's project by default, a different existing project with `join_project`, or a project of its own with `own_project`. It supports automatic platform chat creation and manual binding. `cwd` is required and must already exist; ClearClaw never creates or deletes a workspace directory.
+
+Manual workspaces persist with a null chat ID and optional `pending_brief`. The user sends `/connect <workspace>` in the intended chat (Slack: `/cc connect <workspace>`). Connection requires an authorized sender and an unbound chat/workspace. The first brief is included in the ordinary session and consumed only after a successful, non-aborted turn; failures retry it and restart preserves it. No temporary onboarding session, `TaskState`, or `task_complete` is involved.
+
+Schedules remain a separate timer system that injects prompts into the `default` workspace. They require a bound home chat for delivery and do not create task sessions. See [Workspace lifecycle](specs/workspace-lifecycle.md) for the startup and binding contract.
 
 ## User Identity
 
@@ -229,7 +239,7 @@ Both channels implement the same `Channel` interface but differ in platform spec
 
 Both adapters expose `createProjectChat` and `closeProjectChat` directly on `Channel`. Slack also implements `setupProject`, awaited inline during Project registration to initialize its section around the main chat. Slack section handling stays inside the adapter: creation adds its channel, closure archives the channel and removes it from the live User Group. Completed manual section edits are preserved. Telegram validates topic support before creation and closes topics; whole-chat closure is unsupported. Workspace archive closes the bound chat regardless of origin before removing its binding, and reports closure failures without unbinding. Directory ownership remains a separate cleanup decision. There is no startup or per-turn grouping synchronization.
 
-The [platform-boundary decision](specs/peer-spawning.md#platform-boundary) explains why Projects use native topics/channels and keep grouping in the adapter. Worktree preparation still has a built-in git default; moving it to caller tooling for different corporate commands and layouts is the [accepted follow-up](specs/peer-spawning.md#follow-up-decision-caller-prepared-worktrees), tracked in [#46](https://github.com/alleriasun/clearclaw/issues/46).
+The [platform-boundary decision](specs/peer-spawning.md#platform-boundary) explains why Projects use native topics/channels and keep grouping in the adapter. [Worktree preparation belongs to caller tooling](specs/peer-spawning.md#decision-caller-prepared-worktrees), so corporate commands and repository layouts stay out of the relay.
 
 Regular workspace turns expose `project_create` for legacy workspaces that have no Project. It creates a Project with an existing unprojected workspace as main and refuses silent reassignment. This keeps the required Project/main relationship intact while removing manual `config.json` edits.
 

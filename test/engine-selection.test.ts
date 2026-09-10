@@ -8,14 +8,7 @@ import { Orchestrator } from "../src/orchestrator.js";
 import type { ButtonResponse, Channel, Engine, InboundMessage, RunTurnOpts, TurnStats, Workspace } from "../src/types.js";
 
 const chatId = "test:engine-selection";
-interface Task {
-  sessionId: string | null;
-  cwd: string;
-  prompt: string;
-  engine?: string;
-}
 interface Internals {
-  tasks: Map<string, Task>;
   chat(id: string): {
     busy: boolean;
     debounceTimer: ReturnType<typeof setTimeout> | null;
@@ -55,6 +48,7 @@ function harness(t: TestContext) {
   const channel = {
     name: "test",
     ownsId: (id: string) => id.startsWith("test:"),
+    isRootDM: (id: string, userId: string) => id === userId,
     sendMessage: async (_id: string, text: string) => {
       messageHandler(text);
       messages.push(text);
@@ -110,95 +104,14 @@ function harness(t: TestContext) {
       config.upsertWorkspace(ws);
       return ws;
     },
-    task: (overrides: Partial<Task> = {}) => {
-      const task: Task = {
-        sessionId: "claude-task-session", cwd: config.homeWorkspacePath,
-        prompt: "Continue workspace onboarding", ...overrides,
-      };
-      internals.tasks.set(chatId, task);
-      return task;
-    },
     drain: async () => {
       const state = internals.chat(chatId);
       if (state.debounceTimer) clearTimeout(state.debounceTimer);
       state.debounceTimer = null;
       await internals.processQueuedMessages(chatId);
     },
-    createWorkspace: async (args: Record<string, unknown> = {}) => {
-      const tool = internals.buildMcpTools(chatId, "assistant", { staySilent: false, replyToMessageId: null })
-        .find((candidate) => candidate.name === "workspace_create");
-      assert.ok(tool);
-      await tool.handler({ name: "created", cwd: config.homeWorkspacePath, ...args });
-      return config.workspaceByName("created")!;
-    },
+
   };
-}
-
-for (const command of ["/engine codex", "/engine"]) {
-  test(`${command} selects onboarding engine without calling exhausted Claude`, async (t) => {
-    const h = harness(t);
-    await h.route(command);
-    assert.equal(h.internals.tasks.get(chatId)?.engine, "codex");
-    assert.equal(h.calls.length, 0);
-    await h.route("Set up this project");
-    await h.drain();
-    assert.equal(h.calls.length, 1);
-    assert.equal(h.calls[0].engine, "codex");
-    assert.equal(h.calls[0].opts.sessionId, null);
-    assert.match(h.calls[0].opts.appendSystemPrompt!, /Workspace Onboarding/);
-    assert.equal(h.internals.tasks.get(chatId)?.sessionId, "codex-session");
-    if (command === "/engine codex") {
-      t.diagnostic(JSON.stringify({
-        input: command,
-        response: h.messages,
-        nextInput: "Set up this project",
-        observedEngine: h.calls[0].engine,
-        observedResumeSession: h.calls[0].opts.sessionId,
-        claudeCalls: h.calls.filter((call) => call.engine === "claude-code").length,
-      }));
-    }
-  });
-}
-
-test("switching an idle onboarding task keeps its prompt and cwd but resets its session", async (t) => {
-  const h = harness(t);
-  const task = h.task();
-  const original = { ...task };
-  await h.route("/engine codex");
-  assert.equal(task.engine, "codex");
-  assert.equal(task.sessionId, null);
-  assert.equal(task.cwd, original.cwd);
-  assert.equal(task.prompt, original.prompt);
-  await h.route("Continue");
-  await h.drain();
-  assert.equal(h.calls[0].engine, "codex");
-  assert.equal(h.calls[0].opts.sessionId, null);
-});
-
-test("/mode during onboarding opens the native picker without an engine turn", async (t) => {
-  const h = harness(t);
-  h.task();
-  let pickerCalls = 0;
-  h.picker(async () => {
-    pickerCalls++;
-    return { value: "plan" };
-  });
-  await h.route("/mode");
-  await h.drain();
-  assert.equal(pickerCalls, 1);
-  assert.equal(h.internals.chat(chatId).permissionMode, "plan");
-  assert.equal(h.calls.length, 0);
-});
-
-for (const command of ["/new", "/resume", "/behavior", "/model"]) {
-  test(`${command} during onboarding returns its native missing-workspace response`, async (t) => {
-    const h = harness(t);
-    h.task();
-    await h.route(command);
-    await h.drain();
-    assert.match(h.messages.join("\n"), /No workspace linked/);
-    assert.equal(h.calls.length, 0);
-  });
 }
 
 test("workspace switch clears engine-specific session and model before the next turn", async (t) => {
@@ -215,17 +128,6 @@ test("workspace switch clears engine-specific session and model before the next 
   assert.equal(h.calls[0].engine, "codex");
   assert.equal(h.calls[0].opts.sessionId, null);
   assert.equal(h.calls[0].opts.model, undefined);
-});
-
-test("engine selection updates both unfinished onboarding and its newly linked workspace", async (t) => {
-  const h = harness(t);
-  const task = h.task();
-  h.workspace();
-  await h.route("/engine codex");
-  assert.equal(task.engine, "codex");
-  assert.equal(task.sessionId, null);
-  assert.equal(h.config.workspaceByChat(chatId)?.engine, "codex");
-  assert.equal(h.config.workspaceByChat(chatId)?.current_session_id, null);
 });
 
 for (const command of ["/engine missing", "/engine claude-code"]) {
@@ -246,35 +148,6 @@ test("unknown picker values cannot become a configured engine", async (t) => {
   assert.deepEqual(h.config.workspaceByChat(chatId), original);
 });
 
-test("explicitly choosing the current default preserves the onboarding session", async (t) => {
-  const h = harness(t);
-  const task = h.task();
-  await h.route("/engine claude-code");
-  assert.equal(task.sessionId, "claude-task-session");
-  assert.equal(task.engine, "claude-code");
-  const ws = await h.createWorkspace();
-  assert.equal(ws.engine, "claude-code");
-  assert.equal(h.calls.length, 0);
-});
-
-test("unauthorized unregistered chats cannot start onboarding through engine selection", async (t) => {
-  const h = harness(t);
-  await h.route("/engine codex", "test:unknown");
-  assert.equal(h.internals.tasks.has(chatId), false);
-  assert.equal(h.calls.length, 0);
-});
-
-test("busy onboarding rejects engine changes with cancel guidance", async (t) => {
-  const h = harness(t);
-  const task = h.task();
-  h.internals.chat(chatId).busy = true;
-  await h.route("/engine codex");
-  assert.equal(task.engine, undefined);
-  assert.equal(task.sessionId, "claude-task-session");
-  assert.match(h.messages.join("\n"), /\/cancel/);
-  assert.equal(h.calls.length, 0);
-});
-
 test("picker cannot switch engines after a turn starts", async (t) => {
   const h = harness(t);
   const original = h.workspace();
@@ -285,153 +158,6 @@ test("picker cannot switch engines after a turn starts", async (t) => {
   await h.route("/engine");
   assert.deepEqual(h.config.workspaceByChat(chatId), original);
   assert.match(h.messages.join("\n"), /\/cancel/);
-});
-
-test("picker cannot apply its result to a replacement onboarding task", async (t) => {
-  const h = harness(t);
-  h.task();
-  let replacement: Task;
-  h.picker(async () => {
-    await h.route("/cancel");
-    replacement = h.task({ prompt: "A different task", sessionId: "replacement-session" });
-    return { value: "codex" };
-  });
-  await h.route("/engine");
-  assert.equal(replacement!.engine, undefined);
-  assert.equal(replacement!.sessionId, "replacement-session");
-});
-
-for (const scenario of [
-  { label: "explicit engine overrides selected engine", selected: "codex", requested: "claude-code", expected: "claude-code" },
-  { label: "selected engine overrides global default", selected: "codex", expected: "codex" },
-  { label: "unselected onboarding uses global default", expected: "claude-code" },
-] as Array<{ label: string; selected?: string; requested?: string; expected: string }>) {
-  test(`workspace_create: ${scenario.label}`, async (t) => {
-    const h = harness(t);
-    h.task({ engine: scenario.selected });
-    const ws = await h.createWorkspace({ engine: scenario.requested });
-    assert.equal(ws.engine ?? h.config.defaultEngine, scenario.expected);
-    assert.equal(h.calls.length, 0);
-  });
-}
-
-test("late cancelled task events cannot overwrite a replacement task session", async (t) => {
-  const h = harness(t);
-  h.task({ engine: "codex" });
-  let originalSession: string | null | undefined;
-  let replacement: Task | undefined;
-  h.runTurn("codex", async function* () {
-    yield { type: "session", sessionId: "original-codex-session" };
-    originalSession = h.internals.tasks.get(chatId)?.sessionId;
-    await h.route("/cancel");
-    replacement = h.task({ engine: "codex", sessionId: "replacement-session" });
-    yield { type: "session", sessionId: "late-original-session" };
-    yield {
-      type: "done", sessionId: "late-original-done",
-      stats: { model: "stale-model", contextUsed: 20, contextWindow: 100, toolCalls: {} },
-    };
-  });
-  await h.route("Continue setup");
-  await h.drain();
-  assert.equal(originalSession, "original-codex-session");
-  assert.equal(replacement?.sessionId, "replacement-session");
-  assert.equal(h.internals.chat(chatId).stats, null);
-  assert.equal(h.calls.length, 1);
-});
-
-test("cancelled task final stats are discarded when no replacement task exists", async (t) => {
-  const h = harness(t);
-  h.task({ engine: "codex" });
-  h.runTurn("codex", async function* () {
-    await h.route("/cancel");
-    yield {
-      type: "done", sessionId: "cancelled-session",
-      stats: { model: "stale-model", contextUsed: 20, contextWindow: 100, toolCalls: {} },
-    };
-  });
-  await h.route("Continue setup");
-  await h.drain();
-  assert.equal(h.calls.length, 1);
-  assert.equal(h.internals.tasks.has(chatId), false);
-  assert.equal(h.internals.chat(chatId).stats, null);
-});
-
-test("task_complete preserves final task usage without transferring its session to the new workspace", async (t) => {
-  const h = harness(t);
-  h.task({ engine: "codex" });
-  const complete = h.internals.buildMcpTools(chatId, "assistant", { staySilent: false, replyToMessageId: null })
-    .find((candidate) => candidate.name === "task_complete");
-  assert.ok(complete);
-  const finalStats: TurnStats = {
-    model: "codex-model", contextUsed: 125, contextWindow: 1000,
-    toolCalls: { workspace_create: 1, task_complete: 1 },
-  };
-  h.runTurn("codex", async function* () {
-    yield { type: "session", sessionId: "onboarding-session" };
-    await h.createWorkspace();
-    await complete.handler({ message: "Workspace ready" });
-    yield { type: "done", sessionId: "onboarding-session", stats: finalStats };
-  });
-  await h.route("Finish setup");
-  await h.drain();
-  assert.equal(h.calls.length, 1);
-  assert.equal(h.internals.tasks.has(chatId), false);
-  assert.deepEqual(h.internals.chat(chatId).stats, finalStats);
-  const ws = h.config.workspaceByName("created");
-  assert.ok(ws);
-  assert.equal(ws.current_session_id, null);
-  assert.equal(ws.model, undefined);
-});
-
-for (const scenario of [
-  { label: "native setup selection overrides incompatible pending runtime", select: true, expectedEngine: "codex", expectedModel: undefined },
-  { label: "onboarding without a selection preserves pending runtime over global default", select: false, expectedEngine: "claude-code", expectedModel: "claude-opus" },
-  { label: "explicit tool engine overrides native setup selection", select: true, requested: "claude-code", expectedEngine: "claude-code", expectedModel: "claude-opus" },
-]) {
-  test(`pending spin-out integration: ${scenario.label}`, async (t) => {
-    const h = harness(t);
-    h.config.addSpinOut({
-      id: "parity", name: "parity", fromWorkspace: "main", brief: "Finish parity work",
-      engine: "claude-code", model: "claude-opus", createdAt: 1,
-    });
-    if (scenario.select) {
-      await h.route("/engine codex");
-      assert.equal(h.calls.length, 0);
-    } else {
-      h.config.defaultEngine = "codex";
-      await h.route("Start setup");
-      await h.drain();
-      assert.equal(h.internals.tasks.get(chatId)?.engine, undefined);
-      assert.equal(h.calls[0].engine, "codex");
-    }
-    const ws = await h.createWorkspace({
-      description: "Codex parity work", spin_out_id: "parity", engine: scenario.requested,
-    });
-    assert.equal(ws.engine, scenario.expectedEngine);
-    assert.equal(ws.model, scenario.expectedModel);
-    assert.equal(h.config.listSpinOuts().length, 0);
-    assert.equal(h.calls.filter((call) => call.engine === "claude-code").length, 0);
-  });
-}
-
-test("native engine selection retains pending spin-out runtime metadata in the onboarding prompt", async (t) => {
-  const h = harness(t);
-  h.config.addSpinOut({
-    id: "parity", name: "codex-parity", fromWorkspace: "main", brief: "Finish parity work",
-    suggestedCwd: h.config.homeWorkspacePath, engine: "claude-code", model: "claude-opus", createdAt: 1,
-  });
-  await h.route("/engine codex");
-  const prompt = h.internals.tasks.get(chatId)?.prompt;
-  assert.ok(prompt);
-  for (const text of [
-    'parity: "codex-parity" from workspace main',
-    `suggested cwd ${h.config.homeWorkspacePath}`, "engine claude-code", "model claude-opus", "Finish parity work",
-  ]) assert.ok(prompt.includes(text), `onboarding prompt should include ${text}`);
-  await h.route("Continue setup");
-  await h.drain();
-  assert.equal(h.calls.length, 1);
-  assert.equal(h.calls[0].engine, "codex");
-  assert.ok(h.calls[0].opts.appendSystemPrompt?.includes(prompt));
 });
 
 for (const command of ["/engine codex", "/new"]) {

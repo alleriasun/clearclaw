@@ -44,13 +44,10 @@
 - [x] Multiple workspaces (each mapped to a chat/group)
 - [x] DM → default workspace, project workspaces in dedicated groups
 - [x] Workspace modes (assistant/relay behavior) — `/behavior` command, bypassPermissions for assistant, tool status suppression in assistant mode
-- [x] Workspace onboarding from chat — setup wizard, auth pairing, auto-workspace creation
-  - ⚠️ **Gotcha: Telegram group migration.** When a bot is added as admin to a basic group, Telegram silently migrates it to a supergroup, which changes the chat ID. The old ID stops working immediately. Onboarding flow must handle the `migrate_to_chat_id` update in the Telegram API response and auto-update `workspaces.json` — otherwise the workspace link breaks and you get "No workspace linked to this group." (Learned 2026-03-10.)
-  - [x] Chat-based workspace onboarding — model-driven conversational setup when an authorized user messages from an unmapped chat (DM or group). AI-guided flow with task sessions, onboarding skill, workspace MCP tools.
-    - [x] Task sessions — ephemeral, scoped sessions tracked in `ChatState.task` (not tied to a workspace's `current_session_id`). Reusable primitive for any short-lived model interaction.
-    - [x] Onboarding skill — markdown skill file that guides workspace creation conversationally. Model asks about the project, offers worktree creation, calls `workspace_create` when ready.
-    - [x] Workspace MCP tools — `workspace_create` (name, cwd, chat_id) and `worktree_create` (source repo, branch, target path) exposed to the model during task sessions.
-  - [ ] Proactive prompts — bot-initiated turns triggered by events (bot added to group, new DM) rather than user messages. Harness injects a system message and kicks off a turn. Builds on task sessions.
+- [x] Automatic home creation and approved-DM binding, preserving existing identity/runtime settings
+- [x] Unified workspace/project creation tools in ordinary workspace conversations; manual chats connect with `/connect`
+- [x] Retire conversational onboarding, its prompt, `TaskState`, and `task_complete`; retain pairing and scheduling
+- [ ] Proactive prompts on platform events such as joining a group (separate from workspace creation)
 - [ ] `/workspace` command to switch contexts
 - [ ] Workspace management commands (create, delete, list)
 - [ ] Per-workspace `extraArgs` for SDK (settings, mcp-config, auth). SDK supports `query({ options: { extraArgs: { settings: "...", "mcp-config": "..." } } })`. Each workspace carries its own CLI overrides so different workspaces can use different API providers or settings.
@@ -59,7 +56,7 @@
 ## Engine Abstraction
 
 - [x] Kiro CLI engine implementation (AcpEngine via `@agentclientprotocol/sdk`)
-- [x] Engine selection per workspace (`workspace.engine` field, `workspace_create` tool, onboarding flow)
+- [x] Engine selection per workspace (`workspace.engine` field, `workspace_create` tool, native `/engine`)
 - [x] JSON-RPC session management (ACP protocol over ndjson stdio)
 - [x] Make `defaultPromptPath` engine-agnostic (replaced by prompt assembly: `frameworkPromptDir` + `instructionsDir`)
 
@@ -89,8 +86,8 @@
 - [x] Project creation for new and existing unprojected workspaces
 - [x] Telegram topics and Slack private channels with Project grouping
 - [x] Explicit directory ownership and ownership-aware archive
-- [x] Per-peer engine selection and compatible model inheritance, including onboarding overrides
-- [ ] [#46: Move worktree preparation out of spin_out](https://github.com/alleriasun/clearclaw/issues/46), so corporate commands and repository layouts stay in caller tooling; include manual claims and the ownership transition
+- [x] Per-peer engine selection and compatible model inheritance, including manual creation overrides
+- [x] [#46: Move worktree preparation out of the creation tool](https://github.com/alleriasun/clearclaw/issues/46), so corporate commands and repository layouts stay in caller tooling
 - [ ] Decide and implement shared memory separately; the existing [shared-memory proposal](specs/2026-06-07-peer-agents-and-memory.md#part-2-shared-memory) is not part of the current peer lifecycle
 
 ## Agent Situational Awareness
@@ -99,6 +96,6 @@
 - [ ] Inject message timestamp and current time into each turn — agent has no reliable sense of when it is
 - [ ] ChatType context (DM vs group) — surface in turn prompt so agent adjusts tone accordingly
 - [ ] Behavior mode context — agent should know whether it's in assistant or relay mode (affects system prompt framing, not just permissions)
-- [x] Prompt assembly architecture — framework prompts (`prompts/SYSTEM.md`, `ONBOARDING.md`) bundled in repo, user instructions (`instructions/IDENTITY.md`, `USER.md`, `TOOLS.md`) in home workspace, assembled per-turn by `src/prompt.ts`. Replaces monolithic home workspace CLAUDE.md. `syncSkills()` removed.
+- [x] Prompt assembly architecture — framework prompts (`prompts/SYSTEM.md`) bundled in repo, user instructions (`instructions/IDENTITY.md`, `USER.md`, `TOOLS.md`) in home workspace, assembled per-turn by `src/prompt.ts`. Replaces monolithic home workspace CLAUDE.md. `syncSkills()` removed.
 - [ ] Session/memory self-management — strategy for when to auto-compact, when to surface memory, when to summarize vs. continue; currently context just grows until it breaks
 - [ ] Semantic memory (vector search, decay/relevance) — flat CLAUDE.md/MEMORY.md suffice for now; needs a design decision before building

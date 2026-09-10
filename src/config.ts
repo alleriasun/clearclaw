@@ -53,19 +53,8 @@ export interface ScheduleEntry {
   createdAt: number;
 }
 
-export interface PendingSpinOut {
-  id: string;             // short id, shown to the user and used to claim
-  fromWorkspace: string;  // originating workspace name (becomes the peer origin)
-  name: string;           // suggested workspace name
-  brief: string;          // distilled handoff, delivered as the new workspace's first turn
-  suggestedCwd?: string;
-  engine?: string;        // chosen engine override, or inherited explicit engine
-  model?: string;         // chosen/inherited model override when supported by the engine
-  createdAt: number;      // epoch ms
-}
-
 export interface Project {
-  name: string;           // registry key; onboarding initially matches the main workspace name
+  name: string;           // registry key; new projects initially match their main workspace name
   description: string;    // what the project is about — shared context across its workspaces
   main_workspace: string; // the trunk workspace; its chat is the spawn container, its cwd the repo root
 }
@@ -75,7 +64,6 @@ interface ConfigData {
   engines?: EngineEntry[];
   authorizedUsers: AuthorizedUser[];
   pendingPairings: PendingPairing[];
-  pendingSpinOuts: PendingSpinOut[];
   workspaces: Workspace[];
   schedules: ScheduleEntry[];
   projects: Project[];
@@ -205,7 +193,6 @@ export class Config {
       engines: raw.engines as EngineEntry[] | undefined,
       authorizedUsers: (raw.authorizedUsers ?? []) as AuthorizedUser[],
       pendingPairings: (raw.pendingPairings ?? []) as PendingPairing[],
-      pendingSpinOuts: (raw.pendingSpinOuts ?? []) as PendingSpinOut[],
       workspaces: (raw.workspaces ?? []) as Workspace[],
       schedules: (raw.schedules ?? []) as ScheduleEntry[],
       projects: (raw.projects ?? []) as Project[],
@@ -315,6 +302,50 @@ export class Config {
 
   // --- Workspaces ---
 
+  /** Home exists before a chat is paired. Never replace an existing home's settings. */
+  ensureHomeWorkspace(): Workspace {
+    fs.mkdirSync(this.homeWorkspacePath, { recursive: true });
+    const data = this.read();
+    let home = data.workspaces.find((ws) => ws.name === "default");
+    let changed = false;
+    if (!home) {
+      home = { name: "default", cwd: this.homeWorkspacePath, chat_id: null,
+        current_session_id: null, behavior: "assistant", description: "Personal assistant", project: "home" };
+      // Avoid adopting an unrelated project with a reserved home name.
+      if (data.projects.some((project) => project.name === "home" && project.main_workspace !== "default")) {
+        throw new Error('Project "home" already has another main workspace; rename it before creating home.');
+      }
+      data.workspaces.push(home);
+      changed = true;
+    }
+    if (!home.project) {
+      const existing = data.projects.find((project) => project.main_workspace === home!.name);
+      home.project = existing?.name ?? "home";
+      if (data.projects.some((project) => project.name === home!.project && project.main_workspace !== home!.name)) {
+        throw new Error(`Project "${home.project}" already has another main workspace.`);
+      }
+      changed = true;
+    }
+    if (!data.projects.some((project) => project.name === home!.project)) {
+      data.projects.push({ name: home.project, description: home.description ?? "Personal assistant", main_workspace: home.name });
+      changed = true;
+    }
+    if (changed) this.write(data);
+    return home;
+  }
+
+  /**
+   * ensureHomeWorkspace creates home's records at startup, before any chat is known.
+   * This gives it its destination, once: an existing binding is never replaced.
+   * Callers decide what counts as home's chat — see Channel.isRootDM.
+   */
+  connectHomeWorkspace(chatId: string): boolean {
+    const home = this.ensureHomeWorkspace();
+    if (home.chat_id || this.workspaceByChat(chatId)) return false;
+    this.upsertWorkspace({ ...home, chat_id: chatId });
+    return true;
+  }
+
   workspaceByChat(chatId: string): Workspace | undefined {
     return this.read().workspaces.find((ws) => ws.chat_id === chatId);
   }
@@ -380,27 +411,6 @@ export class Config {
       ws.behavior = behavior;
       this.write(data);
     }
-  }
-
-  // --- Spin-outs ---
-
-  addSpinOut(entry: PendingSpinOut): void {
-    const data = this.read();
-    data.pendingSpinOuts.push(entry);
-    this.write(data);
-  }
-
-  listSpinOuts(): PendingSpinOut[] {
-    return this.read().pendingSpinOuts;
-  }
-
-  removeSpinOut(id: string): boolean {
-    const data = this.read();
-    const idx = data.pendingSpinOuts.findIndex((s) => s.id === id);
-    if (idx < 0) return false;
-    data.pendingSpinOuts.splice(idx, 1);
-    this.write(data);
-    return true;
   }
 
   // --- Projects ---

@@ -33,18 +33,21 @@ ClearClaw reuses what the CLI already has:
 ## Quick Start
 
 ```bash
-export TELEGRAM_BOT_TOKEN="your-bot-token"
-export ALLOWED_USER_IDS="tg:your-telegram-id"
-
-npx clearclaw
+npm install -g clearclaw
+clearclaw setup
+clearclaw daemon
 ```
 
-Or install globally: `npm install -g clearclaw`
+Setup saves the channel tokens and default engine, then asks you to DM the bot and approve its pairing code. The platform supplies your user and chat IDs; you do not need to copy them into environment variables. Additional pairing requests can be approved with `clearclaw approve <code>`.
+
+Home is created automatically and connects to the approved DM. Start chatting immediately. Ask from home or another workspace to create a project and workspace together. If you choose a manual chat, create the group and send `/connect <workspace>` there (Slack: `/cc connect <workspace>`).
+
+Existing environment-based installations remain supported: channel token variables and `ALLOWED_USER_IDS` override saved configuration. An authorized user's first root DM binds an unbound home. Existing bindings are preserved.
 
 Optional: `PERMISSION_MODE` (`default` | `acceptEdits` | `bypassPermissions` | `plan`), `CLEARCLAW_HOME` (default `~/.clearclaw`).
 
-For Slack, set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and Slack-prefixed
-`ALLOWED_USER_IDS` (for example, `slack:U12345`). Private peer-channel spawning
+For Slack, setup saves the bot and app tokens; environment-based installs can use
+`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and Slack-prefixed `ALLOWED_USER_IDS`. Private peer-channel spawning
 also requires the `groups:write` bot-token scope; reinstall the app after adding
 the scope. Shared project sidebar sections require a paid Slack plan, the
 `usergroups:read` and `usergroups:write` bot-token scopes, and workspace User

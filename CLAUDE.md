@@ -12,7 +12,7 @@ npm run build      # tsc → dist/ (triggers dev:relay restart)
 npm run check      # tsc --noEmit (type check only)
 ```
 
-**Required env vars:** Channel token(s) + `ALLOWED_USER_IDS` (comma-separated, channel-prefixed, e.g. `tg:12345,slack:U67890`)
+**Setup:** `clearclaw setup` saves tokens/default engine and approves DM pairing. Environment overrides remain supported: channel token(s) + `ALLOWED_USER_IDS` (comma-separated, channel-prefixed, e.g. `tg:12345,slack:U67890`).
 **Channel:** `TELEGRAM_BOT_TOKEN` for Telegram, or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for Slack (one channel at a time; Slack takes priority if both are set)
 **Optional:** `PERMISSION_MODE` (default|acceptEdits|bypassPermissions|plan|dontAsk), `CLEARCLAW_HOME` (defaults to `~/.clearclaw`)
 
@@ -27,7 +27,7 @@ npm run check      # tsc --noEmit (type check only)
 - All imports use `.js` extension (required by NodeNext module resolution, even for `.ts` source files)
 - Interfaces defined in `types.ts`, implementations in their own files
 - Data types use `interface`/`type` + plain objects. Classes only for Channel and Engine implementations
-- ClearClaw is a relay that adds orchestration on top of CLI agents. It owns prompt assembly (framework + user instruction files), onboarding, and permission relay UX. The CLI owns tool execution, settings, and session management. When in doubt about where logic belongs: in the CLI, not here.
+- ClearClaw is a relay that adds orchestration on top of CLI agents. It owns prompt assembly (framework + user instruction files), workspace creation/binding, and permission relay UX. The CLI owns tool execution, settings, and session management. When in doubt about where logic belongs: in the CLI, not here.
 - **Design specs** go in `docs/specs/<topic>.md`. Use an ADR-style structure: Status, Context, Decision, Consequences, and relevant alternatives or references. Keep contracts and rationale durable; distinguish accepted decisions from proposed work and supersede decisions explicitly when they change. Update or consolidate an existing topic instead of adding dated phase snapshots. No step-by-step implementation recipes or completed-work logs.
 - When developing through ClearClaw (remote via Telegram/Slack), large file writes will fail because the permission prompt content exceeds chat message limits. Break writes into smaller chunks: create/touch the file first, then append sections via Edit.
 

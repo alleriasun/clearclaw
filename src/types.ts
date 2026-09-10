@@ -11,6 +11,8 @@ export interface Channel {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   ownsId(chatId: string): boolean;
+  /** This user's own top-level DM with the bot — home's only valid chat. */
+  isRootDM(chatId: string, userId: string): boolean;
   sendMessage(
     chatId: string,
     text: string,
@@ -182,16 +184,16 @@ export interface EngineHandoff {
 export interface Workspace {
   name: string;
   cwd: string;
-  chat_id: string;
+  chat_id: string | null; // null until pairing or /connect supplies a destination
   current_session_id: string | null;
   engine_handoff?: EngineHandoff; // prior session context, delivered on the next ordinary turn
   behavior?: "assistant" | "relay";
   engine?: string;         // "claude-code" (default) | "kiro" | other ACP agent
   model?: string;          // saved model setting; older configs may contain a previously reported model
-  project?: string;        // the project this workspace belongs to, if any (set at onboarding; absent for legacy/non-forum workspaces)
+  project?: string;        // the project this workspace belongs to; absent for legacy workspaces
   description?: string;    // what this workspace is currently working on (its focus / peer brief)
-  spawnedFrom?: string;    // origin workspace if spawned via spin_out (a peer); absent = the project's main
-  owns_worktree?: boolean; // true = ClearClaw-created; false = caller-owned; absent = no worktree or legacy ownership unknown
+  spawnedFrom?: string;    // origin workspace for a spawned peer; absent = the project's main
+  pending_brief?: { fromWorkspace: string; text: string }; // delivered when a manual chat is connected
 }
 
 // --- User identity (populated by channel from platform data) ---
