@@ -719,7 +719,7 @@ export class Orchestrator {
         // Build detailed list for message body
         const listing = stripped.map((s, i) => {
           const current = s.sessionId === ws.current_session_id ? " ✅" : "";
-          const meta = [timeAgo(s.lastModified), s.gitBranch].filter(Boolean).join(" · ");
+          const meta = [s.lastModified ? timeAgo(s.lastModified) : "Unknown activity", s.gitBranch].filter(Boolean).join(" · ");
           return `${i + 1}. ${s.summary}${current}\n   ${meta}`;
         }).join("\n");
         // Concise button labels (single line)
