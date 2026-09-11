@@ -18,10 +18,10 @@ export function formatPlanUsage(state?: PlanUsageState, maxLength = 4096): strin
   const kept: string[] = [];
   for (const part of parts) {
     const remaining = parts.length - kept.length - 1;
-    const candidate = [...kept, part].join(" | ") + (remaining ? ` | +${remaining} more` : "");
+    const candidate = [...kept, part].join(" ") + (remaining ? ` +${remaining} more` : "");
     if (candidate.length > maxLength) break;
     kept.push(part);
   }
   const omitted = parts.length - kept.length;
-  return kept.join(" | ") + (omitted ? `${kept.length ? " | " : ""}+${omitted} more` : "");
+  return kept.join(" ") + (omitted ? `${kept.length ? " " : ""}+${omitted} more` : "");
 }
