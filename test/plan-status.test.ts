@@ -56,6 +56,7 @@ function harness(t: TestContext) {
   });
   return {
     messages, statuses, releases,
+    mode: (id: string, permissionMode: "plan") => Object.assign(internals.chat(id), { permissionMode }),
     beforeDone: (handler: typeof beforeDone) => { beforeDone = handler; },
     latest: (id: string) => statuses.filter((entry) => entry.id === id).at(-1)?.text ?? "",
     workspace: (id: string, engine: string) => {
@@ -86,15 +87,15 @@ test("allowed Claude events update plan usage without warning or replacing conte
     seven_day: { utilization: .25, resetsAt },
     seven_day_overage_included: { utilization: .5, resetsAt },
   } })]);
-  assert.match(h.latest("claude"), /fable-5 ctx 13%/);
-  assert.doesNotMatch(h.latest("claude"), /claude-fable/);
-  assert.match(h.latest("claude"), /5h 42%/);
-  assert.match(h.latest("claude"), /· 7d 25%/);
-  assert.match(h.latest("claude"), /Fable 7d 50%/);
+  assert.match(h.latest("claude"), /fable-5 13%/);
+  assert.doesNotMatch(h.latest("claude"), /claude-fable|ctx|used:|🔒/);
+  assert.match(h.latest("claude"), /5h•42%/);
+  assert.match(h.latest("claude"), /\| 7d•25%/);
+  assert.match(h.latest("claude"), /Fable 7d•50%/);
   assert.equal(h.messages.filter(({ text }) => /rate limit|warning/i.test(text)).length, 0);
 
   await h.turn("claude", [claudePlanUsage({ status: "allowed", rateLimitType: "five_hour" })]);
-  assert.match(h.latest("claude"), /5h \?/);
+  assert.match(h.latest("claude"), /5h•\?/);
   assert.doesNotMatch(h.latest("claude"), /42%/);
 });
 
@@ -108,10 +109,10 @@ test("workspaces read shared account usage on their own next turn completion", a
   await h.turn("claude", [claudePlanUsage({ status: "allowed", rateLimitType: "five_hour", utilization: 0.32 })]);
   const claudeStatus = h.latest("claude");
   await h.turn("codex-a", [codexUsage(71)]);
-  assert.match(h.latest("codex-a"), /5h 71%/);
+  assert.match(h.latest("codex-a"), /5h•71%/);
   assert.doesNotMatch(h.latest("codex-b"), /71%/);
   await h.turn("codex-b");
-  assert.match(h.latest("codex-b"), /5h 71%/);
+  assert.match(h.latest("codex-b"), /5h•71%/);
   assert.equal(h.latest("claude"), claudeStatus);
   assert.doesNotMatch(h.latest("claude"), /71%/);
 });
@@ -133,7 +134,7 @@ test("quota events leave the status unchanged until the turn completes", async (
   t.diagnostic(`During turn: ${h.latest("codex")}`);
   release();
   await turn;
-  assert.match(h.latest("codex"), /5h 50%/);
+  assert.match(h.latest("codex"), /5h•50%/);
   t.diagnostic(`After completion: ${h.latest("codex")}`);
 });
 
@@ -144,12 +145,13 @@ test("Claude quota is informational while actual turn errors remain visible", as
     { type: "error", message: "You're out of usage credits" }]);
   assert.equal(h.messages.filter(({ text }) => /Rate limited/.test(text)).length, 0);
   assert.equal(h.messages.filter(({ text }) => /You're out of usage credits/.test(text)).length, 1);
-  assert.match(h.latest("claude"), /5h limited/);
+  assert.match(h.latest("claude"), /5h•limited/);
 });
 
 test("many quota windows fit the channel limit with context, model, mode and explicit omissions", async (t) => {
   const h = harness(t);
   h.workspace("codex", "codex");
+  h.mode("codex", "plan");
   await h.turn("codex", [{ type: "plan_usage", windows: [
     { id: "codex/primary", label: "5h", usedPercent: 71 },
     ...Array.from({ length: 12 }, (_, index) => ({
@@ -159,8 +161,8 @@ test("many quota windows fit the channel limit with context, model, mode and exp
   ] }]);
   const status = h.latest("codex");
   assert.ok(status.length <= 250, `full status exceeds the topic limit: ${status.length}`);
-  assert.match(status, /codex ctx 13%/);
-  assert.match(status, /🔒 [^|]+ \| used:/);
-  assert.match(status, /5h 71%/);
+  assert.match(status, /codex 13%/);
+  assert.match(status, /🔒 Plan \|/);
+  assert.match(status, /5h•71%/);
   assert.match(status, /\+[1-9]\d* more$/);
 });
