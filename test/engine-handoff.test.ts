@@ -6,14 +6,14 @@ import test, { type TestContext } from "node:test";
 import { Config } from "../src/config.js";
 import { Orchestrator } from "../src/orchestrator.js";
 import { assemblePrompt } from "../src/prompt.js";
-import type { Channel, Engine, InboundMessage, RunTurnOpts, SessionHistoryOpts, Workspace } from "../src/types.js";
+import type { Channel, Engine, InboundMessage, MessageOpts, RunTurnOpts, SessionHistoryOpts, Workspace } from "../src/types.js";
 
 const chatId = "test:handoff";
 const oldSession = "old-legacy-session-for-handoff-test";
 interface Handoff { engine: string; sessionId: string; cwd: string }
 interface Internals {
   deliverToWorkspace(name: string, origin: InboundMessage["origin"], text: string): boolean;
-  chat(id: string): { debounceTimer: ReturnType<typeof setTimeout> | null };
+  chat(id: string): { debounceTimer: ReturnType<typeof setTimeout> | null; busy: boolean };
   routeMessage(msg: InboundMessage): Promise<void>;
   processQueuedMessages(id: string): Promise<void>;
   buildMcpTools(id: string, behavior: string, state: object): Array<{
@@ -21,6 +21,55 @@ interface Internals {
     handler(args: Record<string, unknown>): Promise<unknown>;
   }>;
 }
+
+for (const engine of ["claude-code", "codex"]) {
+  test(`/recap reads ${engine} history without a turn or session mutation, even while busy`, async (t) => {
+    const h = harness(t);
+    h.workspace({ engine });
+    const before = h.saved();
+    h.internals.chat(chatId).busy = true;
+    await h.route("/recap");
+    assert.equal(h.historyCalls.length, 1);
+    assert.equal(h.historyCalls[0].engine, engine);
+    assert.equal(h.historyCalls[0].opts.sessionId, oldSession);
+    assert.equal(h.historyCalls[0].opts.cwd, h.config.homeWorkspacePath);
+    assert.ok(h.historyCalls[0].opts.signal);
+    assert.deepEqual(h.messages, ["**Prompt**\nKeep the design in plain markdown.\n\n**Assistant**\nWe chose markdown files for the first version."]);
+    assert.deepEqual(h.saved(), before);
+    assert.equal(h.calls.length, 0);
+    assert.deepEqual(h.messageOptions, [{ consumeTyping: false }]);
+    assert.equal(h.internals.chat(chatId).debounceTimer, null);
+  });
+}
+
+test("/recap handles missing workspace, session and unavailable history", async (t) => {
+  const h = harness(t);
+  await h.route("/recap");
+  assert.equal(h.messages.pop(), "No workspace linked to this chat.");
+  h.workspace({ current_session_id: null });
+  await h.route("/recap");
+  assert.equal(h.messages.pop(), "No current session to recap yet.");
+  assert.equal(h.historyCalls.length, 0);
+  h.workspace();
+  h.history("legacy-test", async () => { throw new Error("Read failed"); });
+  await h.route("/recap");
+  assert.equal(h.messages.pop(), "Couldn’t load this session’s history. Try /recap again.");
+  assert.equal(h.saved().current_session_id, oldSession);
+  assert.equal(h.calls.length, 0);
+  assert.ok(h.messageOptions.every((opts) => opts?.consumeTyping === false));
+});
+
+test("/recap discards a replay when the session changes during the read", async (t) => {
+  const h = harness(t);
+  h.workspace();
+  h.history("legacy-test", async () => {
+    h.config.clearSession("handoff");
+    return [{ role: "assistant", text: "Stale answer" }];
+  });
+  await h.route("/recap");
+  assert.deepEqual(h.messages, ["Session changed while loading history. Run /recap again."]);
+  assert.deepEqual(h.messageOptions, [{ consumeTyping: false }]);
+});
 
 function harness(t: TestContext) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-handoff-test-"));
@@ -40,12 +89,15 @@ function harness(t: TestContext) {
   config.addUser({ id: "test:user", name: "Tester", approvedAt: 1 });
   fs.mkdirSync(config.homeWorkspacePath, { recursive: true });
   const messages: string[] = [];
+  const messageOptions: Array<MessageOpts | undefined> = [];
   const calls: Array<{ engine: string; opts: RunTurnOpts }> = [];
   const historyCalls: Array<{ engine: string; opts: SessionHistoryOpts }> = [];
   const channel = {
     name: "test", ownsId: (id: string) => id.startsWith("test:"),
     isRootDM: (id: string, userId: string) => id === userId,
-    sendMessage: async (_id: string, text: string) => { messages.push(text); return ["message"]; },
+    sendMessage: async (_id: string, text: string, opts?: MessageOpts) => {
+      messages.push(text); messageOptions.push(opts); return ["message"];
+    },
     sendInteractive: async () => ({ value: "resumed-session" }),
     updateStatus: async () => {}, setTyping: async () => {}, editMessage: async () => {},
   } as unknown as Channel;
@@ -76,7 +128,7 @@ function harness(t: TestContext) {
     origin: { kind: "user", user: { id: "test:user", name: "Tester" } },
   });
   return {
-    config, messages, calls, historyCalls,
+    config, messages, messageOptions, calls, historyCalls,
     history: (name: string, read: Engine["getSessionMessages"]) => { engines.get(name)!.getSessionMessages = read; },
     get internals() { return internals; },
     route,

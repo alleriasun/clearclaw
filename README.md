@@ -44,6 +44,9 @@ Home is created automatically and connects to the approved DM. Start chatting im
 
 Existing environment-based installations remain supported: channel token variables and `ALLOWED_USER_IDS` override saved configuration. An authorized user's first root DM binds an unbound home. Existing bindings are preserved.
 
+Send `/recap` (Slack: `/cc recap`) to replay the current session's last three prompts and their replies, including any reply still in progress. It reads history from the workspace's engine, so it also includes work done in the CLI. Use `/resume` separately when you want to select a different session.
+If the engine locks history during an active turn, retry after that turn finishes.
+
 Optional: `PERMISSION_MODE` (`default` | `acceptEdits` | `bypassPermissions` | `plan`), `CLEARCLAW_HOME` (default `~/.clearclaw`).
 
 For Slack, setup saves the bot and app tokens; environment-based installs can use
