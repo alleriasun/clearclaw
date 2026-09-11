@@ -21,24 +21,24 @@ test("Claude unified windows preserve the separate Fable allowance while allowed
     } });
   assert.equal(usage.windows.size, 3);
   const text = formatPlanUsage(usage);
-  assert.match(text, /5h•0%/);
-  assert.match(text, / 7d•25%/);
-  assert.match(text, /Fable 7d•50%/);
+  assert.match(text, /5h 0%/);
+  assert.match(text, /7d 25%/);
+  assert.match(text, /Fable 7d 50%/);
 });
 
 test("Fable-only observations do not imply the overall weekly usage; future windows are safe", () => {
   const usage = state();
   recordClaudeUsage(usage, { status: "rejected",
     rateLimitType: "seven_day_overage_included" });
-  assert.match(formatPlanUsage(usage), /7d•\?.*Fable 7d•limited/);
+  assert.match(formatPlanUsage(usage), /Fable 7d limited/);
   recordClaudeUsage(usage, { status: "allowed",
     unifiedWindows: {
       seven_day_overage_included: { utilization: 1.05, resetsAt: now / 1000 + 3600 },
       future_window: { utilization: .2, resetsAt: now / 1000 + 3600 },
       invalid: { utilization: NaN, resetsAt: now / 1000 + 3600 },
     } });
-  assert.match(formatPlanUsage(usage), /Fable 7d•105%/);
-  assert.match(formatPlanUsage(usage), /future window•20%/);
+  assert.match(formatPlanUsage(usage), /Fable 7d 105%/);
+  assert.match(formatPlanUsage(usage), /future window 20%/);
   assert.equal(usage.windows.has("invalid"), false);
 });
 
@@ -51,8 +51,10 @@ test("Claude windows stay independent; allowed without a percentage does not inv
   assert.equal(usage.windows.get("seven_day")?.usedPercent, 50);
   recordClaudeUsage(usage, { status: "allowed", rateLimitType: "five_hour" });
   assert.equal(usage.windows.get("five_hour")?.usedPercent, undefined);
-  assert.match(formatPlanUsage(usage), /5h•\?/);
-  assert.match(formatPlanUsage(usage), /7d•50%/);
+  // Losing its reading drops the window from the status rather than showing a
+  // stale 90% or a bare placeholder; its neighbour keeps its own reading.
+  assert.doesNotMatch(formatPlanUsage(usage), /5h/);
+  assert.equal(formatPlanUsage(usage), "7d 50%");
 });
 
 test("Codex metadata preserves zero, separate buckets and real window durations", () => {
@@ -68,7 +70,7 @@ test("Codex metadata preserves zero, separate buckets and real window durations"
   ]);
   const usage = state();
   recordPlanUsage(usage, { type: "plan_usage", windows });
-  assert.match(formatPlanUsage(usage), /5h•0%/);
+  assert.match(formatPlanUsage(usage), /5h 0%/);
 });
 
 test("missing and malformed metadata never invents quota from context tokens", () => {
@@ -76,7 +78,7 @@ test("missing and malformed metadata never invents quota from context tokens", (
     { "_codex/rateLimits": "bad" }, { "_codex/rateLimits": [null, {}, { limitId: "codex", primary: { usedPercent: "50", windowDurationMins: "300" } }] }]) {
     assert.deepEqual(codexPlanUsage(meta), []);
   }
-  assert.equal(formatPlanUsage(), "quota•?");
+  assert.equal(formatPlanUsage(), "");
 });
 
 test("a bounded status preserves whole readings and explicitly counts omitted parts", () => {
@@ -86,7 +88,7 @@ test("a bounded status preserves whole readings and explicitly counts omitted pa
   })) });
   const text = formatPlanUsage(usage, 150);
   assert.ok(text.length <= 150);
-  assert.match(text, /bucket0 5h•50%/);
+  assert.match(text, /bucket0 5h 50%/);
   assert.match(text, /\+\d+ more$/);
 });
 
@@ -94,15 +96,15 @@ test("reported usage stays visible after its reset until a new observation repla
   const usage = state();
   recordClaudeUsage(usage, { status: "allowed_warning", rateLimitType: "five_hour",
     utilization: .9, resetsAt: 1 });
-  assert.match(formatPlanUsage(usage), /5h•90%/);
+  assert.match(formatPlanUsage(usage), /5h 90%/);
   recordClaudeUsage(usage, { status: "allowed", rateLimitType: "five_hour", utilization: .1 });
-  assert.match(formatPlanUsage(usage), /5h•10%/);
+  assert.match(formatPlanUsage(usage), /5h 10%/);
 });
 
 test("Claude rejected status and extra usage remain distinct from a known percentage", () => {
   const usage = state();
   recordClaudeUsage(usage, { status: "rejected", rateLimitType: "five_hour", isUsingOverage: true });
-  assert.match(formatPlanUsage(usage), /5h•limited/);
-  assert.match(formatPlanUsage(usage), /extra•on/);
+  assert.match(formatPlanUsage(usage), /5h limited/);
+  assert.match(formatPlanUsage(usage), /overage/);
   assert.doesNotMatch(formatPlanUsage(usage), /100%/);
 });
