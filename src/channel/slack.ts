@@ -16,6 +16,7 @@ interface SlackUserGroup {
 
 export class SlackChannel extends EventEmitter implements Channel {
   name = "slack";
+  statusMaxLength = 250;
 
   private static readonly EMOJI_TO_SLACK: Record<string, string> = {
     "👍": "+1", "👎": "-1", "❤️": "heart", "🔥": "fire",

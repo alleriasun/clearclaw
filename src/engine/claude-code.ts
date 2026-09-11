@@ -4,6 +4,7 @@ import {
   getSessionMessages,
   type SDKAssistantMessage,
   type SDKRateLimitEvent,
+  type SDKRateLimitInfo,
   type SDKResultMessage,
   type SDKLocalCommandOutputMessage,
   type SDKSystemMessage,
@@ -19,6 +20,7 @@ import type {
   Attachment,
   Engine,
   EngineEvent,
+  PlanUsageWindow,
   RunTurnOpts,
   SessionInfo,
   SessionHistoryOpts,
@@ -81,6 +83,8 @@ function toToolCall(
 
 export class ClaudeCodeEngine implements Engine {
   name = "claude-code";
+
+  readonly planUsageWindows = CLAUDE_PLAN_WINDOWS;
 
   constructor(private readonly executablePath?: string) {}
 
@@ -272,13 +276,7 @@ export class ClaudeCodeEngine implements Engine {
         // Relay rate limit events
         if (msg.type === "rate_limit_event") {
           const { rate_limit_info } = msg as SDKRateLimitEvent;
-          if (rate_limit_info.status !== "allowed") {
-            yield {
-              type: "rate_limit",
-              status: rate_limit_info.status,
-              resetsAt: rate_limit_info.resetsAt,
-            };
-          }
+          yield claudePlanUsage(rate_limit_info);
         }
 
         // Relay local command output (e.g. /compact, /cost, /model)
@@ -305,6 +303,7 @@ export class ClaudeCodeEngine implements Engine {
             }
             turnStats = {
               model,
+              modelLabel: model.replace(/^claude-/, "").replace(/-\d{8}$/, ""),
               contextUsed: lastInputTokens,
               contextWindow: mu.contextWindow,
               toolCalls,
@@ -430,4 +429,58 @@ function extractToolResultText(content: unknown): string {
       .join("\n");
   }
   return "";
+}
+
+const CLAUDE_LABELS: Record<string, string> = {
+  five_hour: "5h", seven_day: "7d", seven_day_opus: "Opus 7d",
+  seven_day_sonnet: "Sonnet 7d", overage: "extra",
+  seven_day_overage_included: "Fable 7d",
+};
+
+function claudeWindowLabel(id: string): string {
+  return CLAUDE_LABELS[id] ?? id.replace(/[_\r\n|]/g, " ").slice(0, 32);
+}
+
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+}
+
+function finite(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** Claude runtime fields newer than the bundled SDK declarations. */
+type ClaudeRateLimitInfo = Omit<SDKRateLimitInfo, "rateLimitType"> & {
+  rateLimitType?: string;
+  unifiedWindows?: Record<string, { utilization: number; resetsAt: number }>;
+};
+
+export const CLAUDE_PLAN_WINDOWS: readonly PlanUsageWindow[] = [
+  { id: "five_hour", label: "5h" },
+  { id: "seven_day", label: "7d" },
+  { id: "seven_day_overage_included", label: "Fable 7d" },
+];
+
+export function claudePlanUsage(info: ClaudeRateLimitInfo): Extract<EngineEvent, { type: "plan_usage" }> {
+  const windows: PlanUsageWindow[] = [];
+  const utilization = finite(info.utilization);
+  if (info.rateLimitType) windows.push({
+    id: info.rateLimitType, label: claudeWindowLabel(info.rateLimitType),
+    limited: info.status === "rejected",
+    usedPercent: utilization !== undefined && utilization >= 0
+      ? utilization * 100 : undefined,
+    resetsAt: info.resetsAt,
+  });
+  // Claude Code 2.1.251 supplies all observed windows, even while allowed.
+  // Prefer these percentages over the selected top-level warning window.
+  for (const [id, raw] of Object.entries(object(info.unifiedWindows) ?? {})) {
+    const window = object(raw);
+    const utilization = finite(window?.utilization);
+    const resetsAt = finite(window?.resetsAt);
+    if (utilization === undefined || utilization < 0 || resetsAt === undefined || resetsAt <= 0) continue;
+    windows.push({ id, label: claudeWindowLabel(id), usedPercent: utilization * 100,
+      resetsAt, limited: id === info.rateLimitType && info.status === "rejected" });
+  }
+  return { type: "plan_usage", windows, isUsingOverage: info.isUsingOverage };
 }
