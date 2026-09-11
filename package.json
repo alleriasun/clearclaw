@@ -27,7 +27,9 @@
   "files": [
     "dist/**/*.js",
     "dist/**/*.d.ts",
-    "prompts/**/*.md"
+    "prompts/**/*.md",
+    "scripts/patch-codex-acp.mjs",
+    "patches/**"
   ],
   "scripts": {
     "start": "tsx src/index.ts daemon",
@@ -35,9 +37,11 @@
     "dev:relay": "nodemon --watch dist --exec 'node dist/index.js daemon'",
     "build": "tsc",
     "check": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "postinstall": "node scripts/patch-codex-acp.mjs"
   },
   "dependencies": {
+    "@agentclientprotocol/codex-acp": "1.11.0",
     "@agentclientprotocol/sdk": "^0.16.1",
     "@anthropic-ai/claude-agent-sdk": "^0.2.89",
     "@modelcontextprotocol/sdk": "^1.29.0",
