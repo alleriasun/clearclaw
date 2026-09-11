@@ -5,6 +5,7 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
   type Client,
+  type InitializeResponse,
   type SessionNotification,
   type SessionConfigOption,
   type RequestPermissionRequest,
@@ -269,30 +270,9 @@ export class AcpEngine implements Engine {
   }
 
   async getSessionMessages(opts: SessionHistoryOpts): Promise<SessionMessage[]> {
-    opts.signal?.throwIfAborted();
-    const signal = AbortSignal.any([
-      ...(opts.signal ? [opts.signal] : []),
-      AbortSignal.timeout(30_000),
-    ]);
-    const proc = spawnAgent(this.spawnConfig, {
-      ...opts,
-      prompt: "",
-      permissionMode: "default",
-      onPermissionRequest: async () => ({ decision: "deny", message: "History loading cannot run tools" }),
-    });
     const messages: SessionMessage[] = [];
     let previousId: string | null | undefined;
     let previousRole: SessionMessage["role"] | undefined;
-    let rejectStopped!: (reason: unknown) => void;
-    const stopped = new Promise<never>((_resolve, reject) => { rejectStopped = reject; });
-    const onAbort = () => rejectStopped(signal.reason);
-    const onError = (err: Error) => rejectStopped(err);
-    const onExit = () => rejectStopped(new Error(`${this.name} exited while loading session history`));
-    signal.addEventListener("abort", onAbort, { once: true });
-    proc.once("error", onError);
-    proc.once("exit", onExit);
-    // Drain stderr so verbose adapters cannot block waiting for a full pipe.
-    proc.stderr?.resume();
     const client: Client = {
       extNotification: async () => {},
       requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
@@ -321,24 +301,92 @@ export class AcpEngine implements Engine {
         previousRole = role;
       },
     };
-    const conn = new ClientSideConnection(() => client, ndJsonStream(
-      Writable.toWeb(proc.stdin!) as WritableStream<Uint8Array>,
-      Readable.toWeb(proc.stdout!) as ReadableStream<Uint8Array>,
-    ));
-    try {
-      await Promise.race([stopped, (async () => {
-        const init = await conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
-        if (!init.agentCapabilities?.loadSession) {
-          throw new Error(`${this.name} does not support loading session history`);
+    await this.readSessionData(opts, client, async (conn, init) => {
+      if (!init.agentCapabilities?.loadSession) {
+        throw new Error(`${this.name} does not support loading session history`);
+      }
+      await conn.loadSession({ sessionId: opts.sessionId, cwd: opts.cwd, mcpServers: [] });
+    });
+    return messages.filter((message) => message.text.length > 0);
+  }
+
+  async listSessions(cwd: string): Promise<SessionInfo[]> {
+    return this.readSessionData({ cwd }, {
+      extNotification: async () => {},
+      requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+      sessionUpdate: async () => {},
+    }, async (conn, init, signal) => {
+      // Listing is optional in ACP. Unsupported agents deliberately have no picker entries.
+      if (!init.agentCapabilities?.sessionCapabilities?.list) return [];
+      // ACP does not promise page ordering; sort only after exhausting the cursor.
+      const sessions = new Map<string, SessionInfo>();
+      const cursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        signal.throwIfAborted();
+        const page = await conn.listSessions({ cwd, ...(cursor !== undefined ? { cursor } : {}) });
+        for (const session of page.sessions) {
+          if (session.cwd !== cwd) continue; // Never mix sibling worktrees into this picker.
+          const timestamp = session.updatedAt ? Date.parse(session.updatedAt) : NaN;
+          sessions.set(session.sessionId, {
+            sessionId: session.sessionId,
+            // ACP offers a title, not a last-prompt summary or a standard git branch.
+            summary: session.title?.trim() || session.sessionId,
+            lastModified: Number.isFinite(timestamp) ? timestamp : 0,
+          });
         }
-        await conn.loadSession({ sessionId: opts.sessionId, cwd: opts.cwd, mcpServers: [] });
-      })()]);
+        cursor = page.nextCursor ?? undefined;
+        if (cursor === undefined) break;
+        if (cursors.has(cursor)) throw new Error(`${this.name} repeated a session list cursor`);
+        cursors.add(cursor);
+      } while (cursor !== undefined);
+      return [...sessions.values()].sort((a, b) => b.lastModified - a.lastModified).slice(0, 10);
+    });
+  }
+
+  /** Short-lived, read-only ACP queries share one deadline and always release the child. */
+  private async readSessionData<T>(
+    opts: { cwd: string; sessionId?: string; signal?: AbortSignal },
+    client: Client,
+    query: (conn: ClientSideConnection, init: InitializeResponse, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    opts.signal?.throwIfAborted();
+    const signal = AbortSignal.any([
+      ...(opts.signal ? [opts.signal] : []),
+      AbortSignal.timeout(30_000),
+    ]);
+    const proc = spawnAgent(this.spawnConfig, {
+      ...opts,
+      sessionId: opts.sessionId ?? null,
+      prompt: "",
+      permissionMode: "default",
+      onPermissionRequest: async () => ({ decision: "deny", message: "Session queries cannot run tools" }),
+    });
+    let rejectStopped!: (reason: unknown) => void;
+    const stopped = new Promise<never>((_resolve, reject) => { rejectStopped = reject; });
+    const onAbort = () => rejectStopped(signal.reason);
+    const onError = (err: Error) => rejectStopped(err);
+    const onExit = () => rejectStopped(new Error(`${this.name} exited while querying sessions`));
+    signal.addEventListener("abort", onAbort, { once: true });
+    proc.once("error", onError);
+    proc.once("exit", onExit);
+    // Drain stderr so verbose adapters cannot block waiting for a full pipe.
+    proc.stderr?.resume();
+    try {
+      const conn = new ClientSideConnection(() => client, ndJsonStream(
+        Writable.toWeb(proc.stdin!) as WritableStream<Uint8Array>,
+        Readable.toWeb(proc.stdout!) as ReadableStream<Uint8Array>,
+      ));
+      const init = await Promise.race([stopped, conn.initialize({
+        protocolVersion: PROTOCOL_VERSION, clientCapabilities: {},
+      })]);
       signal.throwIfAborted();
-      return messages.filter((message) => message.text.length > 0);
+      const result = await Promise.race([stopped, query(conn, init, signal)]);
+      signal.throwIfAborted();
+      return result;
     } catch (err) {
       if (err instanceof Error) throw err;
-      const message = err && typeof err === "object" && "message" in err ? String(err.message) : String(err);
-      throw new Error(message);
+      throw new Error(errorMessage(err));
     } finally {
       signal.removeEventListener("abort", onAbort);
       proc.removeListener("error", onError);
@@ -346,11 +394,6 @@ export class AcpEngine implements Engine {
       proc.stdin?.end();
       proc.kill();
     }
-  }
-
-  async listSessions(_cwd: string): Promise<SessionInfo[]> {
-    // Fast follow: spawn agent process and call conn.listSessions()
-    return [];
   }
 }
 
