@@ -21,3 +21,22 @@ export function formatSessionTranscript(messages: SessionMessage[]): string {
   }
   return text || "[No conversation text was returned for the previous session.]";
 }
+
+/** Replay the last three user prompts and their replies, including a pending reply. */
+export function formatSessionRecap(messages: SessionMessage[]): string {
+  const visible = messages.flatMap((message) => {
+    const text = (message.role === "user" ? stripPromptPrefix(message.text) : message.text).trim();
+    return text ? [{ ...message, text }] : [];
+  });
+  let start = 0;
+  let prompts = 0;
+  for (let i = visible.length - 1; i >= 0; i--) {
+    if (visible[i].role === "user" && ++prompts === 3) {
+      start = i;
+      break;
+    }
+  }
+  return visible.slice(start).map((message) =>
+    `**${message.role === "user" ? "Prompt" : "Assistant"}**\n${message.text}`,
+  ).join("\n\n") || "No conversation text to recap yet.";
+}

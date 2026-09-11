@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatSessionTranscript, stripPromptPrefix } from "../src/engine/session-transcript.js";
+import { formatSessionRecap, formatSessionTranscript, stripPromptPrefix } from "../src/engine/session-transcript.js";
 
 test("formats normalized history in order and skips blank text", () => {
   assert.equal(formatSessionTranscript([
@@ -44,4 +44,25 @@ test("stripPromptPrefix removes ClearClaw's prompt framing", () => {
 test("stripPromptPrefix leaves untagged text alone", () => {
   assert.equal(stripPromptPrefix("/login"), "/login");
   assert.equal(stripPromptPrefix("Fix: add retry logic"), "Fix: add retry logic");
+});
+
+test("recap keeps three prompts with all reply segments and an unanswered latest prompt", () => {
+  assert.equal(formatSessionRecap([
+    { role: "user", text: "Old prompt" },
+    { role: "assistant", text: "Old answer" },
+    { role: "user", text: "[2026-09-11 Fri 09:00 PDT] [user] Paddy: First" },
+    { role: "assistant", text: "Before tool" },
+    { role: "assistant", text: "After tool" },
+    { role: "user", text: "Second" },
+    { role: "assistant", text: "Second answer" },
+    { role: "user", text: "Third" },
+    { role: "assistant", text: "  " },
+  ]), "**Prompt**\nFirst\n\n**Assistant**\nBefore tool\n\n**Assistant**\nAfter tool\n\n**Prompt**\nSecond\n\n**Assistant**\nSecond answer\n\n**Prompt**\nThird");
+});
+
+test("recap handles short, empty and assistant-only history without shortening replies", () => {
+  assert.equal(formatSessionRecap([]), "No conversation text to recap yet.");
+  assert.equal(formatSessionRecap([{ role: "user", text: "[user] Paddy: " }]), "No conversation text to recap yet.");
+  const answer = "Long answer " + "x".repeat(10_000);
+  assert.equal(formatSessionRecap([{ role: "assistant", text: answer }]), `**Assistant**\n${answer}`);
 });

@@ -10,7 +10,7 @@ import { formatPlanUsage, recordPlanUsage } from "./plan-usage.js";
 
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
-import { formatSessionTranscript, stripPromptPrefix } from "./engine/session-transcript.js";
+import { formatSessionRecap, formatSessionTranscript, stripPromptPrefix } from "./engine/session-transcript.js";
 import { Scheduler } from "./scheduler.js";
 import type { Config, Project, ScheduleEntry } from "./config.js";
 import type {
@@ -662,6 +662,35 @@ export class Orchestrator {
         return;
       }
 
+      // /recap — replay current session history without running a model turn.
+      if (msg.text === "/recap") {
+        if (!ws) {
+          await this.channel.sendMessage(msg.chatId, "No workspace linked to this chat.", { consumeTyping: false });
+          return;
+        }
+        const sessionId = ws.current_session_id;
+        if (!sessionId) {
+          await this.channel.sendMessage(msg.chatId, "No current session to recap yet.", { consumeTyping: false });
+          return;
+        }
+        try {
+          const history = await this.engineFor(ws).getSessionMessages({
+            sessionId, cwd: ws.cwd, signal: AbortSignal.timeout(30_000),
+          });
+          const current = this.config.workspaceByChat(msg.chatId);
+          if (!current || current.name !== ws.name || current.current_session_id !== sessionId
+            || current.engine !== ws.engine) {
+            await this.channel.sendMessage(msg.chatId, "Session changed while loading history. Run /recap again.", { consumeTyping: false });
+            return;
+          }
+          await this.channel.sendMessage(msg.chatId, formatSessionRecap(history), { consumeTyping: false });
+        } catch (err) {
+          log.warn({ err }, "[recap] failed to load history for workspace %s", ws.name);
+          await this.channel.sendMessage(msg.chatId, "Couldn’t load this session’s history. Try /recap again.", { consumeTyping: false });
+        }
+        return;
+      }
+
       // /resume — switch to a previous session
       if (msg.text === "/resume") {
         if (state.busy) {
@@ -681,8 +710,8 @@ export class Orchestrator {
           return;
         }
         const MAX_BTN = 45;
-        // SDK summaries are the session's first prompt verbatim, which for a
-        // ClearClaw-started session is our own bracketed framing. Drop it.
+        // SDK summaries can contain the session's latest prompt, including
+        // ClearClaw's bracketed framing. Drop that framing for display.
         const stripped = sessions.map((s) => ({
           ...s,
           summary: stripPromptPrefix(s.summary),
