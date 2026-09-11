@@ -8,6 +8,8 @@ export interface ChannelEvents {
 
 export interface Channel {
   name: string;
+  /** Character budget for the chat status surface, e.g. Slack channel topic. */
+  statusMaxLength?: number;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   ownsId(chatId: string): boolean;
@@ -92,6 +94,8 @@ export interface SessionHistoryOpts {
 
 export interface Engine {
   name: string;
+  /** Known account windows to show as unknown before the first observation. */
+  planUsageWindows?: readonly PlanUsageWindow[];
   runTurn(opts: RunTurnOpts): AsyncIterable<EngineEvent>;
   listSessions(cwd: string): Promise<SessionInfo[]>;
   /** Read history without submitting a new prompt. Reject on unsupported/failed retrieval. */
@@ -155,10 +159,25 @@ export interface PermissionResponse {
 }
 
 export interface TurnStats {
+  modelLabel?: string;     // Engine-normalized display name; model retains the provider ID.
   model: string | null;    // e.g. "claude-opus-4-6", null for ACP engines
   contextUsed: number;     // input tokens of last API call (≈ context fill)
   contextWindow: number;   // max context window size
   toolCalls: Record<string, number>; // tool name → call count for this turn
+}
+
+/** Account quota, distinct from a session's context/token usage. Reset times are Unix seconds. */
+export interface PlanUsageWindow {
+  id: string;
+  label: string;
+  usedPercent?: number;
+  resetsAt?: number;
+  limited?: boolean;
+}
+
+export interface PlanUsageState {
+  windows: Map<string, PlanUsageWindow>;
+  isUsingOverage?: boolean;
 }
 
 export type EngineEvent =
@@ -166,7 +185,7 @@ export type EngineEvent =
   | { type: "text_chunk"; text: string }
   | { type: "tool_use"; tool: ToolCall }
   | { type: "tool_result"; toolName: string; output: string }
-  | { type: "rate_limit"; status: string; resetsAt?: number }
+  | { type: "plan_usage"; windows: PlanUsageWindow[]; isUsingOverage?: boolean }
   // Fires as soon as the engine reports a session ID (before the turn finishes),
   // so a cancelled turn still gets its session (and resolved model) persisted.
   | { type: "session"; sessionId: string; model?: string }
