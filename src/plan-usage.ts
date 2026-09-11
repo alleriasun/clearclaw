@@ -7,21 +7,21 @@ export function recordPlanUsage(state: PlanUsageState, event: Extract<EngineEven
 }
 
 export function formatPlanUsage(state?: PlanUsageState, maxLength = 4096): string {
-  const windows = [...(state?.windows.values() ?? [])];
-  const parts = windows.map((window) => {
-    const value = window.usedPercent !== undefined ? `${Math.round(window.usedPercent)}%`
-      : window.limited ? "limited" : "?";
-    return `${window.label}•${value}`;
-  });
-  if (!parts.length) parts.push("quota•?");
-  if (state?.isUsingOverage) parts.push("extra•on");
+  // A window with nothing to report is omitted: "5h ?" tells the reader less than
+  // its absence does, and the seeded windows start out unreported.
+  const parts: string[] = [];
+  for (const window of state?.windows.values() ?? []) {
+    if (window.usedPercent !== undefined) parts.push(`${window.label} ${Math.round(window.usedPercent)}%`);
+    else if (window.limited) parts.push(`${window.label} limited`);
+  }
+  if (state?.isUsingOverage) parts.push("overage");
   const kept: string[] = [];
   for (const part of parts) {
     const remaining = parts.length - kept.length - 1;
-    const candidate = [...kept, part].join(" ") + (remaining ? ` +${remaining} more` : "");
+    const candidate = [...kept, part].join(", ") + (remaining ? ` +${remaining} more` : "");
     if (candidate.length > maxLength) break;
     kept.push(part);
   }
   const omitted = parts.length - kept.length;
-  return kept.join(" ") + (omitted ? `${kept.length ? " " : ""}+${omitted} more` : "");
+  return kept.join(", ") + (omitted ? `${kept.length ? " " : ""}+${omitted} more` : "");
 }
