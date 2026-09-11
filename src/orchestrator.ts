@@ -1359,7 +1359,8 @@ export class Orchestrator {
     const usage = this.planUsage.get(engine) ?? {
       windows: new Map(this.engines.get(engine)?.planUsageWindows?.map((window) => [window.id, window])),
     };
-    text += " " + formatPlanUsage(usage, maxLength - text.length - 1);
+    const quota = formatPlanUsage(usage, maxLength - text.length - 3);
+    if (quota) text += `${text ? " | " : ""}${quota}`;
 
     if (text === state.lastStatusText) return;
     try {
