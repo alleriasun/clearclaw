@@ -21,6 +21,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   } else if (req.method === 'session/new') {
     send({ id: req.id, result: { sessionId: 'fixture-session', ...config } });
   } else if (req.method === 'session/load') {
+    selector.currentValue = 'resumed-model';
     send({ method: 'session/update', params: { sessionId: req.params.sessionId,
       update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'History replay' } } } });
     if (mode.startsWith('usage-')) send({ method: 'session/update', params: {
@@ -33,8 +34,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     send({ id: req.id, result: config });
   } else if (req.method === 'session/set_config_option') {
     if (mode === 'reject-model') return send({ id: req.id, error: { code: -32000, message: 'Fixture rejected model' } });
-    send({ id: req.id, result: { configOptions: [{ ...selector, currentValue: req.params.value }] } });
+    send({ id: req.id, result: { configOptions: [{ ...selector, currentValue: 'selected-model' }] } });
   } else if (req.method === 'session/prompt') {
+    if (mode === 'model-update') send({ method: 'session/update', params: {
+      sessionId: req.params.sessionId, update: { sessionUpdate: 'config_option_update',
+        configOptions: [{ ...selector, currentValue: 'updated-model' }] },
+    } });
     send({ method: 'session/update', params: { sessionId: req.params.sessionId,
       update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Model answered' } } } });
     if (mode === 'usage-live' || mode === 'usage-zero') {

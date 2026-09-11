@@ -1343,8 +1343,8 @@ export class Orchestrator {
       const usage = state.stats.contextWindow > 0
         ? `${Math.round((state.stats.contextUsed / state.stats.contextWindow) * 100)}%`
         : "usage n/a";
-      const displayName = state.stats.modelLabel ?? state.stats.model ?? state.engineName ?? "agent";
-      text = `🤖 ${displayName} ${usage}`;
+      const displayName = state.stats.modelLabel ?? state.stats.model;
+      text = `🤖 ${displayName ? `${displayName} ` : ""}${usage}`;
     } else {
       text = "";
     }
@@ -1353,13 +1353,13 @@ export class Orchestrator {
 
     const ws = this.config.workspaceByChat(chatId);
     const engine = ws?.engine ?? state.engineName ?? this.config.defaultEngine;
+    text += `${text ? " | " : ""}${engine}`;
     const maxLength = this.channel.statusMaxLength ?? 4096;
     if (text.length > maxLength - 80) text = `${text.slice(0, maxLength - 81)}…`;
     const usage = this.planUsage.get(engine) ?? {
       windows: new Map(this.engines.get(engine)?.planUsageWindows?.map((window) => [window.id, window])),
     };
-    const separator = text ? " | " : "";
-    text += separator + formatPlanUsage(usage, maxLength - text.length - separator.length);
+    text += " " + formatPlanUsage(usage, maxLength - text.length - 1);
 
     if (text === state.lastStatusText) return;
     try {

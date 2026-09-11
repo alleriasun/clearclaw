@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { Config } from "../src/config.js";
+import { AcpEngine } from "../src/engine/acp.js";
 import { CLAUDE_PLAN_WINDOWS, claudePlanUsage } from "../src/engine/claude-code.js";
 import { Orchestrator } from "../src/orchestrator.js";
 import type { Channel, Engine, EngineEvent, InboundMessage, Workspace } from "../src/types.js";
@@ -13,7 +15,7 @@ interface Internals {
   executeTurn(id: string, messages: InboundMessage[], workspace: Workspace, state: object): Promise<void>;
 }
 
-function harness(t: TestContext) {
+function harness(t: TestContext, acpFixture?: string) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-plan-status-"));
   const previousHome = process.env.CLEARCLAW_HOME;
   process.env.CLEARCLAW_HOME = root;
@@ -47,6 +49,10 @@ function harness(t: TestContext) {
       } };
     },
   }]));
+  if (acpFixture) engines.set("codex", new AcpEngine("codex", {
+    command: process.execPath,
+    args: [fileURLToPath(new URL("./fixtures/acp-model-agent.mjs", import.meta.url)), acpFixture, path.join(root, "acp.jsonl")],
+  }));
   const orchestrator = new Orchestrator({ config, channel, engines });
   const internals = orchestrator as unknown as Internals;
   t.after(async () => {
@@ -78,6 +84,23 @@ const codexUsage = (usedPercent: number): EngineEvent => ({
   type: "plan_usage", windows: [{ id: "codex/primary", label: "5h", usedPercent }],
 });
 
+test("ACP session models reach the status beside context and account usage", async (t) => {
+  const h = harness(t, "quota");
+  h.workspace("codex", "codex");
+  await h.turn("codex");
+  assert.equal(h.latest("codex"), "🤖 default-model 25% | codex 5h•47% 7d•18%");
+  t.diagnostic(`New session: ${h.latest("codex")}`);
+  await h.turn("codex");
+  assert.equal(h.latest("codex"), "🤖 resumed-model 25% | codex 5h•47% 7d•18%");
+  t.diagnostic(`Resumed session: ${h.latest("codex")}`);
+
+  const unknown = harness(t, "no-config");
+  unknown.workspace("codex", "codex");
+  await unknown.turn("codex");
+  assert.equal(unknown.latest("codex"), "🤖 usage n/a | codex quota•?");
+  t.diagnostic(`Unknown model: ${unknown.latest("codex")}`);
+});
+
 test("allowed Claude events update plan usage without warning or replacing context usage", async (t) => {
   const h = harness(t);
   h.workspace("claude", "claude-code");
@@ -89,8 +112,8 @@ test("allowed Claude events update plan usage without warning or replacing conte
   } })]);
   assert.match(h.latest("claude"), /fable-5 13%/);
   assert.doesNotMatch(h.latest("claude"), /claude-fable|ctx|used:|🔒/);
-  assert.match(h.latest("claude"), /5h•42%/);
-  assert.match(h.latest("claude"), /\| 7d•25%/);
+  assert.match(h.latest("claude"), /\| claude-code 5h•42%/);
+  assert.match(h.latest("claude"), / 7d•25%/);
   assert.match(h.latest("claude"), /Fable 7d•50%/);
   assert.equal(h.messages.filter(({ text }) => /rate limit|warning/i.test(text)).length, 0);
 
