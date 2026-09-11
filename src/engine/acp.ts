@@ -19,6 +19,7 @@ import type { SpawnConfig } from "./registry.js";
 import type {
   Engine,
   EngineEvent,
+  PlanUsageWindow,
   PermissionMode,
   RunTurnOpts,
   SessionInfo,
@@ -85,6 +86,9 @@ export class AcpEngine implements Engine {
       let live = false;
 
       const client: Client = {
+        // Newer adapters send optional auth/status extensions. Ignore unsupported
+        // notifications instead of letting the SDK print account metadata.
+        extNotification: async () => {},
         requestPermission: async (
           params: RequestPermissionRequest,
         ): Promise<RequestPermissionResponse> => {
@@ -96,6 +100,11 @@ export class AcpEngine implements Engine {
           if (notification.update.sessionUpdate === "usage_update") {
             contextUsed = notification.update.used;
             contextWindow = notification.update.size;
+            // Loaded history is not a fresh account observation.
+            if (live) {
+              const windows = codexPlanUsage(notification.update._meta);
+              if (windows.length) queue.push({ type: "plan_usage", windows });
+            }
             return;
           }
           if (!live) return; // Suppress replay events from loadSession
@@ -498,4 +507,41 @@ async function handlePermission(
   }
 
   return { outcome: { outcome: "cancelled" } };
+}
+
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined;
+}
+
+function finite(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** PR #334's provider extension. Never treat standard ACP used/size as plan usage. */
+export function codexPlanUsage(meta: unknown): PlanUsageWindow[] {
+  const limits = object(meta)?.["_codex/rateLimits"];
+  if (!Array.isArray(limits)) return [];
+  const windows: PlanUsageWindow[] = [];
+  for (const value of limits) {
+    const limit = object(value);
+    if (!limit || typeof limit.limitId !== "string") continue;
+    const prefix = limit.limitId === "codex" ? "" : `${limit.limitId.replace(/[\r\n|]/g, " ").slice(0, 24)} `;
+    for (const key of ["primary", "secondary"] as const) {
+      const window = object(limit[key]);
+      if (!window) continue;
+      const minutes = finite(window.windowDurationMins);
+      const percent = finite(window.usedPercent);
+      const reset = finite(window.resetsAt);
+      if (minutes === undefined || minutes <= 0) continue;
+      const duration = minutes % 1440 === 0 ? `${minutes / 1440}d`
+        : minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
+      windows.push({
+        id: `${limit.limitId}/${key}`, label: `${prefix}${duration}`,
+        usedPercent: percent !== undefined && percent >= 0 && percent <= 100 ? percent : undefined,
+        resetsAt: reset !== undefined && reset > 0 ? reset : undefined,
+      });
+    }
+  }
+  return windows;
 }

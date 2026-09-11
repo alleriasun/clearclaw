@@ -34,6 +34,7 @@
 - [x] Plan mode relay — plan summary + Approve/Reject buttons
 - [ ] AskUserQuestion relay (multi-option menus, not just Allow/Deny)
 - [ ] `/status` command (show current session info)
+- [x] Passive subscription quota in the existing status bar, separate from context usage ([contract](specs/status-center.md))
 - [ ] `/help` command
 - [ ] Show TodoWrite updates in chat
 - [ ] Voice input via Telegram (receive voice messages, STT transcribe, feed as text prompt)

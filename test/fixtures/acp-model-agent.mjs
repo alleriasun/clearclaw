@@ -26,6 +26,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     if (mode.startsWith('usage-')) send({ method: 'session/update', params: {
       sessionId: req.params.sessionId, update: { sessionUpdate: 'usage_update', used: 800, size: 1000 },
     } });
+    if (mode === 'quota') send({ method: 'session/update', params: {
+      sessionId: req.params.sessionId, update: { sessionUpdate: 'usage_update', used: 800, size: 1000,
+        _meta: { '_codex/rateLimits': [{ limitId: 'codex', primary: { usedPercent: 99, windowDurationMins: 300 } }] } },
+    } });
     send({ id: req.id, result: config });
   } else if (req.method === 'session/set_config_option') {
     if (mode === 'reject-model') return send({ id: req.id, error: { code: -32000, message: 'Fixture rejected model' } });
@@ -39,6 +43,11 @@ createInterface({ input: process.stdin }).on('line', (line) => {
           update: { sessionUpdate: 'usage_update', used, size: 2000 } } });
       }
     }
+    if (mode === 'quota') send({ method: 'session/update', params: {
+      sessionId: req.params.sessionId, update: { sessionUpdate: 'usage_update', used: 250, size: 1000,
+        _meta: { '_codex/rateLimits': [{ limitId: 'codex', primary: { usedPercent: 47, windowDurationMins: 300 },
+          secondary: { usedPercent: 18, windowDurationMins: 10080 } }] } },
+    } });
     send({ id: req.id, result: { stopReason: 'end_turn' } });
   } else if (req.id !== undefined) {
     send({ id: req.id, error: { code: -32601, message: 'Unexpected request' } });

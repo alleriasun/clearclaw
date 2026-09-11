@@ -63,6 +63,17 @@ async function collect(events: AsyncIterable<EngineEvent>): Promise<EngineEvent[
   return result;
 }
 
+test("ACP forwards live plan metadata separately from context and ignores quota replay", async (t) => {
+  const f = await fixture(t, "quota");
+  const events = await collect(f.engine.runTurn({ ...f.opts, sessionId: "resumed-session" }));
+  const quota = events.filter((event) => event.type === "plan_usage");
+  assert.equal(quota.length, 1);
+  assert.deepEqual(quota[0].windows.map((window) => window.usedPercent), [47, 18]);
+  const done = events.find((event) => event.type === "done");
+  assert.equal(done?.stats?.contextUsed, 250);
+  assert.equal(done?.stats?.contextWindow, 1000);
+});
+
 for (const sessionId of [null, "resumed-session"]) {
   test(`ACP uses the advertised selector before prompting a ${sessionId ? "resumed" : "new"} session`, async (t) => {
     const f = await fixture(t, "success", "custom-agent");

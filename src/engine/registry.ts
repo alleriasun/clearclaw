@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { ClaudeCodeEngine } from "./claude-code.js";
 import { AcpEngine } from "./acp.js";
 import type { Engine, RunTurnOpts } from "../types.js";
@@ -9,9 +10,15 @@ export interface SpawnConfig {
 }
 
 /** Known ACP agent spawn configurations. */
+const require = createRequire(import.meta.url);
 const KNOWN_ACP_AGENTS: Record<string, SpawnConfig> = {
   kiro: { command: "kiro-cli", args: ["acp"] },
-  codex: { command: "npx", args: ["-y", "@agentclientprotocol/codex-acp"], env: codexEnv },
+  codex: {
+    command: process.execPath,
+    // Resolve only when starting Codex, and always use our pinned, patched dependency.
+    get args() { return [require.resolve("@agentclientprotocol/codex-acp")]; },
+    env: codexEnv,
+  },
 };
 
 /**

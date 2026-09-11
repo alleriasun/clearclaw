@@ -6,6 +6,7 @@ import { z } from "zod";
 import log from "./logger.js";
 import { saveFile } from "./files.js";
 import { assemblePrompt } from "./prompt.js";
+import { formatPlanUsage, recordPlanUsage } from "./plan-usage.js";
 
 import { formatToolStatusLine, formatToolCallSummary, formatPermissionPrompt, formatTodoList, timeAgo } from "./format.js";
 import { permissionHandlers, displayHandledTools } from "./tool-handlers.js";
@@ -20,6 +21,7 @@ import type {
   InboundMessage,
   MessageOrigin,
   PermissionMode,
+  PlanUsageState,
   ReplyContext,
   ToolCall,
   TurnStats,
@@ -70,6 +72,7 @@ export class Orchestrator {
   private chats = new Map<string, ChatState>();
   private creatingWorkspaces = new Set<string>();
   private scheduler: Scheduler | null = null;
+  private planUsage = new Map<string, PlanUsageState>();
 
   constructor(opts: OrchestratorOpts) {
     this.channel = opts.channel;
@@ -468,6 +471,15 @@ export class Orchestrator {
         onPermissionRequest: (req) => this.handlePermission(req, chatId),
         model: ws?.model,
       })) {
+        if (event.type === "plan_usage") {
+          let usage = this.planUsage.get(engine.name);
+          if (!usage) {
+            usage = { windows: new Map(engine.planUsageWindows?.map((window) => [window.id, window])) };
+            this.planUsage.set(engine.name, usage);
+          }
+          recordPlanUsage(usage, event);
+          continue;
+        }
         if (event.type === "error") turnFailed = true;
         // Persist the session as soon as the engine reports it —
         // so cancelling mid-turn doesn't lose it.
@@ -864,14 +876,8 @@ export class Orchestrator {
         case "tool_result":
           break;
 
-        case "rate_limit": {
-          const resetMsg = event.resetsAt
-            ? ` Resets at ${new Date(event.resetsAt).toLocaleTimeString()}.`
-            : "";
-          log.warn(`[turn] rate limit: ${event.status}${resetMsg}`);
-          await this.channel.sendMessage(chatId, `⚠️ Rate limited (${event.status}).${resetMsg}`);
-          break;
-        }
+        case "plan_usage":
+          break; // Captured account-wide in executeTurn.
 
         case "done":
           // Handled inline in executeTurn for session persistence.
@@ -1337,13 +1343,20 @@ export class Orchestrator {
       const usage = state.stats.contextWindow > 0
         ? `${Math.round((state.stats.contextUsed / state.stats.contextWindow) * 100)}%`
         : "usage n/a";
-      const displayName = state.stats.model
-        ? formatModelName(state.stats.model)
-        : state.engineName ?? "agent";
-      text = `🤖 ${displayName} ${usage} | 🔒 ${modeLabel}`;
+      const displayName = state.stats.modelLabel ?? state.stats.model ?? state.engineName ?? "agent";
+      text = `🤖 ${displayName} ctx ${usage} | 🔒 ${modeLabel}`;
     } else {
       text = `🔒 ${modeLabel}`;
     }
+
+    const ws = this.config.workspaceByChat(chatId);
+    const engine = ws?.engine ?? state.engineName ?? this.config.defaultEngine;
+    const maxLength = this.channel.statusMaxLength ?? 4096;
+    if (text.length > maxLength - 80) text = `${text.slice(0, maxLength - 81)}…`;
+    const usage = this.planUsage.get(engine) ?? {
+      windows: new Map(this.engines.get(engine)?.planUsageWindows?.map((window) => [window.id, window])),
+    };
+    text += ` | ${formatPlanUsage(usage, maxLength - text.length - 3)}`;
 
     if (text === state.lastStatusText) return;
     try {
@@ -1353,11 +1366,6 @@ export class Orchestrator {
       log.warn({ err }, "[status] failed to update status for chat %s", chatId);
     }
   }
-}
-
-/** Strip "claude-" prefix and date suffix from model ID. e.g. "claude-opus-4-6-20250514" → "opus-4-6" */
-function formatModelName(modelId: string): string {
-  return modelId.replace(/^claude-/, "").replace(/-\d{8}$/, "");
 }
 
 /** Format reply context as a bracketed prefix line for the LLM prompt. */
