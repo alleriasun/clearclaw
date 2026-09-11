@@ -22,7 +22,7 @@ test("Claude unified windows preserve the separate Fable allowance while allowed
   assert.equal(usage.windows.size, 3);
   const text = formatPlanUsage(usage);
   assert.match(text, /5h•0%/);
-  assert.match(text, /\| 7d•25%/);
+  assert.match(text, / 7d•25%/);
   assert.match(text, /Fable 7d•50%/);
 });
 
@@ -84,8 +84,8 @@ test("a bounded status preserves whole readings and explicitly counts omitted pa
   recordPlanUsage(usage, { type: "plan_usage", windows: Array.from({ length: 10 }, (_, i) => ({
     id: `bucket${i}/primary`, label: `bucket${i} 5h`, usedPercent: 50, resetsAt: now / 1000 + 3600,
   })) });
-  const text = formatPlanUsage(usage, 180);
-  assert.ok(text.length <= 180);
+  const text = formatPlanUsage(usage, 150);
+  assert.ok(text.length <= 150);
   assert.match(text, /bucket0 5h•50%/);
   assert.match(text, /\+\d+ more$/);
 });

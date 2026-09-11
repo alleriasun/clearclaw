@@ -51,6 +51,7 @@ export class AcpEngine implements Engine {
     const toolCalls: Record<string, number> = {};
     let contextUsed = 0;
     let contextWindow = 0;
+    let model: string | null = null;
     // tool_call events carry content that requestPermission lacks — cache by ID
     const pendingTools = new Map<string, ToolCall>();
     // ACP 0.16 does not reject pending setup requests when the process exits.
@@ -96,6 +97,10 @@ export class AcpEngine implements Engine {
         },
 
         sessionUpdate: async (notification: SessionNotification): Promise<void> => {
+          if (notification.update.sessionUpdate === "config_option_update") {
+            model = modelConfigOption(notification.update.configOptions)?.currentValue ?? null;
+            return;
+          }
           // Usage is session state, including updates sent during session loading.
           if (notification.update.sessionUpdate === "usage_update") {
             contextUsed = notification.update.used;
@@ -169,19 +174,19 @@ export class AcpEngine implements Engine {
         acpSessionId = newSession.sessionId;
         configOptions = newSession.configOptions;
       }
+      if (configOptions) model = modelConfigOption(configOptions)?.currentValue ?? null;
 
       // Persist before model selection so a rejected selection doesn't lose the session.
       yield { type: "session", sessionId: acpSessionId };
 
       if (opts.model) {
         signal?.throwIfAborted();
-        // Categories are optional; accept an advertised "model" ID as a fallback.
-        const modelOption = configOptions?.find((option) => option.category === "model")
-          ?? configOptions?.find((option) => option.id === "model" && !option.category);
+        const modelOption = modelConfigOption(configOptions);
         if (!modelOption) throw new Error(`${this.name} did not advertise a model selector`);
-        await Promise.race([conn.setSessionConfigOption({
+        const selected = await Promise.race([conn.setSessionConfigOption({
           sessionId: acpSessionId, configId: modelOption.id, value: opts.model,
         }), stopped]);
+        model = modelConfigOption(selected.configOptions)?.currentValue ?? null;
       }
 
       // Now start accepting live events
@@ -229,7 +234,7 @@ export class AcpEngine implements Engine {
           queue.push({
             type: "done",
             sessionId: acpSessionId,
-            stats: { model: null, contextUsed, contextWindow, toolCalls },
+            stats: { model, contextUsed, contextWindow, toolCalls },
           });
           queue.close();
         })
@@ -350,6 +355,13 @@ export class AcpEngine implements Engine {
 }
 
 // --- Helpers ---
+
+function modelConfigOption(options?: SessionConfigOption[] | null) {
+  // Categories are optional; accept an advertised "model" ID as a fallback.
+  const option = options?.find((option) => option.category === "model")
+    ?? options?.find((option) => option.id === "model" && !option.category);
+  return option?.type === "select" ? option : undefined;
+}
 
 function errorMessage(err: unknown): string {
   if (err && typeof err === "object" && "message" in err && typeof err.message === "string") return err.message;

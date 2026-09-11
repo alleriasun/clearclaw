@@ -81,6 +81,8 @@ for (const sessionId of [null, "resumed-session"]) {
     assert.deepEqual(events.map((event) => event.type), ["session", "text_chunk", "done"]);
     assert.deepEqual(events[0], { type: "session", sessionId: sessionId ?? "fixture-session" });
     assert.deepEqual(events[1], { type: "text_chunk", text: "Model answered" });
+    const done = events.find((event) => event.type === "done");
+    assert.equal(done?.stats.model, "selected-model", "use the adapter response, not the requested alias");
     const traces = (await f.traces()).filter((entry) => entry.method);
     assert.deepEqual(traces.map((entry) => entry.method), [
       "initialize", sessionId ? "session/load" : "session/new", "session/set_config_option", "session/prompt",
@@ -103,7 +105,8 @@ test("rejected model selection preserves the session, reports the adapter error,
 
 test("an advertised model ID works without the optional category", async (t) => {
   const f = await fixture(t, "uncategorized");
-  await collect(f.engine.runTurn({ ...f.opts, model: "fixture-model" }));
+  const events = await collect(f.engine.runTurn({ ...f.opts, model: "fixture-model" }));
+  assert.equal(events.find((event) => event.type === "done")?.stats.model, "selected-model");
   const request = (await f.traces()).find((entry) => entry.method === "session/set_config_option");
   assert.equal(request?.params?.configId, "model");
 });
@@ -122,12 +125,23 @@ test("an explicit override without an advertised model selector errors without p
 });
 
 test("absent overrides leave the agent's model unchanged with or without config options", async (t) => {
-  for (const mode of ["success", "no-config"]) {
-    const f = await fixture(t, mode);
-    const events = await collect(f.engine.runTurn(f.opts));
-    assert.equal(events.at(-1)?.type, "done");
-    assert.equal((await f.traces()).some((entry) => entry.method === "session/set_config_option"), false);
+  for (const mode of ["success", "no-config", "unrelated-config", "uncategorized"]) {
+    for (const sessionId of [null, "resumed-session"]) {
+      const f = await fixture(t, mode);
+      const events = await collect(f.engine.runTurn({ ...f.opts, sessionId }));
+      assert.equal(events.at(-1)?.type, "done");
+      assert.equal(events.find((event) => event.type === "done")?.stats.model,
+        ["no-config", "unrelated-config"].includes(mode) ? null : sessionId ? "resumed-model" : "default-model");
+      assert.equal((await f.traces()).some((entry) => entry.method === "session/set_config_option"), false);
+    }
   }
+});
+
+test("ACP retains model config updates during a turn", async (t) => {
+  const f = await fixture(t, "model-update");
+  const events = await collect(f.engine.runTurn(f.opts));
+  assert.deepEqual(events.map((event) => event.type), ["session", "text_chunk", "done"]);
+  assert.equal(events.find((event) => event.type === "done")?.stats.model, "updated-model");
 });
 
 for (const [mode, used, size] of [
