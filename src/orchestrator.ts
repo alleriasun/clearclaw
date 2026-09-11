@@ -1344,10 +1344,12 @@ export class Orchestrator {
         ? `${Math.round((state.stats.contextUsed / state.stats.contextWindow) * 100)}%`
         : "usage n/a";
       const displayName = state.stats.modelLabel ?? state.stats.model ?? state.engineName ?? "agent";
-      text = `🤖 ${displayName} ctx ${usage} | 🔒 ${modeLabel}`;
+      text = `🤖 ${displayName} ${usage}`;
     } else {
-      text = `🔒 ${modeLabel}`;
+      text = "";
     }
+
+    if (mode !== this.config.permissionMode) text += `${text ? " | " : ""}🔒 ${modeLabel}`;
 
     const ws = this.config.workspaceByChat(chatId);
     const engine = ws?.engine ?? state.engineName ?? this.config.defaultEngine;
@@ -1356,7 +1358,8 @@ export class Orchestrator {
     const usage = this.planUsage.get(engine) ?? {
       windows: new Map(this.engines.get(engine)?.planUsageWindows?.map((window) => [window.id, window])),
     };
-    text += ` | ${formatPlanUsage(usage, maxLength - text.length - 3)}`;
+    const separator = text ? " | " : "";
+    text += separator + formatPlanUsage(usage, maxLength - text.length - separator.length);
 
     if (text === state.lastStatusText) return;
     try {
