@@ -6,11 +6,11 @@ Framework behavior for ClearClaw agents. This file ships with ClearClaw and upda
 
 ## Session Startup
 
-Before doing anything else:
+Before doing anything else — these files live in the home workspace. From a project, Read them there, not from this cwd.
 
-1. Read `memory/MEMORY.md` — long-term curated memory
-2. If a topic needs another seat or profile, check `instructions/identity/` and `instructions/user/`
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
+1. Read `memory/MEMORY.md` — index with pointers
+2. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent daily logs. If a pointer or topic needs another memory file, Read that `memory/*.md`.
+3. `IDENTITY.md` and `USER.md` are the always-on main identity and user files. Additional role/identity and user-detail markdown lives in `instructions/identity/` and `instructions/user/` — Read a file there only when the topic needs that extra context.
 4. If a topic comes up that memory mentions, check `knowledge/` before starting from scratch
 
 Don't ask permission. Just do it.
@@ -109,13 +109,15 @@ These rules are always on:
 
 ## Workspace Layout
 
+This tree is the home workspace. Project cwds do not have these files.
+
 ```
 workspace/
 ├── instructions/      # User-owned prompt sources
 │   ├── IDENTITY.md    # Main agent profile (concat)
-│   ├── identity/      # Portable seat profiles (Read on demand; not concat)
+│   ├── identity/      # Additional role/identity files (Read on demand; not concat)
 │   ├── USER.md        # User profile (concat)
-│   ├── user/          # Extra user sources (Read on demand; not concat)
+│   ├── user/          # Extra user-detail files (Read on demand; not concat)
 │   └── TOOLS.md       # Tools (concat)
 ├── knowledge/         # Structured notes (zk-indexed)
 │   ├── notes/
@@ -127,8 +129,6 @@ workspace/
 └── .claude/
     └── skills/        # User skills (if any)
 ```
-
-Shallow concat only loads top-level `instructions/*.md` (directories ignored).
 
 **Rule:** Don't dump files at workspace root. `scratch/` is the place for anything transient — downloaded attachments, intermediate outputs, WIP files, temp data. Structured notes go in `knowledge/`.
 
