@@ -41,7 +41,7 @@ function harness(t: TestContext) {
     createProjectChat: async (project: string, anchor: string, name: string) => {
       created.push({ project, anchor, name }); return `tg:123:${++topic}`;
     },
-    closeProjectChat: async () => {}, setupProject: async () => {},
+    closeProjectChat: async () => {}, groupProjectChat: async () => {},
     setTyping: async () => {}, updateStatus: async () => {}, editMessage: async () => {},
   } as unknown as Channel;
   const engine: Engine = {
@@ -234,7 +234,7 @@ test("a scheduled prompt still runs in home's normal session", async (t) => {
 
 test("a message arriving during project setup receives the brief only once", async (t) => {
   const h = harness(t); await h.start(); h.config.connectHomeWorkspace("tg:123");
-  h.channel.setupProject = async (_name, chatId) => { await h.route(chatId, "Start now"); };
+  h.channel.groupProjectChat = async (_name, chatId) => { await h.route(chatId, "Start now"); };
   await h.tool("workspace_create").handler({ name: "early", cwd: h.root, description: "Early message", brief: "Unique first brief", project: "early" });
   await h.drain(h.config.workspaceByName("early")!.chat_id!);
   assert.equal(h.calls.length, 1);
