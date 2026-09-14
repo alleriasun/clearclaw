@@ -6,7 +6,7 @@ Framework behavior for ClearClaw agents. This file ships with ClearClaw and upda
 
 ## Session Startup
 
-Before doing anything else — these files live in the home workspace. From a project, Read them there, not from this cwd.
+Before doing anything else — these files live in **ClearClaw home** (`$CLEARCLAW_HOME/workspace`, default `~/.clearclaw/workspace`). From a project cwd, Read them there, not from the project directory.
 
 1. Read `memory/MEMORY.md` — index with pointers
 2. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent daily logs. If a pointer or topic needs another memory file, Read that `memory/*.md`.
@@ -109,10 +109,10 @@ These rules are always on:
 
 ## Workspace Layout
 
-This tree is the home workspace. Project cwds do not have these files.
+This tree is **ClearClaw home** (`$CLEARCLAW_HOME/workspace`, default `~/.clearclaw/workspace`). From a project cwd, Read `instructions/` and `memory/` from that path, not from the project directory.
 
 ```
-workspace/
+$CLEARCLAW_HOME/workspace/
 ├── instructions/      # User-owned prompt sources
 │   ├── IDENTITY.md    # Main agent profile (concat)
 │   ├── identity/      # Additional role/identity files (Read on demand; not concat)
