@@ -204,11 +204,11 @@ export class SlackChannel extends EventEmitter implements Channel {
     return /^slack:D[A-Z0-9]+$/.test(chatId) && userId.startsWith("slack:");
   }
 
-  async setupProject(projectName: string, mainChat: string): Promise<void> {
-    await this.updateProjectSection(projectName, mainChat, "initialize");
+  async groupProjectChat(projectName: string, chatId: string): Promise<string | undefined> {
+    return this.updateProjectSection(projectName, chatId, "attach");
   }
 
-  async createProjectChat(projectName: string, _anchor: string, title: string): Promise<string> {
+  async createProjectChat(_projectName: string, _anchor: string, title: string): Promise<string> {
     const users = this.authorizedSlackUsers();
     if (users.length === 0) {
       throw new Error("Cannot create Slack peer: no authorized Slack users to invite");
@@ -233,7 +233,6 @@ export class SlackChannel extends EventEmitter implements Channel {
       throw err;
     }
 
-    await this.updateProjectSection(projectName, `slack:${channel}`, "add");
     return `slack:${channel}`;
   }
 
@@ -253,9 +252,10 @@ export class SlackChannel extends EventEmitter implements Channel {
   private async updateProjectSection(
     projectName: string,
     chatId: string,
-    action: "initialize" | "add" | "remove",
-  ): Promise<void> {
+    action: "attach" | "remove",
+  ): Promise<string | undefined> {
     const channel = this.slackId(chatId);
+    // A DM cannot belong to a sidebar section; its Project groups its channel peers instead.
     if (!channel.startsWith("C") && !channel.startsWith("G")) return;
 
     try {
@@ -279,8 +279,9 @@ export class SlackChannel extends EventEmitter implements Channel {
         });
         return;
       }
-      // A deleted group is a user choice, not something spawning should repair.
-      if (action !== "initialize") return;
+      // No owned group means this Project was never sectioned — attaching creates it. A group the
+      // user deleted is caught by the date_delete branch above, so this never resurrects one.
+      if (action === "remove") return;
       const users = this.authorizedSlackUsers();
       if (users.length === 0) throw new Error("Cannot create Slack project section: no authorized Slack users");
       const baseHandle = slackUserGroupHandle(projectName);
@@ -304,6 +305,9 @@ export class SlackChannel extends EventEmitter implements Channel {
       });
     } catch (err) {
       log.warn({ err }, "[channel] failed to %s Slack project section for %s", action, projectName);
+      const reason = slackErrorCode(err) ?? (err instanceof Error ? err.message : String(err));
+      return `Slack could not ${action} the "${projectName}" sidebar section: ${reason}.`
+        + (SECTION_HINTS[reason] ? ` ${SECTION_HINTS[reason]}` : "");
     }
   }
 
@@ -694,6 +698,13 @@ function slackUserGroupDescription(projectName: string): string {
   const hash = createHash("sha256").update(projectName).digest("hex").slice(0, 16);
   return `Managed by ClearClaw (${hash})`;
 }
+
+// Sidebar sections fail for reasons no code change can fix, so name the fix instead of the code.
+const SECTION_HINTS: Record<string, string> = {
+  paid_teams_only: "Slack User Groups need a paid plan.",
+  missing_scope: "Grant the app the usergroups:read and usergroups:write scopes and reinstall it.",
+  permission_denied: "Allow the app to manage User Groups in Workspace settings → Permissions.",
+};
 
 function slackErrorCode(err: unknown): string | undefined {
   if (typeof err !== "object" || err === null || !("data" in err)) return undefined;

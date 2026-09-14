@@ -133,7 +133,7 @@ test("closeProjectChat keeps section membership when channel archival fails", as
 test("project creation initializes a shared section and its authorized users once", async () => {
   const { channel, calls } = channelWithClient(["slack:UONE", "tg:123", "slack:UTWO", "slack:UONE"]);
 
-  await channel.setupProject("Résumé Review!", "slack:CMAIN");
+  await channel.groupProjectChat("Résumé Review!", "slack:CMAIN");
 
   assert.deepEqual(calls.api, [
     { method: "usergroups.list", args: { include_disabled: true } },
@@ -150,7 +150,7 @@ test("project creation initializes a shared section and its authorized users onc
 
 test("project creation skips a Slack DM without Slack I/O", async () => {
   const { channel, calls } = channelWithClient(["slack:UONE"]);
-  await channel.setupProject("default", "slack:DHOME");
+  await channel.groupProjectChat("default", "slack:DHOME");
   assert.deepEqual(calls.api, []);
 });
 
@@ -170,8 +170,8 @@ test("lifecycle changes preserve live manual section edits and update only the a
     },
   });
 
-  await channel.setupProject("ClearClaw", "slack:CMAIN");
-  await channel.createProjectChat("ClearClaw", "slack:CMAIN", "peer");
+  await channel.groupProjectChat("ClearClaw", "slack:CMAIN");
+  await channel.groupProjectChat("ClearClaw", "slack:CPEER");
   // A human removes the main, adds another channel, and changes the group after spawning.
   group.prefs.channels = ["CMANUAL", "GMANUAL", "CPEER", "CNEW"];
   group.name = "Renamed again";
@@ -204,27 +204,40 @@ test("closing an existing main channel archives it and clears the section withou
   ]);
 });
 
-test("disabled sections stay disabled during initialization, spawn, and archive", async () => {
+test("a section the user deleted is never resurrected by grouping or archival", async () => {
   const { channel, calls } = channelWithClient(["slack:UONE"], {
     apiCall: async (method) => method === "usergroups.list" ? {
       usergroups: [{ id: "SEXISTING", description: projectMarker("ClearClaw"), date_delete: 123 }],
     } : {},
   });
-  await channel.setupProject("ClearClaw", "slack:CMAIN");
-  await channel.createProjectChat("ClearClaw", "slack:CMAIN", "peer");
+  await channel.groupProjectChat("ClearClaw", "slack:CMAIN");
+  await channel.groupProjectChat("ClearClaw", "slack:CPEER");
   await channel.closeProjectChat("slack:CPEER", "ClearClaw");
   assert.deepEqual(calls.api.map((call) => call.method), ["usergroups.list", "usergroups.list", "usergroups.list"]);
 });
 
-test("spawn and archive leave missing or human-owned sections alone", async () => {
-  for (const usergroups of [[], [{ id: "SHUMAN", handle: "cc-clearclaw", description: "Human managed" }]]) {
-    const { channel, calls } = channelWithClient(["slack:UONE"], {
-      apiCall: async () => ({ usergroups }),
-    });
-    await channel.createProjectChat("ClearClaw", "slack:CMAIN", "peer");
-    await channel.closeProjectChat("slack:CPEER", "ClearClaw");
-    assert.deepEqual(calls.api.map((call) => call.method), ["usergroups.list", "usergroups.list"]);
-  }
+test("grouping a chat creates the section when the Project never had one", async () => {
+  const { channel, calls } = channelWithClient(["slack:UONE"]);
+
+  assert.equal(await channel.groupProjectChat("ClearClaw", "slack:CPEER"), undefined);
+
+  assert.deepEqual(calls.api, [
+    { method: "usergroups.list", args: { include_disabled: true } },
+    {
+      method: "usergroups.create",
+      args: {
+        name: "ClearClaw", handle: "cc-clearclaw", description: projectMarker("ClearClaw"),
+        channels: "CPEER", enable_section: true,
+      },
+    },
+    { method: "usergroups.users.update", args: { usergroup: "SSECTION", users: "UONE" } },
+  ]);
+});
+
+test("archival leaves missing sections alone", async () => {
+  const { channel, calls } = channelWithClient(["slack:UONE"], { apiCall: async () => ({ usergroups: [] }) });
+  await channel.closeProjectChat("slack:CPEER", "ClearClaw");
+  assert.deepEqual(calls.api.map((call) => call.method), ["usergroups.list"]);
 });
 
 test("project initialization leaves human-owned handles alone and uses a stable fallback", async () => {
@@ -237,20 +250,40 @@ test("project initialization leaves human-owned handles alone and uses a stable 
       return {};
     },
   });
-  await channel.setupProject("ClearClaw", "slack:CMAIN");
+  await channel.groupProjectChat("ClearClaw", "slack:CMAIN");
   assert.deepEqual(calls.api.find((call) => call.method === "usergroups.create")?.args, {
     name: "ClearClaw", handle: collisionHandle("ClearClaw"), description: projectMarker("ClearClaw"),
     channels: "CMAIN", enable_section: true,
   });
 });
 
-test("section API failures leave chat creation and closure successful", async () => {
+test("section API failures leave chat creation and closure successful but reported", async () => {
   const { channel, calls } = channelWithClient(["slack:UONE"], {
     apiCall: async () => { throw new Error("Slack section unavailable"); },
   });
   assert.equal(await channel.createProjectChat("ClearClaw", "slack:CMAIN", "peer"), "slack:CPEER");
-  await channel.setupProject("ClearClaw", "slack:CMAIN");
+  assert.equal(
+    await channel.groupProjectChat("ClearClaw", "slack:CMAIN"),
+    'Slack could not attach the "ClearClaw" sidebar section: Slack section unavailable.',
+  );
   await channel.closeProjectChat("slack:CPEER", "ClearClaw");
   assert.deepEqual(calls.archive, [{ channel: "CPEER" }]);
-  assert.equal(calls.api.length, 3);
+  assert.equal(calls.api.length, 2);
 });
+
+for (const [code, hint] of [
+  ["paid_teams_only", "Slack User Groups need a paid plan."],
+  ["missing_scope", "Grant the app the usergroups:read and usergroups:write scopes and reinstall it."],
+  ["permission_denied", "Allow the app to manage User Groups in Workspace settings → Permissions."],
+]) {
+  test(`grouping explains how to fix ${code} instead of failing silently`, async () => {
+    const { channel } = channelWithClient(["slack:UONE"], {
+      apiCall: async () => { throw { data: { error: code } }; },
+    });
+
+    assert.equal(
+      await channel.groupProjectChat("ClearClaw", "slack:CPEER"),
+      `Slack could not attach the "ClearClaw" sidebar section: ${code}. ${hint}`,
+    );
+  });
+}
