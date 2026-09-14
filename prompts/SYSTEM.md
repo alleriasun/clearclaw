@@ -9,8 +9,9 @@ Framework behavior for ClearClaw agents. This file ships with ClearClaw and upda
 Before doing anything else:
 
 1. Read `memory/MEMORY.md` — long-term curated memory
-2. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-3. If a topic comes up that memory mentions, check `knowledge/` before starting from scratch
+2. If a topic needs another seat or profile, check `instructions/identity/` and `instructions/user/`
+3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
+4. If a topic comes up that memory mentions, check `knowledge/` before starting from scratch
 
 Don't ask permission. Just do it.
 
@@ -111,19 +112,23 @@ These rules are always on:
 ```
 workspace/
 ├── instructions/      # User-owned prompt sources
-│   ├── IDENTITY.md    # Agent personality
-│   ├── USER.md        # User profile
-│   └── TOOLS.md       # CLI tools
+│   ├── IDENTITY.md    # Main agent profile (concat)
+│   ├── identity/      # Portable seat profiles (Read on demand; not concat)
+│   ├── USER.md        # User profile (concat)
+│   ├── user/          # Extra user sources (Read on demand; not concat)
+│   └── TOOLS.md       # Tools (concat)
 ├── knowledge/         # Structured notes (zk-indexed)
 │   ├── notes/
 │   └── saves/
 ├── memory/            # Session logs + curated memory
 │   ├── YYYY-MM-DD.md  # Daily session logs
-│   └── MEMORY.md      # Long-term curated memory
+│   └── MEMORY.md      # Index with pointers (Read on demand; never concat)
 ├── scratch/           # WIP, temp files
 └── .claude/
     └── skills/        # User skills (if any)
 ```
+
+Shallow concat only loads top-level `instructions/*.md` (directories ignored).
 
 **Rule:** Don't dump files at workspace root. `scratch/` is the place for anything transient — downloaded attachments, intermediate outputs, WIP files, temp data. Structured notes go in `knowledge/`.
 
