@@ -33,9 +33,12 @@ export interface Channel {
   setTyping(chatId: string, isTyping: boolean): Promise<void>;
   sendFile(chatId: string, buffer: Buffer, filename: string, opts?: SendFileOpts): Promise<void>;
   reactToMessage(chatId: string, messageId: string, emoji: string): Promise<void>;
-  /** Set up platform-specific Project organization around an existing main chat. */
-  setupProject?(projectName: string, mainChat: string): Promise<void>;
-  /** Create a peer chat and organize it within its Project. Returns an opaque chat ID. */
+  /**
+   * Group an existing chat under its Project, creating the grouping if it does not exist yet.
+   * Returns a note when grouping did not happen, so the caller can tell the user.
+   */
+  groupProjectChat?(projectName: string, chatId: string): Promise<string | undefined>;
+  /** Create a peer chat. Returns an opaque chat ID; grouping is a separate step. */
   createProjectChat?(projectName: string, anchor: string, title: string): Promise<string>;
   /** Close a workspace's chat and remove its Project grouping, regardless of origin. */
   closeProjectChat?(chatId: string, projectName?: string): Promise<void>;

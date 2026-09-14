@@ -24,7 +24,7 @@ interface Harness {
     createProjectChat: Array<{ projectName: string; anchor: string; title: string }>;
     messages: string[];
     sendInteractive: string[];
-    setupProject: Array<{ projectName: string; chatId: string }>;
+    groupProjectChat: Array<{ projectName: string; chatId: string }>;
   };
   config: Config;
   orchestrator: Orchestrator;
@@ -48,7 +48,7 @@ function makeHarness(options: {
     createProjectChat: [] as Array<{ projectName: string; anchor: string; title: string }>,
     messages: [] as string[],
     sendInteractive: [] as string[],
-    setupProject: [] as Array<{ projectName: string; chatId: string }>,
+    groupProjectChat: [] as Array<{ projectName: string; chatId: string }>,
   };
   const channel = {
     name: "test",
@@ -76,8 +76,8 @@ function makeHarness(options: {
             channelCalls.closeProjectChat.push({ chatId, projectName });
             if (options.closeError) throw options.closeError;
           },
-          setupProject: async (projectName: string, chatId: string) => {
-            channelCalls.setupProject.push({ projectName, chatId });
+          groupProjectChat: async (projectName: string, chatId: string) => {
+            channelCalls.groupProjectChat.push({ projectName, chatId });
             if (options.lifecycleError) throw options.lifecycleError;
           },
         }),
@@ -458,7 +458,7 @@ test("workspace_create treats an explicitly empty cwd as invalid", async () => {
   }
 });
 
-test("workspace_create delegates creation without reinitializing the Project section", async () => {
+test("workspace_create groups its new chat even when the Project already exists", async () => {
   const externalCwd = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-section-spawn-"));
   const self = workspace({ cwd: externalCwd, project: "ClearClaw" });
   const harness = makeHarness({
@@ -476,7 +476,9 @@ test("workspace_create delegates creation without reinitializing the Project sec
     assert.deepEqual(harness.channelCalls.createProjectChat, [{
       projectName: "ClearClaw", anchor: "test:self", title: "peer",
     }]);
-    assert.deepEqual(harness.channelCalls.setupProject, []);
+    assert.deepEqual(harness.channelCalls.groupProjectChat, [{
+      projectName: "ClearClaw", chatId: "test:peer",
+    }]);
   } finally {
     fs.rmSync(externalCwd, { recursive: true, force: true });
   }
@@ -669,7 +671,7 @@ test("startup leaves existing Project grouping untouched", async () => {
   const before = signals.map((signal) => new Set(process.listeners(signal)));
   try {
     await harness.orchestrator.start();
-    assert.deepEqual(harness.channelCalls.setupProject, []);
+    assert.deepEqual(harness.channelCalls.groupProjectChat, []);
     assert.deepEqual(harness.channelCalls.closeProjectChat, []);
     assert.deepEqual(harness.channelCalls.createProjectChat, []);
   } finally {
@@ -698,7 +700,7 @@ test("project_create adopts an unprojected workspace as Project main", async () 
     description: "ClearClaw development",
     main_workspace: "self",
   }]);
-  assert.deepEqual(harness.channelCalls.setupProject, [{
+  assert.deepEqual(harness.channelCalls.groupProjectChat, [{
     projectName: "ClearClaw", chatId: "test:self",
   }]);
 });

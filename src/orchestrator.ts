@@ -229,15 +229,23 @@ export class Orchestrator {
       this.creatingWorkspaces.delete(args.name);
     }
     // Once registered, notification failures must not roll back a workspace or a delivered brief.
-    if (!project && createdChatId) {
-      await this.channel.setupProject?.(destination.name, createdChatId).catch((err) => log.warn({ err }, "[project] optional setup failed"));
-    }
+    const grouping = createdChatId ? await this.groupChat(destination.name, createdChatId) : undefined;
     const delivered = this.deliverInitialBrief(args.name);
     const note = createdChatId
       ? (delivered ? "; brief delivered." : ".")
       : `. In the intended chat, send /connect ${args.name}.`;
     log.info("[workspace] created %s in %s", args.name, destination.name);
-    return result(`Spawned workspace "${args.name}" at ${cwd}${note}`);
+    return result(`Spawned workspace "${args.name}" at ${cwd}${note}${grouping ? `\n\n${grouping}` : ""}`);
+  }
+
+  /** Grouping is best-effort: it never fails a lifecycle operation, but it is never silent either. */
+  private async groupChat(projectName: string, chatId: string): Promise<string | undefined> {
+    try {
+      return await this.channel.groupProjectChat?.(projectName, chatId);
+    } catch (err) {
+      log.warn({ err }, "[project] grouping failed for %s", projectName);
+      return `Could not group this chat under "${projectName}": ${err instanceof Error ? err.message : String(err)}.`;
+    }
   }
 
   private deliverInitialBrief(name: string): boolean {
@@ -262,11 +270,9 @@ export class Orchestrator {
     if (ws.chat_id) { await reply(`Workspace "${name}" already has a chat. Existing bindings cannot be replaced by /connect.`); return; }
     if (this.chat(msg.chatId).busy) { await reply("A turn is running. Wait for it to finish before connecting."); return; }
     this.config.upsertWorkspace({ ...ws, chat_id: msg.chatId });
-    if (ws.project && this.config.projectByName(ws.project)?.main_workspace === ws.name) {
-      await this.channel.setupProject?.(ws.project, msg.chatId).catch((err) => log.warn({ err }, "[project] optional setup failed"));
-    }
+    const grouping = ws.project ? await this.groupChat(ws.project, msg.chatId) : undefined;
     this.deliverInitialBrief(name);
-    await reply(`Connected this chat to workspace "${name}".`);
+    await reply(`Connected this chat to workspace "${name}".${grouping ? `\n\n${grouping}` : ""}`);
   }
 
   private peerRuntime(
@@ -1165,10 +1171,9 @@ export class Orchestrator {
               description: args.description,
               main_workspace: main.name,
             });
-            if (main.chat_id) await this.channel.setupProject?.(args.name, main.chat_id).catch((err) =>
-              log.warn({ err }, "[project] platform setup failed for %s", args.name));
+            const grouping = main.chat_id ? await this.groupChat(args.name, main.chat_id) : undefined;
             log.info("[tool] project_create: %s (main %s)", args.name, main.name);
-            return { content: [{ type: "text" as const, text: `Project "${args.name}" created with "${main.name}" as its main workspace.` }] };
+            return { content: [{ type: "text" as const, text: `Project "${args.name}" created with "${main.name}" as its main workspace.${grouping ? `\n\n${grouping}` : ""}` }] };
           },
         ),
         tool("workspace_create", `Hand a strand of work to a NEW peer agent with its own chat, directory, and conversation. The peer joins your own project by default. Pass project to put it somewhere else: name an existing project to join it, or any new name to start that project with this peer as its main. Known projects: ${projectNames}. Prepare cwd yourself first — create a git worktree, clone, or plain directory the way this host and repository expect, and keep owning it; ClearClaw only reads the path and never creates or deletes it. The brief is the peer's first message: goal, decisions already made, and scope, leaving unstated implementation choices open. For an existing workspace use message_workspace instead.`, {
