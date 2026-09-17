@@ -287,3 +287,61 @@ for (const [code, hint] of [
     );
   });
 }
+
+/** Slack channel with a chat.* surface, for the typing placeholder heartbeat. */
+function channelWithChatClient(): {
+  channel: SlackChannel;
+  posts: Array<{ text: string }>;
+  updates: Array<{ ts: string; text: string }>;
+  deletes: string[];
+} {
+  const channel = new SlackChannel("xoxb-test", "xapp-test", () => true);
+  const posts: Array<{ text: string }> = [];
+  const updates: Array<{ ts: string; text: string }> = [];
+  const deletes: string[] = [];
+  const client = {
+    chat: {
+      postMessage: async (args: { text: string }) => { posts.push(args); return { ts: "1.0" }; },
+      update: async (args: { ts: string; text: string }) => { updates.push(args); return {}; },
+      delete: async (args: { ts: string }) => { deletes.push(args.ts); return {}; },
+    },
+  };
+  (channel as unknown as { app: { client: typeof client } }).app = { client };
+  return { channel, posts, updates, deletes };
+}
+
+function typingTimerCount(channel: SlackChannel): number {
+  return (channel as unknown as { typingTimers: Map<string, unknown> }).typingTimers.size;
+}
+
+test("the typing placeholder keeps refreshing so a stalled engine stops moving", async (t) => {
+  const { channel, posts, updates } = channelWithChatClient();
+  t.after(() => { void channel.setTyping("slack:C1", false); });
+
+  await channel.setTyping("slack:C1", true);
+  assert.equal(posts.length, 1, "posts a placeholder once");
+  assert.equal(posts[0].text, "_typing…_");
+  assert.equal(typingTimerCount(channel), 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 5200));
+  assert.ok(updates.length >= 1, "refreshes the placeholder on a timer");
+  assert.equal(updates[0].ts, "1.0", "edits the placeholder it posted");
+  assert.match(updates[0].text, /_typing… \d+s_/, "shows elapsed time, so a frozen clock reads as stalled");
+});
+
+test("every path that drops the placeholder also stops its timer", async () => {
+  // Stopping typing directly.
+  const stopped = channelWithChatClient();
+  await stopped.channel.setTyping("slack:C1", true);
+  await stopped.channel.setTyping("slack:C1", false);
+  assert.equal(typingTimerCount(stopped.channel), 0, "setTyping(false) clears the timer");
+  assert.deepEqual(stopped.deletes, ["1.0"], "and removes the placeholder");
+
+  // Disconnecting with a placeholder still up.
+  const closing = channelWithChatClient();
+  (closing.channel as unknown as { app: { client: unknown; stop(): Promise<void> } }).app.stop =
+    async () => {};
+  await closing.channel.setTyping("slack:C1", true);
+  await closing.channel.disconnect();
+  assert.equal(typingTimerCount(closing.channel), 0, "disconnect clears the timer");
+});

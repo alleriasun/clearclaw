@@ -35,6 +35,7 @@ export class SlackChannel extends EventEmitter implements Channel {
   private pendingButtonCallbacks = new Map<string, (triggerId: string) => void>(); // actionId → resolve
   private pendingModalCallbacks = new Map<string, (text: string) => void>(); // modal callbackId → resolve
   private typingMessageTs = new Map<string, string>(); // chatId → ts of bot's "typing…" placeholder
+  private typingTimers = new Map<string, ReturnType<typeof setInterval>>(); // chatId → placeholder refresher
   private userNameCache = new Map<string, string>();
 
   constructor(
@@ -190,6 +191,7 @@ export class SlackChannel extends EventEmitter implements Channel {
   async disconnect(): Promise<void> {
     // Delete lingering typing placeholder messages
     for (const [chatId, ts] of this.typingMessageTs) {
+      this.stopTypingHeartbeat(chatId);
       try {
         await this.app.client.chat.delete({ channel: this.slackId(chatId), ts });
       } catch { /* already deleted or no permission */ }
@@ -344,6 +346,7 @@ export class SlackChannel extends EventEmitter implements Channel {
     const consumeTyping = !threadTs && opts?.consumeTyping !== false;
     const typingTs = consumeTyping ? this.typingMessageTs.get(chatId) : undefined;
     if (typingTs && chunks.length > 0) {
+      this.stopTypingHeartbeat(chatId);
       this.typingMessageTs.delete(chatId);
       const firstChunk = chunks.shift()!;
       if (plain) {
@@ -544,6 +547,18 @@ export class SlackChannel extends EventEmitter implements Channel {
     });
   }
 
+  /**
+   * Stop refreshing a placeholder. Every path that drops the ts must call this,
+   * or the timer keeps editing a message that is gone.
+   */
+  private stopTypingHeartbeat(chatId: string): void {
+    const timer = this.typingTimers.get(chatId);
+    if (timer) {
+      clearInterval(timer);
+      this.typingTimers.delete(chatId);
+    }
+  }
+
   async setTyping(chatId: string, isTyping: boolean): Promise<void> {
     const channel = this.slackId(chatId);
 
@@ -551,12 +566,26 @@ export class SlackChannel extends EventEmitter implements Channel {
       if (this.typingMessageTs.has(chatId)) return;
       try {
         const result = await this.app.client.chat.postMessage({
-          channel, text: "_typing…_",
+          channel, text: typingText(0),
         });
-        if (result.ts) this.typingMessageTs.set(chatId, result.ts as string);
+        if (!result.ts) return;
+        const ts = result.ts as string;
+        this.typingMessageTs.set(chatId, ts);
+        // Slack has no typing indicator for bots, so this placeholder stands in for one.
+        // Telegram's real indicator expires unless refreshed, which makes a dead process
+        // visibly stop typing; a posted message has no such property. Refreshing it with a
+        // running clock restores that signal: if the clock stops, so did the engine.
+        const startedAt = Date.now();
+        const timer = setInterval(() => {
+          this.app.client.chat.update({
+            channel, ts, text: typingText(Date.now() - startedAt),
+          }).catch(() => { /* deleted or rate limited; the next tick retries */ });
+        }, TYPING_REFRESH_MS);
+        this.typingTimers.set(chatId, timer);
       } catch { /* best-effort */ }
     } else {
       // Delete placeholder if it wasn't consumed by sendMessage
+      this.stopTypingHeartbeat(chatId);
       const ts = this.typingMessageTs.get(chatId);
       if (ts) {
         this.typingMessageTs.delete(chatId);
@@ -677,6 +706,18 @@ function slackChannelName(title: string): string {
     .replace(/[-_]+$/g, "");
   if (!name) throw new Error(`Cannot derive a valid Slack channel name from "${title}"`);
   return name;
+}
+
+const TYPING_REFRESH_MS = 5000;
+
+/** Elapsed time makes the placeholder a liveness signal: a stopped clock means a stopped engine. */
+function typingText(elapsedMs: number): string {
+  const seconds = Math.floor(elapsedMs / 1000);
+  if (seconds < 1) return "_typing…_";
+  const label = seconds < 60
+    ? `${seconds}s`
+    : `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
+  return `_typing… ${label}_`;
 }
 
 function slackUserGroupHandle(projectName: string): string {
