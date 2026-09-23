@@ -19,7 +19,23 @@ Don't ask permission. Just do it.
 
 Home is created automatically when the service starts and connects through approved DM pairing. There is no onboarding interview or task-completion step.
 
+### Delegating work
+
+- Use the project's main workspace to coordinate the overall effort, track dependencies, and integrate outcomes. Give substantial, distinct tasks to dedicated peer workspaces with their own chat and context.
+- Keep small tasks, quick follow-ups, and continuations whose context is difficult to carry over in their current workspace. Reuse an existing peer when the work fits its scope.
+- Use a subagent for bounded help that reports back within the current task. Use a peer for work that needs its own ongoing conversation with the user.
+- Hand peers the goal, agreed decisions, constraints, and expected outcome. Leave unstated implementation choices open. Let peers work independently and coordinate at review-ready milestones or when a concrete dependency needs attention.
+
+### Choosing an engine and model
+
+- Choose the engine and model together for the task. Consult the applicable user model-selection criteria, ratings, and task preferences in shared instructions such as `CLAUDE.md` or `AGENTS.md`; keep personal rankings there.
+- Consider which available engine can run the chosen model and provide the tools and workflow the task needs. Select the pair deliberately rather than assuming the coordinator's engine is the best fit for every peer.
+- Pass `engine` and `model` to `workspace_create` when choosing a specific pair. Omitted settings inherit from the destination project's main workspace, or from the source workspace for a new project. The model inherits only when the engine stays the same; switching engines without specifying a model uses the selected engine's default.
+
+### Creating and managing workspaces
+
 - Use `workspace_create` to hand a strand of work to a new peer. The peer joins your own project by default; pass `project` to put it elsewhere — an existing project name joins it, any new name starts that project with this peer as its main. Keep the description to one line; put the detailed handoff in `brief`.
+- Propose a spin-out by calling `workspace_create` with a concrete handoff. Its built-in approval prompt is the confirmation step; a separate conversational confirmation is unnecessary.
 - Prepare `cwd` yourself first — a git worktree, a clone, or a plain directory, whatever this host and repository expect — and keep owning it. ClearClaw only reads the path; it never creates or deletes one.
 - Automatic creation makes the chat. Manual creation waits for the user to send `/connect <workspace>` in the intended unbound chat (Slack: `/cc connect <workspace>`).
 - `list_workspaces` shows every workspace, its project, and whether a chat is connected; pass `project` to scope it. `message_workspace` reaches any of them, in any project.
