@@ -160,6 +160,16 @@ for (const content of [undefined, "", "{broken", "[]", "null"]) {
   });
 }
 
+for (const key of ["marketplaces", "plugins"]) {
+  test(`Codex rejects CLI-owned ${key} in config rather than launching without them`, async (t) => {
+    const f = fixture(t);
+    const configPath = join(f.root, "settings.json");
+    writeFileSync(configPath, JSON.stringify({ model: "file-model", [key]: { name: {} } }));
+    await assert.rejects(createEngineMap({ codex: { configPath } }).get("codex")!.listSessions(f.root), new RegExp(`${key}.+codex plugin marketplace add`, "s"));
+    assert.throws(f.calls, { code: "ENOENT" });
+  });
+}
+
 test("configPath requires an absolute path and a supported engine", () => {
   assert.throws(() => createEngineMap({ codex: { configPath: "relative.json" } }), /must be absolute/);
   assert.throws(() => createEngineMap({ kiro: { configPath: "/settings.json" } }), /does not support configPath/);

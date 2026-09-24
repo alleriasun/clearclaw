@@ -63,7 +63,7 @@ Executable and config paths belong to the engine and apply wherever that engine 
 {
   "engines": [
     { "name": "claude-code", "default": true, "configPath": "/path/to/dotfiles/claude/settings.json" },
-    { "name": "codex", "configPath": "/path/to/dotfiles/codex/alleriasun.config.json" }
+    { "name": "codex", "configPath": "/path/to/dotfiles/codex/config.json" }
   ]
 }
 ```
@@ -72,6 +72,8 @@ Keep any existing `path` overrides when adding `configPath`. No shell export or 
 
 - **Claude Code:** passes the file through the SDK's `settings` option (`--settings`). User, project, and local settings sources remain enabled. Explicit settings override conflicting scalar values in those sources; most lists merge under Claude's native rules. Existing user settings and symlinks remain the user's choice.
 - **Codex:** reads the JSON object at each adapter launch and supplies it as `CODEX_CONFIG`, adding ClearClaw's assembled developer instructions on top. An explicit file replaces inherited `CODEX_CONFIG` input; omitting `configPath` preserves environment-based behavior. Missing, malformed, or non-object JSON fails the launch. The adapter passes these values as thread config; native Codex still owns its normal configuration layers and startup plugin catalog.
+
+  This file carries thread settings only (`model`, `model_providers`, `mcp_servers`, `sandbox_*`, and similar). It cannot carry `marketplaces` or `plugins`: those are Codex CLI installation state, applied long before a thread exists, so declaring them installs nothing and an uninstalled marketplace fails every thread. ClearClaw rejects both keys at load and names the `codex plugin` commands that do install them. Skills need no declaration at all, since Codex reads `~/.agents/skills` and `<cwd>/.agents/skills` natively.
 
 Restart the daemon after changing `engines` entries. File contents are read again on subsequent launches. Kiro does not support `configPath`. This does not add named-profile support or change native CLI launches outside ClearClaw.
 

@@ -58,14 +58,34 @@ function codexEnv(opts: RunTurnOpts, executablePath?: string, configPath?: strin
   };
 }
 
+/**
+ * Installation state the Codex CLI owns. codex-acp applies our config when it
+ * starts a thread, long after the CLI would have fetched a marketplace and
+ * installed a plugin, so declaring these here installs nothing: an enabled
+ * plugin stays missing, and a marketplace with no local snapshot fails every
+ * thread with an opaque config-load error. Reject them at load with the fix.
+ */
+const CLI_OWNED_CONFIG_KEYS = ["marketplaces", "plugins"] as const;
+
 function readCodexConfig(configPath?: string): Record<string, unknown> {
   const raw = configPath ? readFileSync(configPath, "utf8") : process.env.CODEX_CONFIG?.trim() || "{}";
+  const source = configPath ?? "CODEX_CONFIG";
 
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${configPath ?? "CODEX_CONFIG"} must be a JSON object`);
+    throw new Error(`${source} must be a JSON object`);
   }
-  return parsed as Record<string, unknown>;
+  const config = parsed as Record<string, unknown>;
+
+  const cliOwned = CLI_OWNED_CONFIG_KEYS.filter((key) => key in config);
+  if (cliOwned.length > 0) {
+    throw new Error(
+      `${source} sets ${cliOwned.join(" and ")}, which ClearClaw cannot apply: plugin installation is Codex CLI state, ` +
+      `not thread settings. Install with "codex plugin marketplace add <source>" and "codex plugin add <plugin>@<marketplace>", ` +
+      `then remove ${cliOwned.length > 1 ? "these keys" : "the key"}.`,
+    );
+  }
+  return config;
 }
 
 /** All known engine names (for validation / setup prompts). */
