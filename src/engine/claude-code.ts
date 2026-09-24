@@ -86,7 +86,7 @@ export class ClaudeCodeEngine implements Engine {
 
   readonly planUsageWindows = CLAUDE_PLAN_WINDOWS;
 
-  constructor(private readonly executablePath?: string) {}
+  constructor(private readonly executablePath?: string, private readonly configPath?: string) {}
 
   async getSessionMessages({ sessionId, cwd, signal }: SessionHistoryOpts): Promise<SessionMessage[]> {
     signal?.throwIfAborted();
@@ -197,6 +197,7 @@ export class ClaudeCodeEngine implements Engine {
         canUseTool: permissionMode === "bypassPermissions" ? undefined : canUseTool,
         abortController,
         settingSources: ["user", "project", "local"],
+        ...(this.configPath ? { settings: this.configPath } : {}),
         ...(mcpServers ? { mcpServers } : {}),
         ...(appendSystemPrompt
           ? {
