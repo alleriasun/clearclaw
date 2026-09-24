@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
 import readline from "node:readline";
 import { Config } from "./config.js";
 import type { ChannelConfig } from "./config.js";
 import log, { initLogger } from "./logger.js";
-import { createEngineMap, ENGINE_NAMES, engineCommand } from "./engine/registry.js";
+import { createEngineMap, ENGINE_NAMES, resolveEnginePath } from "./engine/registry.js";
 import { TelegramChannel } from "./channel/telegram.js";
 import { SlackChannel } from "./channel/slack.js";
 import { Orchestrator } from "./orchestrator.js";
@@ -114,6 +113,7 @@ async function runSetup(): Promise<void> {
     }
 
     let engineName: string;
+    let resolvedPath: string | undefined;
     const engineList = ENGINE_NAMES.join("/");
     while (true) {
       engineName = (await ask(`Default engine [${engineList}]: `)).trim().toLowerCase();
@@ -121,23 +121,13 @@ async function runSetup(): Promise<void> {
         console.log(`  Please enter one of: ${engineList}`);
         continue;
       }
-      const cmd = engineCommand(engineName);
-      if (cmd) {
-        try {
-          execFileSync("which", [cmd], { stdio: "ignore" });
-        } catch {
-          console.log(`  "${cmd}" not found on PATH. Install it first or choose another engine.`);
-          continue;
-        }
+      try {
+        resolvedPath = resolveEnginePath(engineName);
+        break;
+      } catch (err) {
+        console.log(`  ${(err as Error).message}`);
       }
-      break;
     }
-
-    // Resolve executable path for the chosen engine
-    const cmd = engineCommand(engineName);
-    const resolvedPath = cmd
-      ? execFileSync("which", [cmd], { encoding: "utf-8" }).trim()
-      : engineName; // SDK-based engines don't have a standalone binary
 
     const config = new Config();
     config.setChannel(channelConfig);

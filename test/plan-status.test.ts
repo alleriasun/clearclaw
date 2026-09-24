@@ -50,8 +50,7 @@ function harness(t: TestContext, acpFixture?: string) {
     },
   }]));
   if (acpFixture) engines.set("codex", new AcpEngine("codex", {
-    command: process.execPath,
-    args: [fileURLToPath(new URL("./fixtures/acp-model-agent.mjs", import.meta.url)), acpFixture, path.join(root, "acp.jsonl")],
+    command: [process.execPath, fileURLToPath(new URL("./fixtures/acp-model-agent.mjs", import.meta.url)), acpFixture, path.join(root, "acp.jsonl")],
   }));
   const orchestrator = new Orchestrator({ config, channel, engines });
   const internals = orchestrator as unknown as Internals;
