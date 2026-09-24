@@ -41,7 +41,7 @@ export interface PendingPairing {
 export interface EngineEntry {
   name: string;                          // engine identifier (e.g. "claude-code", "kiro")
   default?: boolean;
-  path: string;                          // resolved executable path
+  path?: string;                         // resolved CLI override; omitted uses engine defaults
 }
 
 export interface ScheduleEntry {

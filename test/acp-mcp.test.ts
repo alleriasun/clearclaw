@@ -27,8 +27,7 @@ async function fixture(t: TestContext, mode = "success", engineName = "codex") {
   t.after(() => controller.abort());
   const calls: string[] = [];
   const engine = new AcpEngine(engineName, {
-    command: process.execPath,
-    args: [fileURLToPath(new URL("./fixtures/acp-mcp-agent.mjs", import.meta.url)), mode, tracePath],
+    command: [process.execPath, fileURLToPath(new URL("./fixtures/acp-mcp-agent.mjs", import.meta.url)), mode, tracePath],
   });
   const opts: RunTurnOpts = {
     sessionId: null,

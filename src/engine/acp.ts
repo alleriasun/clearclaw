@@ -16,7 +16,7 @@ import {
 import log from "../logger.js";
 import { AsyncQueue } from "./async-queue.js";
 import { serveMcpOverHttp, type McpBridge } from "./mcp-http.js";
-import type { SpawnConfig } from "./registry.js";
+import type { AcpEngineDefinition } from "./registry.js";
 import type {
   Engine,
   EngineEvent,
@@ -32,7 +32,7 @@ import type {
 export class AcpEngine implements Engine {
   constructor(
     public readonly name: string,
-    private readonly spawnConfig: SpawnConfig,
+    private readonly spawnConfig: AcpEngineDefinition,
   ) {}
 
   async *runTurn(opts: RunTurnOpts): AsyncIterable<EngineEvent> {
@@ -411,19 +411,20 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
-function spawnAgent(config: SpawnConfig, opts: RunTurnOpts): ChildProcess {
+function spawnAgent(config: AcpEngineDefinition, opts: RunTurnOpts): ChildProcess {
   const extraEnv = typeof config.env === "function" ? config.env(opts) : config.env;
-  const proc = spawn(config.command, config.args, {
+  const [command, ...args] = config.command;
+  const proc = spawn(command, args, {
     stdio: ["pipe", "pipe", "pipe"],
     env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
   });
 
   proc.on("error", (err) => {
-    log.error({ err }, "[acp] failed to spawn %s", config.command);
+    log.error({ err }, "[acp] failed to spawn %s", command);
   });
 
   if (!proc.stdin || !proc.stdout) {
-    throw new Error(`Failed to spawn ${config.command} — stdin/stdout not available`);
+    throw new Error(`Failed to spawn ${command} — stdin/stdout not available`);
   }
 
   return proc;
