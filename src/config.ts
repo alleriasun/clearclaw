@@ -42,6 +42,7 @@ export interface EngineEntry {
   name: string;                          // engine identifier (e.g. "claude-code", "kiro")
   default?: boolean;
   path?: string;                         // resolved CLI override; omitted uses engine defaults
+  configPath?: string;                   // absolute engine settings file path (Claude Code or Codex)
 }
 
 export interface ScheduleEntry {

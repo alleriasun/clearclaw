@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
+import type { EngineEntry } from "../config.js";
 import { ClaudeCodeEngine } from "./claude-code.js";
 import { AcpEngine } from "./acp.js";
 import type { Engine, RunTurnOpts } from "../types.js";
@@ -13,7 +16,8 @@ interface AcpEngineConfig {
   cliCommand: string;
   command: AcpEngineDefinition["command"] | ((cliPath: string) => AcpEngineDefinition["command"]);
   bundled?: boolean;
-  env?: (opts: RunTurnOpts, executablePath?: string) => Record<string, string> | undefined;
+  supportsConfigPath?: boolean;
+  env?: (opts: RunTurnOpts, executablePath?: string, configPath?: string) => Record<string, string> | undefined;
 }
 
 /** Known ACP engines: CLI for setup, optional adapter for launch. */
@@ -23,6 +27,7 @@ const KNOWN_ACP_ENGINES: Record<string, AcpEngineConfig> = {
   codex: {
     cliCommand: "codex",
     bundled: true,
+    supportsConfigPath: true,
     // Resolve only when starting Codex, and always use our pinned, patched dependency.
     get command(): AcpEngineDefinition["command"] { return [process.execPath, require.resolve("@agentclientprotocol/codex-acp")]; },
     env: codexEnv,
@@ -33,33 +38,32 @@ const KNOWN_ACP_ENGINES: Record<string, AcpEngineConfig> = {
  * ACP has no system-prompt channel, so ClearClaw's assembled framework prompt
  * reaches Codex through its config: codex-acp parses CODEX_CONFIG as a JSON
  * config object and forwards it to codex core, which honors
- * `developer_instructions`. Merges over an inherited CODEX_CONFIG rather than
- * clobbering it.
+ * `developer_instructions`. An explicit JSON file supplies personal settings;
+ * without one, inherited CODEX_CONFIG remains the source.
  * CODEX_PATH selects the underlying CLI while the pinned adapter stays fixed.
  */
 
-function codexEnv(opts: RunTurnOpts, executablePath?: string): Record<string, string> | undefined {
+function codexEnv(opts: RunTurnOpts, executablePath?: string, configPath?: string): Record<string, string> | undefined {
   const developerInstructions = opts.appendSystemPrompt?.trim();
-  if (!developerInstructions && !executablePath) return undefined;
+  if (!developerInstructions && !executablePath && !configPath) return undefined;
 
   return {
     ...(executablePath ? { CODEX_PATH: executablePath } : {}),
-    ...(developerInstructions ? {
+    ...(developerInstructions || configPath ? {
       CODEX_CONFIG: JSON.stringify({
-        ...readCodexConfigEnv(),
-        developer_instructions: developerInstructions,
+        ...readCodexConfig(configPath),
+        ...(developerInstructions ? { developer_instructions: developerInstructions } : {}),
       }),
     } : {}),
   };
 }
 
-function readCodexConfigEnv(): Record<string, unknown> {
-  const raw = process.env.CODEX_CONFIG?.trim();
-  if (!raw) return {};
+function readCodexConfig(configPath?: string): Record<string, unknown> {
+  const raw = configPath ? readFileSync(configPath, "utf8") : process.env.CODEX_CONFIG?.trim() || "{}";
 
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("CODEX_CONFIG must be a JSON object");
+    throw new Error(`${configPath ?? "CODEX_CONFIG"} must be a JSON object`);
   }
   return parsed as Record<string, unknown>;
 }
@@ -88,18 +92,26 @@ export function resolveEnginePath(name: string): string | undefined {
  * Build the engine map: claude-code (Agent SDK) + known ACP engines.
  * Engines are lightweight — they store config, not running processes.
  *
- * @param enginePaths - resolved executable paths from config (e.g. { "claude-code": "/usr/local/bin/claude" })
+ * @param engineConfigs - executable and settings-file overrides from config
  */
-export function createEngineMap(enginePaths: Record<string, string | undefined> = {}): Map<string, Engine> {
+export function createEngineMap(engineConfigs: Record<string, Pick<EngineEntry, "path" | "configPath">> = {}): Map<string, Engine> {
+  for (const [name, { configPath }] of Object.entries(engineConfigs)) {
+    if (configPath && !isAbsolute(configPath)) throw new Error(`${name} configPath must be absolute`);
+    if (configPath && name !== "claude-code" && !KNOWN_ACP_ENGINES[name]?.supportsConfigPath) {
+      throw new Error(`${name} does not support configPath`);
+    }
+  }
   const engines = new Map<string, Engine>();
-  engines.set("claude-code", new ClaudeCodeEngine(enginePaths["claude-code"]));
+  const claude = engineConfigs["claude-code"];
+  engines.set("claude-code", new ClaudeCodeEngine(claude?.path, claude?.configPath));
   for (const [name, config] of Object.entries(KNOWN_ACP_ENGINES)) {
+    const { path, configPath } = engineConfigs[name] ?? {};
     engines.set(name, new AcpEngine(name, {
       get command() {
         const command = config.command;
-        return typeof command === "function" ? command(enginePaths[name] ?? config.cliCommand) : command;
+        return typeof command === "function" ? command(path ?? config.cliCommand) : command;
       },
-      env: (opts) => config.env?.(opts, enginePaths[name]),
+      env: (opts) => config.env?.(opts, path, configPath),
     }));
   }
   return engines;
