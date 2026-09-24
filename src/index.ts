@@ -56,10 +56,7 @@ async function runDaemon(): Promise<void> {
     () => config.listAuthorizedUserIds(),
   );
 
-  const enginePaths = Object.fromEntries(
-    Object.entries(config.engines).map(([name, entry]) => [name, entry.path]),
-  );
-  await new Orchestrator({ channel, engines: createEngineMap(enginePaths), config }).start();
+  await new Orchestrator({ channel, engines: createEngineMap(config.engines), config }).start();
 }
 
 async function runApprove(args: string[]): Promise<void> {

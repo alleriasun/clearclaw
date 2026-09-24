@@ -49,7 +49,7 @@ If the engine locks history during an active turn, retry after that turn finishe
 
 Optional: `PERMISSION_MODE` (`default` | `acceptEdits` | `bypassPermissions` | `plan`), `CLEARCLAW_HOME` (default `~/.clearclaw`).
 
-### Engine executable paths
+### Engine executable and config paths
 
 Setup stores the selected engine's resolved CLI executable in `~/.clearclaw/config.json` as `engines[].path`. Claude Code passes this path to the Agent SDK. Kiro runs this path with the `acp` argument. Codex starts ClearClaw's pinned, patched `codex-acp` adapter through Node and passes the configured Codex CLI path to it as `CODEX_PATH`.
 
@@ -57,7 +57,23 @@ For Codex, setup prefers an installed `codex` CLI; if none is on `PATH`, it omit
 
 Without a configured override, Kiro resolves `kiro-cli` from `PATH`. Codex preserves an inherited `CODEX_PATH`, otherwise its adapter uses the bundled Codex executable.
 
-The executable path belongs to the engine and applies wherever that engine is used. It only selects the executable; named CLI profiles and their settings remain CLI-owned.
+Executable and config paths belong to the engine and apply wherever that engine is used. Set optional `engines[].configPath` to an absolute settings-file path for Claude Code or Codex:
+
+```json
+{
+  "engines": [
+    { "name": "claude-code", "default": true, "configPath": "/path/to/dotfiles/claude/settings.json" },
+    { "name": "codex", "configPath": "/path/to/dotfiles/codex/alleriasun.config.json" }
+  ]
+}
+```
+
+Keep any existing `path` overrides when adding `configPath`. No shell export or copy to the agent's home directory is required for these files.
+
+- **Claude Code:** passes the file through the SDK's `settings` option (`--settings`). User, project, and local settings sources remain enabled. Explicit settings override conflicting scalar values in those sources; most lists merge under Claude's native rules. Existing user settings and symlinks remain the user's choice.
+- **Codex:** reads the JSON object at each adapter launch and supplies it as `CODEX_CONFIG`, adding ClearClaw's assembled developer instructions on top. An explicit file replaces inherited `CODEX_CONFIG` input; omitting `configPath` preserves environment-based behavior. Missing, malformed, or non-object JSON fails the launch. The adapter passes these values as thread config; native Codex still owns its normal configuration layers and startup plugin catalog.
+
+Restart the daemon after changing `engines` entries. File contents are read again on subsequent launches. Kiro does not support `configPath`. This does not add named-profile support or change native CLI launches outside ClearClaw.
 
 For Slack, setup saves the bot and app tokens; environment-based installs can use
 `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and Slack-prefixed `ALLOWED_USER_IDS`. Private peer-channel spawning
