@@ -19,8 +19,7 @@ function fixture(t: TestContext, mode = "success") {
   });
   return {
     engine: new AcpEngine("fixture", {
-      command: process.execPath,
-      args: [fileURLToPath(new URL("./fixtures/acp-history-agent.mjs", import.meta.url))],
+      command: [process.execPath, fileURLToPath(new URL("./fixtures/acp-history-agent.mjs", import.meta.url))],
       env: { HISTORY_MODE: mode, HISTORY_LOG: log },
     }),
     opts: { sessionId: "source-session", cwd: root },
@@ -68,12 +67,12 @@ test("ACP history aborts a stalled adapter and terminates its process", async (t
 });
 
 test("ACP history does not spawn for an already aborted request", async () => {
-  const engine = new AcpEngine("absent", { command: "/does/not/exist", args: [] });
+  const engine = new AcpEngine("absent", { command: ["/does/not/exist"] });
   await assert.rejects(engine.getSessionMessages({ sessionId: "id", cwd: "/tmp", signal: AbortSignal.abort() }), { name: "AbortError" });
 });
 
 test("ACP history reports adapter spawn failures", async () => {
-  const engine = new AcpEngine("absent", { command: "/does/not/exist", args: [] });
+  const engine = new AcpEngine("absent", { command: ["/does/not/exist"] });
   await assert.rejects(engine.getSessionMessages({ sessionId: "id", cwd: "/tmp" }), /ENOENT/);
 });
 

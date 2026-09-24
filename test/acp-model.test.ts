@@ -47,8 +47,7 @@ async function fixture(t: TestContext, mode = "success", name = "codex") {
     await rm(root, { recursive: true });
   });
   const engine = new AcpEngine(name, {
-    command: process.execPath,
-    args: [fileURLToPath(new URL("./fixtures/acp-model-agent.mjs", import.meta.url)), mode, tracePath],
+    command: [process.execPath, fileURLToPath(new URL("./fixtures/acp-model-agent.mjs", import.meta.url)), mode, tracePath],
   });
   const opts: RunTurnOpts = {
     sessionId: null, cwd: root, prompt: "Continue", permissionMode: "default",

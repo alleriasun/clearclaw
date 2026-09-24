@@ -49,6 +49,16 @@ If the engine locks history during an active turn, retry after that turn finishe
 
 Optional: `PERMISSION_MODE` (`default` | `acceptEdits` | `bypassPermissions` | `plan`), `CLEARCLAW_HOME` (default `~/.clearclaw`).
 
+### Engine executable paths
+
+Setup stores the selected engine's resolved CLI executable in `~/.clearclaw/config.json` as `engines[].path`. Claude Code passes this path to the Agent SDK. Kiro runs this path with the `acp` argument. Codex starts ClearClaw's pinned, patched `codex-acp` adapter through Node and passes the configured Codex CLI path to it as `CODEX_PATH`.
+
+For Codex, setup prefers an installed `codex` CLI; if none is on `PATH`, it omits the override and uses the bundled executable.
+
+Without a configured override, Kiro resolves `kiro-cli` from `PATH`. Codex preserves an inherited `CODEX_PATH`, otherwise its adapter uses the bundled Codex executable.
+
+The executable path belongs to the engine and applies wherever that engine is used. It only selects the executable; named CLI profiles and their settings remain CLI-owned.
+
 For Slack, setup saves the bot and app tokens; environment-based installs can use
 `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and Slack-prefixed `ALLOWED_USER_IDS`. Private peer-channel spawning
 also requires the `groups:write` bot-token scope; reinstall the app after adding

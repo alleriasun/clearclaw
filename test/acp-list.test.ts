@@ -21,8 +21,7 @@ function fixture(t: TestContext, mode = "success") {
   return {
     cwd: root, calls,
     engine: new AcpEngine("fixture", {
-      command: process.execPath,
-      args: [fileURLToPath(new URL("./fixtures/acp-list-agent.mjs", import.meta.url))],
+      command: [process.execPath, fileURLToPath(new URL("./fixtures/acp-list-agent.mjs", import.meta.url))],
       env: { LIST_MODE: mode, LIST_LOG: log },
     }),
   };
@@ -84,7 +83,7 @@ for (const mode of ["hang-init", "hang"]) {
 }
 
 test("ACP listing reports spawn failures", async () => {
-  const engine = new AcpEngine("absent", { command: "/does/not/exist", args: [] });
+  const engine = new AcpEngine("absent", { command: ["/does/not/exist"] });
   await assert.rejects(engine.listSessions("/tmp"), /ENOENT/);
 });
 
