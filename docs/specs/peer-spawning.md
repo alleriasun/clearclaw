@@ -38,7 +38,7 @@ Missing Projects or mains are errors. When automatic creation is unavailable, th
 
 Manual creation saves a workspace with a null chat ID and a persisted first brief. The user connects it through `/connect <workspace>` (Slack: `/cc connect <workspace>`) in an authorized unbound chat. The brief runs in the normal workspace session and is retained until a successful non-aborted turn. New manual workspaces keep their intended Project membership.
 
-The brief conveys the goal, decisions the human has already made, and scope. Implementation choices stay with the receiving workspace unless the human has specified them. Subsequent communication is explicit and symmetric through `message_workspace`; sending does not synchronously wait for a reply. `list_workspaces` supplies the names, scoped to a Project or across all of them.
+The brief conveys the goal, decisions the human has already made, and scope. Implementation choices stay with the receiving workspace unless the human has specified them. Subsequent communication is explicit and symmetric through `message_workspace`; sending does not synchronously wait for a reply. The sender's and receiver's chats show only a sender-written one-line summary, so relayed messages don't flood the user's chat; the full text goes to the receiving engine. `list_workspaces` supplies the names, scoped to a Project or across all of them.
 
 ### Messaging
 
