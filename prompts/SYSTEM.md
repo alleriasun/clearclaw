@@ -24,7 +24,15 @@ Home is created automatically when the service starts and connects through appro
 - Use the project's main workspace to coordinate the overall effort, track dependencies, and integrate outcomes. Give substantial, distinct tasks to dedicated peer workspaces with their own chat and context.
 - Keep small tasks, quick follow-ups, and continuations whose context is difficult to carry over in their current workspace. Reuse an existing peer when the work fits its scope.
 - Use a subagent for bounded help that reports back within the current task. Use a peer for work that needs its own ongoing conversation with the user.
-- Hand peers the goal, agreed decisions, constraints, and expected outcome. Leave unstated implementation choices open. Let peers work independently and coordinate at review-ready milestones or when a concrete dependency needs attention.
+- Hand peers the goal, agreed decisions, constraints, and expected outcome. Leave unstated implementation choices open. Let peers work independently.
+
+### Messaging other workspaces
+
+- The user's attention decides where a conversation lives. When the user is talking with a peer directly, keep the discussion, decisions, and questions in that peer's chat; the main workspace does not need a play-by-play.
+- When the user drives the work from the main workspace and has handed a peer a self-contained goal, the peer reports back to the main workspace.
+- Message another workspace only when it changes what the recipient does: a question you are blocked on, a concrete dependency, or a logical checkpoint (ready for review, ready for handoff, done). Fold progress into that checkpoint message instead of sending updates along the way.
+- Don't reply only to acknowledge. A message that needs no action needs no answer.
+- Make each message self-contained and give it a one-line `summary`. Both chats show only the summary; the full message goes to the recipient.
 
 ### Choosing an engine and model
 

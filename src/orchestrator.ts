@@ -1121,6 +1121,7 @@ export class Orchestrator {
           {
             workspace: z.string().describe("Target workspace name; see list_workspaces"),
             message: z.string().describe("The message to send"),
+            summary: z.string().describe("One-line gist shown in both chats in place of the full message"),
           },
           async (args) => {
             const target = this.config.workspaceByName(args.workspace);
@@ -1135,7 +1136,8 @@ export class Orchestrator {
             if (!ok) {
               return { content: [{ type: "text" as const, text: `Failed to deliver to "${target.name}".` }] };
             }
-            await this.channel.sendMessage(chatId, `→ sent to ${target.name}: ${args.message}`);
+            await this.channel.sendMessage(chatId, `→ sent to ${target.name}: ${args.summary}`);
+            await this.channel.sendMessage(target.chat_id!, `← from ${fromName}: ${args.summary}`).catch(() => {});
             log.info("[tool] message_workspace: %s → %s", fromName, target.name);
             return { content: [{ type: "text" as const, text: `Delivered to ${target.name}.` }] };
           },
