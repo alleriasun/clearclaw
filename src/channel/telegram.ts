@@ -373,9 +373,12 @@ export class TelegramChannel extends EventEmitter implements Channel {
     );
   }
 
+  /** Unpin everything in this chat's scope: the forum topic for a topic chat, else the whole chat. */
   async unpinAllMessages(chatId: string): Promise<void> {
     const numId = this.numericId(chatId);
-    await this.bot.api.unpinAllChatMessages(numId);
+    const { message_thread_id } = this.threadOpts(chatId);
+    if (message_thread_id) await this.bot.api.unpinAllForumTopicMessages(numId, message_thread_id);
+    else await this.bot.api.unpinAllChatMessages(numId);
   }
 
   async updateStatus(chatId: string, text: string): Promise<void> {
@@ -395,12 +398,10 @@ export class TelegramChannel extends EventEmitter implements Channel {
         }
       }
     }
-    // No existing handle, or edit failed — (re)create the pinned status. Unpin only the previous
-    // status message (stays topic-scoped, since the topic travels with the message id); a chat-wide
-    // unpinAll would clobber every other forum topic's pinned status, so peers stop showing a pin.
-    if (existing) {
-      try { await this.bot.api.unpinChatMessage(this.numericId(chatId), Number(existing)); } catch { /* already gone / not admin */ }
-    }
+    // No existing handle, or edit failed — (re)create the pinned status. The handle lives only in
+    // memory, so after a restart the previous status is unknown; clear every pin in scope instead
+    // (topic-scoped for forum topics, so peers in other topics keep theirs).
+    try { await this.unpinAllMessages(chatId); } catch { /* not admin */ }
     const handles = await this.sendMessage(chatId, text);
     const handle = handles[0];
     this.statusHandles.set(chatId, handle);
