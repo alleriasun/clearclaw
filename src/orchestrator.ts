@@ -343,6 +343,11 @@ export class Orchestrator {
       await this.executeTurn(chatId, messages, ctx, state);
     } catch (err) {
       log.error({ err }, "[fatal]");
+      // executeTurn marks the chat busy before its own finally is in scope; without this,
+      // an early throw leaves the chat wedged until restart.
+      state.busy = false;
+      state.abort = null;
+      await this.channel.setTyping(chatId, false).catch(() => {});
       await this.channel.sendMessage(
         chatId,
         `Internal error: ${err instanceof Error ? err.message : String(err)}`,
