@@ -37,7 +37,15 @@ async function readFileOrSkip(file: string): Promise<string | null> {
  */
 async function readMarkdownFiles(dir: string): Promise<{ contents: string[]; skipped: string[] }> {
   if (!fs.existsSync(dir)) return { contents: [], skipped: [] };
-  const names = (await fsp.readdir(dir)).filter((f) => f.endsWith(".md")).sort();
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(dir);
+  } catch (err) {
+    // Cloud-synced dirs (Google Drive File Provider) can transiently refuse a listing with EPERM.
+    log.warn({ err }, "[prompt] could not list %s — skipping", dir);
+    return { contents: [], skipped: [dir] };
+  }
+  const names = entries.filter((f) => f.endsWith(".md")).sort();
   const results = await Promise.all(
     names.map(async (f) => ({ name: f, text: await readFileOrSkip(path.join(dir, f)) })),
   );
