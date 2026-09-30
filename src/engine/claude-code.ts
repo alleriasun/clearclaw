@@ -214,6 +214,7 @@ export class ClaudeCodeEngine implements Engine {
     let resultSessionId: string | undefined;
     let turnStats: TurnStats | undefined;
     let lastInputTokens = 0;
+    let lastModel: string | undefined;
     const toolUseIdToName = new Map<string, string>();
 
     try {
@@ -235,7 +236,10 @@ export class ClaudeCodeEngine implements Engine {
           // BetaMessage type isn't directly importable (@anthropic-ai/sdk not installed);
           // .message is typed as `any` so property access works without casting.
           const betaMsg = (msg as SDKAssistantMessage).message;
-          if (betaMsg.usage) {
+          // Only the main thread describes the session; subagent turns carry a parent.
+          const mainThread = (msg as SDKAssistantMessage).parent_tool_use_id === null;
+          if (mainThread && betaMsg.model) lastModel = betaMsg.model;
+          if (mainThread && betaMsg.usage) {
             const u = betaMsg.usage;
             lastInputTokens = (u.input_tokens ?? 0)
               + (u.cache_read_input_tokens ?? 0)
@@ -293,9 +297,10 @@ export class ClaudeCodeEngine implements Engine {
           const result = msg as SDKResultMessage;
           resultSessionId = result.session_id;
 
-          const models = Object.keys(result.modelUsage);
-          if (models.length > 0) {
-            const model = models[0];
+          // modelUsage also counts background calls (e.g. Haiku), so its first key
+          // is not necessarily the model that answered.
+          const model = lastModel ?? Object.keys(result.modelUsage)[0];
+          if (model) {
             const mu = result.modelUsage[model];
             // Build per-tool call counts from accumulated map
             const toolCalls: Record<string, number> = {};
@@ -306,7 +311,7 @@ export class ClaudeCodeEngine implements Engine {
               model,
               modelLabel: model.replace(/^claude-/, "").replace(/-\d{8}$/, ""),
               contextUsed: lastInputTokens,
-              contextWindow: mu.contextWindow,
+              contextWindow: mu?.contextWindow ?? 0,
               toolCalls,
             };
           }
