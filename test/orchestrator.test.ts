@@ -24,6 +24,8 @@ interface Harness {
     createProjectChat: Array<{ projectName: string; anchor: string; title: string }>;
     messages: string[];
     sendInteractive: string[];
+    buttons: string[][];
+    statuses: string[];
     groupProjectChat: Array<{ projectName: string; chatId: string }>;
   };
   config: Config;
@@ -48,6 +50,8 @@ function makeHarness(options: {
     createProjectChat: [] as Array<{ projectName: string; anchor: string; title: string }>,
     messages: [] as string[],
     sendInteractive: [] as string[],
+    buttons: [] as string[][],
+    statuses: [] as string[],
     groupProjectChat: [] as Array<{ projectName: string; chatId: string }>,
   };
   const channel = {
@@ -57,13 +61,17 @@ function makeHarness(options: {
     on: () => {},
     ownsId: (chatId: string) => chatId.startsWith("test:"),
     isRootDM: (chatId: string, userId: string) => chatId === userId,
-    sendInteractive: async (_chatId: string, text: string) => {
+    sendInteractive: async (_chatId: string, text: string, buttons: Array<Array<{ label: string }>> = []) => {
       channelCalls.sendInteractive.push(text);
+      channelCalls.buttons.push(buttons.flat().map((button) => button.label));
       return { value: options.interactiveResponse ?? (options.peerChats === false ? "manual" : "spawn") };
     },
     sendMessage: async (_chatId: string, text: string) => {
       channelCalls.messages.push(text);
       return ["message-id"];
+    },
+    updateStatus: async (_chatId: string, text: string) => {
+      channelCalls.statuses.push(text);
     },
     ...(options.peerChats === false
       ? {}
@@ -86,6 +94,8 @@ function makeHarness(options: {
     homeWorkspacePath: "/tmp/clearclaw-home",
     ensureHomeWorkspace: () => workspaces.find((w) => w.name === "default"),
     defaultEngine: "claude-code",
+    permissionMode: "default",
+    isAuthorized: () => true,
     workspaceByChat: (chatId: string) => workspaces.find((workspace) => workspace.chat_id === chatId),
     workspaceByName: (name: string) => workspaces.find((workspace) => workspace.name === name),
     listWorkspaces: () => workspaces,
@@ -831,3 +841,24 @@ test("workspace_create rejects a project whose main workspace is missing", async
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
+
+for (const [label, ws, current, badge] of [
+  ["home (assistant)", workspace({ cwd: "/tmp/clearclaw-home" }), "Bypass", "🔒 Default"],
+  ["project (relay)", workspace(), "Default", undefined],
+] as const) {
+  test(`/mode in a ${label} chat shows the effective mode and badges only a change from it`, async () => {
+    const harness = makeHarness({ workspaces: [ws], interactiveResponse: "default" });
+    await (harness.orchestrator as unknown as { routeMessage(msg: unknown): Promise<void> }).routeMessage({
+      chatId: "test:self",
+      chatType: "group",
+      origin: { kind: "user", user: { id: "test:user" } },
+      text: "/mode",
+    });
+
+    assert.deepEqual(harness.channelCalls.sendInteractive, [`Current mode: ${current}`]);
+    assert.deepEqual(harness.channelCalls.buttons[0]?.filter((button) => button.startsWith("✓")), [`✓ ${current}`]);
+    const status = harness.channelCalls.statuses.at(-1) ?? "";
+    if (badge) assert.ok(status.includes(badge), `status ${JSON.stringify(status)} should include ${badge}`);
+    else assert.ok(!status.includes("🔒"), `status ${JSON.stringify(status)} should have no mode badge`);
+  });
+}
