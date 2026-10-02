@@ -302,6 +302,11 @@ export class Orchestrator {
     return ctx.cwd === this.config.homeWorkspacePath ? "assistant" : "relay";
   }
 
+  /** Permission mode a chat runs in until /mode picks one. */
+  private baseMode(behavior: "assistant" | "relay"): PermissionMode {
+    return behavior === "assistant" ? "bypassPermissions" : this.config.permissionMode;
+  }
+
   /** Enqueue a message and drain — immediately for relay, debounced for assistant. */
   private enqueueMessage(msg: InboundMessage, ctx: Workspace, state: ChatState): void {
     log.info("[msg] %s: %s", senderLabel(msg.origin), msg.text.slice(0, 80));
@@ -475,7 +480,7 @@ export class Orchestrator {
         cwd,
         prompt,
         attachments: ws && allAttachments.length > 0 ? allAttachments : undefined,
-        permissionMode: state.permissionMode ?? (behavior === "assistant" ? "bypassPermissions" : this.config.permissionMode),
+        permissionMode: state.permissionMode ?? this.baseMode(behavior),
         appendSystemPrompt,
         mcpServers: { clearclaw: mcpServer },
         signal: abort.signal,
@@ -634,7 +639,7 @@ export class Orchestrator {
 
       // /mode — switch permission mode (works even during active turns)
       if (msg.text === "/mode") {
-        const currentMode = state.permissionMode ?? this.config.permissionMode;
+        const currentMode = state.permissionMode ?? this.baseMode(ws ? this.effectiveBehavior(ws) : "relay");
         const buttons = [
           MODE_OPTIONS.slice(0, 2).map((opt) => ({
             label: opt.value === currentMode ? `✓ ${opt.label}` : opt.label,
@@ -1377,7 +1382,9 @@ export class Orchestrator {
   }
 
   private async updateStatusMessage(chatId: string, state: ChatState): Promise<void> {
-    const mode = state.permissionMode ?? this.config.permissionMode;
+    const ws = this.config.workspaceByChat(chatId);
+    const baseMode = this.baseMode(ws ? this.effectiveBehavior(ws) : "relay");
+    const mode = state.permissionMode ?? baseMode;
     const modeLabel = MODE_OPTIONS.find((o) => o.value === mode)?.label ?? mode;
 
     let text: string;
@@ -1391,9 +1398,8 @@ export class Orchestrator {
       text = "";
     }
 
-    if (mode !== this.config.permissionMode) text += `${text ? " | " : ""}🔒 ${modeLabel}`;
+    if (mode !== baseMode) text += `${text ? " | " : ""}🔒 ${modeLabel}`;
 
-    const ws = this.config.workspaceByChat(chatId);
     const engine = ws?.engine ?? state.engineName ?? this.config.defaultEngine;
     text += `${text ? " | " : ""}${engine}`;
     const maxLength = this.channel.statusMaxLength ?? 4096;
