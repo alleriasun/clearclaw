@@ -60,6 +60,7 @@
     "@types/diff": "^7.0.2",
     "@types/node": "^22.0.0",
     "nodemon": "^3.1.14",
+    "telegram": "^2.26.22",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
