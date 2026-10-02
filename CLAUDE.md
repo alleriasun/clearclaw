@@ -22,6 +22,10 @@ npm run check      # tsc --noEmit (type check only)
 
 **`npm run dev:relay`** — remote development via Telegram. `nodemon` watches `dist/` and restarts only when `npm run build` produces new output. Builds are explicit, not automatic. This is critical for ClearClaw-through-ClearClaw development where edits are approved one at a time over unpredictable intervals — an auto-rebuilding watcher would restart the server mid-batch, killing the Telegram connection.
 
+## Verification
+
+Before reporting a behavior change as done, prove it with the `verify` skill (`.claude/skills/verify/`). It runs an isolated daemon with real engines behind a recording channel, which you drive like a chat user. Pair it with `npm run check` and `npm test`. Never verify with `npm start`/`npm run dev`: they connect the owner's real bot, which is already served by their running daemon.
+
 ## Conventions
 
 - All imports use `.js` extension (required by NodeNext module resolution, even for `.ts` source files)
