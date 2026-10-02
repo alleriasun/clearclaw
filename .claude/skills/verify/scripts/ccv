@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# ClearClaw verification driver. Usage: ccv help
+set -euo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+repo="$(cd "$here/../../../.." && pwd)"
+[ -x "$repo/node_modules/.bin/tsx" ] || { echo "ccv: run \`npm ci\` in $repo first" >&2; exit 1; }
+cd "$repo" && exec node --disable-warning=DEP0205 --disable-warning=ExperimentalWarning --import tsx "$here/harness.ts" "$@"
