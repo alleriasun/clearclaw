@@ -1445,7 +1445,8 @@ function formatTimestamp(): string {
 
 function senderLabel(origin: MessageOrigin): string {
   switch (origin.kind) {
-    case "user": return `[user] ${origin.user.handle ? `${origin.user.name} (@${origin.user.handle})` : origin.user.name}`;
+    // Keep the ID inside the brackets, because stripPromptPrefix stops at the first colon outside them.
+    case "user": return `[user ${origin.user.id}] ${origin.user.handle ? `${origin.user.name} (@${origin.user.handle})` : origin.user.name}`;
     case "scheduler": return `[scheduler] ${origin.scheduleId}`;
     case "peer": return `[peer] ${origin.workspaceName}`;
     default: { const _exhaustive: never = origin; return _exhaustive; }
@@ -1489,7 +1490,7 @@ function isUnchangedMessageError(err: unknown): boolean {
   return message.includes("message is not modified");
 }
 
-function buildPrompt(messages: InboundMessage[]): string {
+export function buildPrompt(messages: InboundMessage[]): string {
   const ts = formatTimestamp();
   return messages.map((msg) => {
     const sender = senderLabel(msg.origin);

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { formatSessionRecap, formatSessionTranscript, stripPromptPrefix } from "../src/engine/session-transcript.js";
+import { buildPrompt } from "../src/orchestrator.js";
 
 test("formats normalized history in order and skips blank text", () => {
   assert.equal(formatSessionTranscript([
@@ -39,6 +40,19 @@ test("stripPromptPrefix removes ClearClaw's prompt framing", () => {
   );
   // Older single-bracket form the previous regex was written for.
   assert.equal(stripPromptPrefix("[Paddy (@fateakong)]: hi"), "hi");
+});
+
+test("turn prompts label each speaker with a stable ID that prefix stripping survives", () => {
+  const prompt = buildPrompt([
+    { chatId: "slack:C1", chatType: "group", text: "ship it", messageId: "7",
+      origin: { kind: "user", user: { id: "slack:U42", name: "Sam Lee", handle: "sam" } } },
+    { chatId: "slack:C1", chatType: "group", text: "hold on",
+      origin: { kind: "user", user: { id: "slack:U43", name: "Sam Lee" } } },
+  ]);
+  const [first, second] = prompt.split("\n");
+  assert.match(first, /\[msg:7\] \[user slack:U42\] Sam Lee \(@sam\): ship it$/);
+  assert.match(second, /\[user slack:U43\] Sam Lee: hold on$/);
+  assert.equal(stripPromptPrefix(prompt), "ship it\n" + second);
 });
 
 test("stripPromptPrefix leaves untagged text alone", () => {

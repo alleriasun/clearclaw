@@ -93,7 +93,7 @@
 
 ## Agent Situational Awareness
 
-- [ ] Wire `chatType` through Telegram and Slack channels — `chatType` is on `InboundMessage` but not yet populated by either channel
+- [x] Wire `chatType` through Telegram and Slack channels — `chatType` is on `InboundMessage` but not yet populated by either channel
 - [ ] Inject message timestamp and current time into each turn — agent has no reliable sense of when it is
 - [ ] ChatType context (DM vs group) — surface in turn prompt so agent adjusts tone accordingly
 - [ ] Behavior mode context — agent should know whether it's in assistant or relay mode (affects system prompt framing, not just permissions)
