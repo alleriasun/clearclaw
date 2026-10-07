@@ -178,15 +178,13 @@ Schedules remain a separate timer system that injects prompts into the `default`
 
 ## User Identity
 
-Channels populate structured user info (`UserInfo`) on every inbound message: a display `name` (always present) and an optional platform `handle` (e.g., Telegram username, no `@` prefix).
+Channels populate structured user info (`UserInfo`) on every inbound message: a stable platform-prefixed `id`, a display `name` (always present), and an optional platform `handle` (e.g., Telegram username, no `@` prefix). Channels also set `chatType` (`dm` or `group`) from the platform.
 
-**When identity is included:** For group workspaces (non-default), the orchestrator prepends sender identity to the prompt: `[Sam (@sambot)]: the message`. This lets Claude distinguish speakers in multi-user group chats.
+**Prompt framing:** A framed turn prompt has one line per message: `[<time>] [msg:<id>] [user tg:123] Sam (@sam): the message`. The stable ID sits inside the brackets so `stripPromptPrefix` can still recover the message text. A lone pass-through slash command is sent verbatim, without framing.
 
-**When identity is skipped:** For the default (home/DM) workspace, the prompt passes through unchanged — it's always the owner talking, so identity context is noise.
+**Why IDs, not names:** More than one person can talk to an instance. Display names collide and are user-controlled, so the agent keys people and their preference files (`instructions/user/<id>.md`) by ID. `prompts/SYSTEM.md` tells the agent not to assume the speaker is the person `USER.md` describes.
 
-**Layering:** The channel reports structured identity. The orchestrator decides whether to include it based on workspace type. The engine receives a plain prompt string either way — no `UserInfo` leaks into the engine interface.
-
-**Deferred:** Explicit chat type (`dm` | `group`) on `InboundMessage` and owner detection were both considered. Workspace type is a sufficient discriminator for now — the home workspace is always a DM, project workspaces are always groups. If that stops holding, chat type is easy to add (channels know natively). User identity could also flow into workspace metadata for participant memory over time, but currently it's per-message only.
+**Layering:** The channel reports structured identity. The orchestrator formats it. The engine receives a plain prompt string — no `UserInfo` leaks into the engine interface.
 
 ## Key Interfaces
 
