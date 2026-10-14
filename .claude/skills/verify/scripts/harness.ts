@@ -10,6 +10,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import mime from "mime";
 import type { Button, ButtonResponse, Channel } from "../../../../src/types.js";
 import { LOCK, assertBotFree, assertNotProduction, deleteTopics, dropPendingUpdates, ensureGroup, loadSecrets, readLock, releaseLock, telegramDriver, telegramSetup, type Secrets } from "./telegram.js";
 
@@ -51,7 +52,7 @@ export interface PendingPrompt { id: string; chat: string; buttons: Button[][] }
 export interface Driver {
   channel: Channel;
   dmChat: string;
-  send(chat: string, text: string): Promise<void>;
+  send(chat: string, text: string, file?: string): Promise<void>;
   press(p: PendingPrompt, button: Button, text?: string): Promise<void>;
   health?(): Promise<Record<string, unknown>>;
   stop(): Promise<void>;
@@ -88,10 +89,13 @@ function termDriver(nextHandle: () => string, lastSeq: () => number): Driver {
   return {
     channel,
     dmChat: "term:dm",
-    async send(chat, text) {
+    async send(chat, text, file) {
       channel.emit("message", {
         chatId: chat, chatType: chat === "term:dm" ? "dm" : "group",
         origin: { kind: "user", user: OWNER }, text, messageId: `u${lastSeq()}`,
+        ...(file ? { attachments: [{
+          buffer: fs.readFileSync(file), mimeType: mime.getType(file) ?? "application/octet-stream", filename: path.basename(file),
+        }] } : {}),
       });
     },
     async press(p, button, text) {
@@ -256,9 +260,11 @@ async function serve(): Promise<void> {
       if (url === "/log") return reply(200, { entries: entries.slice(Number(body.since ?? 0)) });
       if (url === "/send") {
         const chat = chatFor(String(body.chat ?? "dm"));
+        const file = body.file as string | undefined;
+        if (file && state.channel !== "term") return reply(400, { error: "--file is supported only with --channel term" });
         const since = entries.length;
-        record({ dir: "in", op: "message", chat, text: body.text });
-        await driver.send(chat, String(body.text));
+        record({ dir: "in", op: "message", chat, text: body.text, ...(file ? { file } : {}) });
+        await driver.send(chat, String(body.text), file);
         return reply(200, await settle(since, timeout));
       }
       if (url === "/press") {
@@ -419,8 +425,9 @@ async function main(): Promise<void> {
     }
     case "send": {
       const chat = flag(args, "chat") ?? "dm";
-      if (!args.length) throw new Error("usage: ccv send [--chat dm|<workspace>] <text>");
-      return printSettled(await call("/send", { chat, text: args.join(" "), timeout }));
+      const file = flag(args, "file");
+      if (!args.length && !file) throw new Error("usage: ccv send [--chat dm|<workspace>] [--file <path>] <text>");
+      return printSettled(await call("/send", { chat, text: args.join(" "), file: file && path.resolve(file), timeout }));
     }
     case "press": {
       const id = flag(args, "id");
@@ -471,7 +478,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log("usage: ccv up [--channel term|telegram] [--mode default|acceptEdits|bypassPermissions|plan|dontAsk] | doctor | send [--chat dm|<workspace>] <text> | press <value> [--text t] | wait | log [--json] | where [root|home|work|proj|evidence] | down | telegram-setup\n  send/press/wait accept --timeout <seconds> (default 300)");
+      console.log("usage: ccv up [--channel term|telegram] [--mode default|acceptEdits|bypassPermissions|plan|dontAsk] | doctor | send [--chat dm|<workspace>] [--file <path>] <text> | press <value> [--text t] | wait | log [--json] | where [root|home|work|proj|evidence] | down | telegram-setup\n  send/press/wait accept --timeout <seconds> (default 300)");
       process.exitCode = cmd ? 1 : 0;
   }
 }
