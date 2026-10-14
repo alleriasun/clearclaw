@@ -26,6 +26,10 @@ npm run check      # tsc --noEmit (type check only)
 
 Before reporting a behavior change as done, prove it with the `verify` skill (`.claude/skills/verify/`). It runs an isolated daemon with real engines behind a recording channel, which you drive like a chat user. Pair it with `npm run check` and `npm test`. Never verify with `npm start`/`npm run dev`: they connect the owner's real bot, which is already served by their running daemon.
 
+## Release
+
+`npm version <minor|patch>` on `main`, then `git push --follow-tags`. The `v*` tag triggers `.github/workflows/publish.yml`, which builds, tests, and publishes to npm via trusted publishing (no token; the publisher is configured on npmjs.com). Deployed daemons run `npx -y clearclaw@latest`, so roll them with `launchctl kickstart -k gui/$(id -u)/<label>` after the publish succeeds.
+
 ## Conventions
 
 - All imports use `.js` extension (required by NodeNext module resolution, even for `.ts` source files)
