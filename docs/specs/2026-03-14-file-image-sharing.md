@@ -77,8 +77,8 @@ This keeps channels and engine fully decoupled — no shared MIME registry neede
 | message:photo | Yes | Download largest size. Always JPEG (Telegram re-encodes). |
 | message:document | Yes | Download, use platform-provided MIME + filename |
 | message:video | Placeholder | SDK doesn't support video |
-| message:voice | Placeholder | Future: STT transcription |
-| message:audio | Placeholder | Future: STT transcription |
+| message:voice | Yes | Transcribed at ingress ([decision](#decision-audio-is-transcribed-at-ingress)). MIME defaults to `audio/ogg` |
+| message:audio | Yes | Transcribed at ingress. Platform-provided MIME + filename |
 | message:sticker | Placeholder | Low value |
 
 Captions become `text` on `InboundMessage`. Unsupported types emit placeholder text (e.g. `[Voice message]`) -- better than silently dropping.
@@ -110,6 +110,32 @@ All file operations (`saveFile`, `encodeAttachment`) use `fs/promises` — synch
 | src/config.ts | Create `files/` dir at startup |
 | src/index.ts | Pass `dataDir` to orchestrator |
 
-## Future: audio
+## Decision: audio is transcribed at ingress
 
-Same `Attachment` + download pipeline. Audio adds: detect audio MIME in orchestrator, call STT API (ElevenLabs/OpenAI), replace attachment with transcription text. Engine never sees audio.
+**Status:** Accepted (2026-10)
+
+### Context
+
+Users send voice notes from their phones. No engine consumes audio, and ClearClaw runs on the user's subscriptions rather than API keys, so a paid STT API would be a new account and a new secret.
+
+### Decision
+
+Audio arrives through the same `Attachment` download pipeline (Telegram `message:voice` / `message:audio`, any `audio/*` file from Slack). The orchestrator transcribes it as soon as an authorized message arrives, before routing, debounce, or batching:
+
+- **Provider:** the Claude.ai speech-to-text stream that Claude Code's `/voice` dictation uses. It is an undocumented WebSocket endpoint, authenticated with the Claude.ai OAuth token Claude Code already stores on the host (Keychain on macOS, `~/.claude/.credentials.json` elsewhere). Anthropic's dictation docs state it counts against no Claude usage limits. The stream takes raw 16 kHz PCM, so the audio is decoded with `ffmpeg` first.
+- **Message shape:** the transcript becomes the message text (after the caption, if any). The audio attachment is removed, so the engine never sees audio and it is not saved to `files/`.
+- **Echo:** the chat receives `🎙 heard: <transcript>` before the turn, so a misheard instruction is visible before the agent acts on it.
+- **Failure:** missing credentials, a missing or failing `ffmpeg`, a stream error, a timeout, or an empty transcript all degrade to the text `[Voice message — transcription failed]`. The turn still runs, and there is no echo.
+
+### Alternatives considered
+
+- **Codex / ChatGPT `backend-api/transcribe`:** blocked by a Cloudflare browser challenge for non-browser clients.
+- **Codex app-server realtime:** requires an API key or WebRTC, and is paced in real time, so a 30 s note takes 30 s.
+- **Local whisper.cpp:** no network or account dependency, at the cost of a local model to install. Deferred as a possible fallback provider.
+
+### Consequences
+
+- `ffmpeg` is a runtime requirement for voice input. Without it, voice notes degrade to the placeholder.
+- The endpoint is undocumented and may change or break without notice. Failure degrades visibly rather than silently, and the transcription boundary (`src/transcribe.ts`) is the only code that knows about it.
+- Transcription only works on hosts where Claude Code is logged in with a Claude.ai account.
+- A voice note and a text message sent right after it in the same chat can reach the queue out of order, because transcription takes a few seconds.

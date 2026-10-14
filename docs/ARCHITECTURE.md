@@ -53,6 +53,7 @@ src/
   config.ts             # Env vars → typed config object
   format.ts             # Message formatting (tool descriptions, diffs)
   prompt.ts             # Prompt assembly (framework + user → system prompt)
+  transcribe.ts         # Audio → text via the Claude.ai voice stream (requires ffmpeg)
   engine/
     claude-code.ts      # Claude Code SDK wrapper
   channel/
