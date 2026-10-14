@@ -28,7 +28,7 @@ Before reporting a behavior change as done, prove it with the `verify` skill (`.
 
 ## Release
 
-`npm version <minor|patch>` on `main`, then `git push --follow-tags`. The `v*` tag triggers `.github/workflows/publish.yml`, which builds, tests, and publishes to npm via trusted publishing (no token; the publisher is configured on npmjs.com). Deployed daemons run `npx -y clearclaw@latest`, so roll them with `launchctl kickstart -k gui/$(id -u)/<label>` after the publish succeeds.
+On `main`: `npm version <minor|patch>` (commits and tags `vX.Y.Z`), `git push --follow-tags`, `npm run build && npm publish`. Deployed daemons run `npx -y clearclaw@latest`, so roll each with `launchctl kickstart -k gui/$(id -u)/<label>` afterwards.
 
 ## Conventions
 
