@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GrammyError } from "grammy";
+import { type Bot, GrammyError } from "grammy";
 import { TelegramChannel } from "../src/channel/telegram.js";
+import type { InboundMessage } from "../src/types.js";
 
 interface TelegramCalls {
   getChat: number[];
@@ -151,4 +152,30 @@ test("closeProjectChat accepts an already-closed topic but propagates other API 
   const forbidden = apiError("Bad Request: CHAT_ADMIN_REQUIRED");
   bot.api.closeForumTopic = async () => { throw forbidden; };
   await assert.rejects(channel.closeProjectChat("tg:-1001:42"), (err) => err === forbidden);
+});
+
+test("a voice note is emitted as an audio/ogg attachment with its caption", async () => {
+  const channel = new TelegramChannel("test-token", () => true);
+  const bot = (channel as unknown as { bot: Bot }).bot;
+  bot.botInfo = { id: 1, is_bot: true, first_name: "ClearClaw", username: "clearclaw_bot" } as Bot["botInfo"];
+  bot.start = async (opts) => { await opts?.onStart?.(bot.botInfo); };
+  (channel as unknown as { downloadFile(id: string): Promise<Buffer> }).downloadFile = async () => Buffer.from("ogg");
+  await channel.connect();
+  const emitted = new Promise<InboundMessage>((resolve) => channel.once("message", resolve));
+
+  await bot.handleUpdate({
+    update_id: 1,
+    message: {
+      message_id: 7, date: 0, caption: "listen",
+      chat: { id: 123, type: "private", first_name: "Owner" },
+      from: { id: 123, is_bot: false, first_name: "Owner" },
+      voice: { file_id: "voice-file", file_unique_id: "u", duration: 3 },
+    },
+  });
+  const msg = await emitted;
+
+  assert.equal(msg.text, "listen");
+  assert.equal(msg.attachments?.length, 1);
+  assert.equal(msg.attachments?.[0]?.mimeType, "audio/ogg");
+  assert.equal(msg.attachments?.[0]?.filename, "voice.ogg");
 });

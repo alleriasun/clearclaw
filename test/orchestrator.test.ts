@@ -4,9 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import type { Config, Project } from "../src/config.js";
+import { Config, type Project } from "../src/config.js";
 import { Orchestrator } from "../src/orchestrator.js";
-import type { Channel, Engine, Workspace } from "../src/types.js";
+import type { Channel, Engine, InboundMessage, RunTurnOpts, Workspace } from "../src/types.js";
 
 interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -860,5 +860,52 @@ for (const [label, ws, current, badge] of [
     const status = harness.channelCalls.statuses.at(-1) ?? "";
     if (badge) assert.ok(status.includes(badge), `status ${JSON.stringify(status)} should include ${badge}`);
     else assert.ok(!status.includes("🔒"), `status ${JSON.stringify(status)} should have no mode badge`);
+  });
+}
+
+for (const [label, transcribe, expected, echo] of [
+  ["becomes the transcript", async () => "hello world", "hello world", "🎙 heard: hello world"],
+  ["falls back to a placeholder", async (): Promise<string> => { throw new Error("no Claude.ai credentials"); }, "[Voice message — transcription failed]", undefined],
+] as const) {
+  test(`a voice note ${label} and the engine never receives the audio`, async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "clearclaw-voice-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const previousHome = process.env.CLEARCLAW_HOME;
+    process.env.CLEARCLAW_HOME = root;
+    const config = new Config();
+    if (previousHome === undefined) delete process.env.CLEARCLAW_HOME;
+    else process.env.CLEARCLAW_HOME = previousHome;
+    config.defaultEngine = "claude-code";
+    config.approveUser("test:user", "Tester");
+    config.upsertWorkspace({ name: "proj", cwd: root, chat_id: "test:proj", current_session_id: null });
+
+    const sent: string[] = [];
+    let resolveTurn!: (opts: RunTurnOpts) => void;
+    const turn = new Promise<RunTurnOpts>((resolve) => { resolveTurn = resolve; });
+    const channel = {
+      name: "test", ownsId: (id: string) => id.startsWith("test:"), isRootDM: () => false,
+      sendMessage: async (_id: string, text: string) => { sent.push(text); return ["1"]; },
+      setTyping: async () => {}, updateStatus: async () => {}, editMessage: async () => {},
+    } as unknown as Channel;
+    const engine = {
+      name: "claude-code", listSessions: async () => [], getSessionMessages: async () => [],
+      async *runTurn(opts: RunTurnOpts) {
+        resolveTurn(opts);
+        yield { type: "done" as const, sessionId: "s1" };
+      },
+    } as Engine;
+    const orchestrator = new Orchestrator({ channel, engines: new Map([["claude-code", engine]]), config, transcribe });
+
+    await (orchestrator as unknown as { routeMessage(msg: InboundMessage): Promise<void> }).routeMessage({
+      chatId: "test:proj", chatType: "group", text: "",
+      origin: { kind: "user", user: { id: "test:user", name: "Tester" } },
+      attachments: [{ buffer: Buffer.from("ogg"), mimeType: "audio/ogg", filename: "voice.ogg" }],
+    });
+    const opts = await turn;
+
+    if (echo) assert.ok(sent[0]?.startsWith(echo), `first message ${JSON.stringify(sent[0])}`);
+    else assert.ok(!sent.some((text) => text.startsWith("🎙")), `no echo expected: ${JSON.stringify(sent)}`);
+    assert.ok(opts.prompt.trimEnd().endsWith(`: ${expected}`), `prompt ${JSON.stringify(opts.prompt)}`);
+    assert.equal(opts.attachments, undefined);
   });
 }

@@ -120,10 +120,18 @@ export class TelegramChannel extends EventEmitter implements Channel {
       );
     });
 
+    // Voice notes and audio files: the orchestrator transcribes them
+    this.bot.on("message:voice", async (ctx) => {
+      const voice = ctx.message.voice;
+      await this.handleFileMessage(ctx, voice.file_id, voice.mime_type ?? "audio/ogg", "voice.ogg", ctx.message.caption);
+    });
+    this.bot.on("message:audio", async (ctx) => {
+      const audio = ctx.message.audio;
+      await this.handleFileMessage(ctx, audio.file_id, audio.mime_type ?? "audio/mpeg", audio.file_name, ctx.message.caption);
+    });
+
     // Placeholder handlers for unsupported media types
     for (const [filter, label] of [
-      ["message:voice", "Voice message"],
-      ["message:audio", "Audio message"],
       ["message:video", "Video"],
       ["message:sticker", "Sticker"],
     ] as const) {
@@ -493,7 +501,7 @@ export class TelegramChannel extends EventEmitter implements Channel {
     };
   }
 
-  /** Shared handler for photo/document messages: download, emit attachment or fallback. */
+  /** Shared handler for file messages: download, emit attachment or fallback. */
   private async handleFileMessage(
     ctx: Context,
     fileId: string,

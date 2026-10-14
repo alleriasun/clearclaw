@@ -5,6 +5,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import log from "./logger.js";
 import { saveFile } from "./files.js";
+import { isAudio, transcribeAudio } from "./transcribe.js";
 import { assemblePrompt } from "./prompt.js";
 import { formatPlanUsage, recordPlanUsage } from "./plan-usage.js";
 
@@ -14,6 +15,7 @@ import { formatSessionRecap, formatSessionTranscript, stripPromptPrefix } from "
 import { Scheduler } from "./scheduler.js";
 import type { Config, Project, ScheduleEntry } from "./config.js";
 import type {
+  Attachment,
   Channel,
   Engine,
   EngineEvent,
@@ -32,6 +34,7 @@ export interface OrchestratorOpts {
   channel: Channel;
   engines: Map<string, Engine>;
   config: Config;
+  transcribe?: (att: Attachment) => Promise<string>;
 }
 
 interface ChatState {
@@ -73,11 +76,13 @@ export class Orchestrator {
   private creatingWorkspaces = new Set<string>();
   private scheduler: Scheduler | null = null;
   private planUsage = new Map<string, PlanUsageState>();
+  private transcribe: (att: Attachment) => Promise<string>;
 
   constructor(opts: OrchestratorOpts) {
     this.channel = opts.channel;
     this.engines = opts.engines;
     this.config = opts.config;
+    this.transcribe = opts.transcribe ?? transcribeAudio;
   }
 
   private chat(chatId: string): ChatState {
@@ -607,12 +612,39 @@ export class Orchestrator {
     await this.updateStatusMessage(msg.chatId, state);
   }
 
+  /**
+   * Turn audio attachments into message text. Engines can't consume audio, so it never
+   * reaches them; the echo lets the user catch a bad transcription before the agent acts.
+   */
+  private async transcribeVoice(msg: InboundMessage): Promise<InboundMessage> {
+    const attachments = msg.attachments ?? [];
+    const rest = attachments.filter((att) => !isAudio(att));
+    let spoken: string;
+    try {
+      const transcripts: string[] = [];
+      for (const att of attachments.filter(isAudio)) transcripts.push(await this.transcribe(att));
+      spoken = transcripts.join("\n");
+      const echo = spoken.length > 1000 ? `${spoken.slice(0, 1000)}…` : spoken;
+      await this.channel.sendMessage(msg.chatId, `🎙 heard: ${echo}`, { format: "plain" })
+        .catch((err) => log.warn({ err }, "[orchestrator] failed to echo transcript"));
+    } catch (err) {
+      log.warn({ err }, "[orchestrator] voice transcription failed");
+      spoken = "[Voice message — transcription failed]";
+    }
+    return {
+      ...msg,
+      text: msg.text ? `${msg.text}\n${spoken}` : spoken,
+      attachments: rest.length ? rest : undefined,
+    };
+  }
+
   private async routeMessage(msg: InboundMessage): Promise<void> {
     try {
       // routeMessage only handles channel-emitted messages, which are always user-originated.
       if (msg.origin.kind !== "user") return; // unreachable; documents + type-narrows the invariant
       const { user } = msg.origin;
       if (!this.config.isAuthorized(user.id)) return;
+      if (msg.attachments?.some(isAudio)) msg = await this.transcribeVoice(msg);
       if (this.channel.isRootDM(msg.chatId, user.id) && !this.config.workspaceByChat(msg.chatId)) {
         this.config.connectHomeWorkspace(msg.chatId);
       }
