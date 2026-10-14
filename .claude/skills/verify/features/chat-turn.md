@@ -13,6 +13,7 @@ The user sends a message in a bound chat. ClearClaw shows typing, runs one engin
 - `turn-passthrough`: unknown slash commands reach the engine verbatim.
 - `turn-unbound`: a message in an unbound chat gets connection guidance without running a model.
 - `turn-missing-cwd`: a workspace whose cwd is missing refuses with `⚠️ Can't start: this workspace's directory doesn't exist:`.
+- `turn-voice`: an audio attachment is transcribed before the turn. The chat gets `🎙 heard: <transcript>` and the turn runs on the transcript with no attachment. A failed transcription runs the turn on `[Voice message — transcription failed]` with no echo.
 
 ## How to get to it (user POV)
 
@@ -20,6 +21,7 @@ The user sends a message in a bound chat. ClearClaw shows typing, runs one engin
 - Post in a chat bound to a project workspace.
 - Type a slash command ClearClaw doesn't own (for example a Claude Code skill or command).
 - Post in a chat that isn't bound to any workspace.
+- Send a Telegram voice note or audio file, or attach an `audio/*` file in Slack.
 
 ## Driving it with ccv
 
@@ -33,6 +35,7 @@ Preconditions:
 - **Pass-through.** Run `$V send --chat proj /context` (any engine-owned command works). ClearClaw sends no native reply such as `Session cleared.`. A turn runs, and the engine's response arrives as a `send`.
 - **Unbound chat.** Run `$V send --chat nowhere "hi"`. One `<< send` reads `No workspace linked to this chat. Create a workspace with a manual chat from home or another workspace, then send /connect <workspace> here.` No `typing` line appears.
 - **Missing cwd.** Delete the proj directory with `rm -rf "$($V where proj)"`, then run `$V send --chat proj "hi"`. The reply starts with `⚠️ Can't start: this workspace's directory doesn't exist:`.
+- **Voice note.** Generate a clip whose content is harmless to act on, then send it: `say -o /tmp/v.wav --data-format=LEI16@16000 "Reply with exactly: pong" && ffmpeg -loglevel error -y -i /tmp/v.wav -c:a libopus /tmp/v.ogg && $V send --chat proj --file /tmp/v.ogg`, then `$V wait`. Output: `>> message [term:proj] {"file":…}`, a `<< send` with `opts.format: "plain"` reading `🎙 heard: Reply with exactly, Pong.` (punctuation varies), then a normal turn whose reply is `Pong.`. Text after the flags is a caption; the turn text is the caption, a newline, then the transcript (visible in the `[msg]` line of `daemon.out`). Needs `ffmpeg` and Claude Code logged in with a Claude.ai account on this machine.
 - **Proof.** Cite the seq numbers of the message, the reply, and the status line. Include the `config.json` session read.
 
 ## Gotchas
@@ -42,3 +45,5 @@ Preconditions:
 - The status line is skipped when its text is unchanged since the last turn.
 - Home runs under `bypassPermissions` and shows no 🔧 line. Assert tool use by its side effect, or use `proj`.
 - Home sees assistant-only tools (`stay_silent`, `react`, `reply_to`). Project chats don't, unless `/behavior` switches them.
+- Transcription takes a few seconds with no typing indicator, so `send --file` usually settles before the echo. Follow it with `$V wait`.
+- The transcript is a real instruction to a real agent with write access to the machine. A clip that says "refactor X" makes the agent refactor X, in whatever repo it finds. Keep voice clips literal and harmless.

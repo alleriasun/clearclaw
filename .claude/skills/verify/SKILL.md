@@ -45,6 +45,7 @@ Read-only. Prints the state and health JSON, then `OK` or `NOT OK` followed by t
 ```bash
 $V send "what's in this directory?"              # home DM (chat dm)
 $V send --chat proj "Use the Write tool to create a.txt containing x"
+$V send --chat proj --file /tmp/v.ogg            # inbound attachment (term only), optional text as caption
 $V press allow                                   # value or label of a button on the pending prompt
 $V press deny --text "use b.txt instead"         # Deny + Note: the note goes back to the agent
 $V wait                                          # keep watching after a timeout
@@ -52,7 +53,7 @@ $V log                                           # whole transcript; --json for 
 $V where proj                                    # absolute path of a run dir: root|home|work|proj|evidence
 ```
 
-- `send`, `press`, and `wait` block until the chat **settles**, then print what happened since the action. Settled means a button prompt is waiting with 1 s of quiet, or no chat is typing and nothing was sent for 3 s since the action. `--timeout <s>` (default 300) bounds the wait. On timeout the output ends with `-- TIMED OUT`, and the turn may still be running. Settling infers completion from typing and quiet, so a native command that does slow work without typing (`/recap` on a long session) or a turn after `stay_silent` can settle early; run `$V wait` (or `$V log`) before concluding nothing more arrived.
+- `send`, `press`, and `wait` block until the chat **settles**, then print what happened since the action. Settled means a button prompt is waiting with 1 s of quiet, or no chat is typing and nothing was sent for 3 s since the action. `--timeout <s>` (default 300) bounds the wait. On timeout the output ends with `-- TIMED OUT`, and the turn may still be running. Settling infers completion from typing and quiet, so a native command that does slow work without typing (`/recap` on a long session), a voice note still being transcribed (`send --file`), or a turn after `stay_silent` can settle early; run `$V wait` (or `$V log`) before concluding nothing more arrived.
 - Output lines are `#<seq> >> <op>` for what the user did, `#<seq> << <op> [chat] {fields}` for what ClearClaw asked the channel to do, and `#<seq> tg <op>` for what the Telegram test user actually received (Telegram mode only). Message text is indented below. `>> answered` records the value the channel delivered back for a prompt. Ops: `send`, `edit` (same `handle` as the message it rewrites), `delete`, `pin`, `unpinAll`, `status` (the pinned status line), `typing`, `interactive` (buttons), `file`, `react`, `createProjectChat`, `closeProjectChat`, `groupProjectChat`.
 - A pending prompt prints `-- waiting on prompt m<n>`. While it waits, that chat's turn is blocked. With several pending prompts, pass `--id m<n>`.
 - Slash text goes through the same path as typed text: `/new`, `/mode`, `/cancel`, and others are handled natively. Unknown slash commands pass through to the engine.
@@ -116,7 +117,7 @@ Run `down` after every run, including failed ones. `up` refuses while a stale in
 
 - **Slack, and Telegram DM topics:** `src/channel/slack.ts` has no live mode. Telegram DM Threaded Mode (topics inside a DM) is not driven, because production uses forum groups. Cover those with `test/slack.test.ts` and `test/telegram.test.ts`, then tell the owner that live-platform proof is still missing. Never borrow the owner's bot token for it.
 - **Pixels:** Telegram mode proves what Telegram stored (text, entities, buttons), not how a client draws it.
-- **Inbound features:** attachments, reply-to context, unauthorized users and pairing, multiple senders. Neither mode sends these yet.
+- **Inbound features:** reply-to context, unauthorized users and pairing, multiple senders. Neither mode sends these yet. Attachments go through term mode only (`send --file`, MIME type from the file extension). Telegram mode can't send them, so the Telegram download path is covered by `test/telegram.test.ts`.
 - **Scheduler firing:** schedules fire on wall-clock cron. `wait` returns after 3 s of quiet, so for a one-off ISO timestamp a minute out, `sleep` until just past it, then `$V wait`.
 
 ## Pairing with tests

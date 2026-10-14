@@ -37,7 +37,7 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 ## Features
 
-- [Chat turns](./chat-turn.md) covers home and project messages, streamed replies, the rolling tool line, the status line, and pass-through slash commands.
+- [Chat turns](./chat-turn.md) covers home and project messages, voice notes, streamed replies, the rolling tool line, the status line, and pass-through slash commands.
 - [Permission relay](./permission-relay.md) covers Allow, Deny, Deny + Note, `/mode`, the startup permission mode, plan approval, and AskUserQuestion.
 - [Session controls](./session-controls.md) covers `/new`, `/cancel`, `/recap`, `/resume`, `/model`, `/engine`, and `/behavior`.
 - [Workspaces and projects](./workspaces.md) covers `workspace_create` (automatic and manual chat), `/connect`, `message_workspace`, `workspace_archive`, and `project_create`.
