@@ -6,16 +6,24 @@ import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { AcpEngine } from "../src/engine/acp.js";
 
+/** Poll until `done` holds; CI runners can take well over a second to deliver SIGTERM and reap. */
+async function waitFor(done: () => boolean, timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (done()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return false;
+}
+
 function fixture(t: TestContext, mode = "success") {
   const root = mkdtempSync(join(tmpdir(), "clearclaw-history-test-"));
   const log = join(root, "requests.jsonl");
   t.after(async () => {
     const pid = JSON.parse(readFileSync(log, "utf8").split("\n")[0]!).pid;
-    for (let i = 0; i < 100; i++) {
-      try { process.kill(pid, 0); } catch { rmSync(root, { recursive: true }); return; }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.fail("History adapter did not exit");
+    const exited = await waitFor(() => { try { process.kill(pid, 0); return false; } catch { return true; } });
+    assert.ok(exited, "History adapter did not exit");
+    rmSync(root, { recursive: true });
   });
   return {
     engine: new AcpEngine("fixture", {
@@ -53,17 +61,10 @@ test("ACP history aborts a stalled adapter and terminates its process", async (t
   const result = f.engine.getSessionMessages({ ...f.opts, signal: controller.signal });
   const rejection = assert.rejects(result, { name: "AbortError" });
   // Wait until the real child has received load before cancelling it.
-  for (let i = 0; i < 100; i++) {
-    try { if (f.calls().some((call) => call.method === "session/load")) break; } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await waitFor(() => { try { return f.calls().some((call) => call.method === "session/load"); } catch { return false; } });
   controller.abort();
   await rejection;
-  for (let i = 0; i < 100; i++) {
-    if (f.calls().some((call) => call.stopped)) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.fail("Adapter was not terminated after cancellation");
+  assert.ok(await waitFor(() => f.calls().some((call) => call.stopped)), "Adapter was not terminated after cancellation");
 });
 
 test("ACP history does not spawn for an already aborted request", async () => {
